@@ -11,21 +11,21 @@ export default function LoginScreen({ onLogin }) {
   const handleLogin = async () => {
     setLoading(true); setError("");
     try {
-      // Admin login — stored in env or hardcoded for simplicity
       if (username === "admin") {
         const { data, error: e } = await supabase
-          .from("admin_settings").select("password").single();
-        if (e || data.password !== password) throw new Error("סיסמה שגויה");
+          .from("admin_settings").select("password").eq("id", 1).single();
+        if (e) throw new Error("שגיאת התחברות לשרת");
+        if (!data || data.password !== password) throw new Error("סיסמה שגויה");
         onLogin({ role: "admin", username: "admin" });
         return;
       }
-      // Client login
       const { data, error: e } = await supabase
         .from("clients")
         .select("*")
         .eq("username", username)
-        .single();
-      if (e || !data) throw new Error("משתמש לא נמצא");
+        .maybeSingle();
+      if (e) throw new Error("שגיאת התחברות לשרת");
+      if (!data) throw new Error("משתמש לא נמצא");
       if (data.password !== password) throw new Error("סיסמה שגויה");
       onLogin({ role: "client", username: data.username, name: data.name, id: data.id });
     } catch (err) {
