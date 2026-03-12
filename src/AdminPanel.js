@@ -437,17 +437,17 @@ function ExportSection({ submissions, clientName }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontWeight: 700, fontSize: 14 }}>⬇️ ייצוא לאקסל</div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={toggleAll} style={{ background: "none", border: , borderRadius: 7, padding: "5px 12px", fontSize: 12, color: C.dim, cursor: "pointer", fontFamily: "inherit" }}>
+          <button onClick={toggleAll} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 7, padding: "5px 12px", fontSize: 12, color: C.dim, cursor: "pointer", fontFamily: "inherit" }}>
             {allSelected ? "בטל הכל" : "בחר הכל"}
           </button>
           <Btn size="sm" onClick={doExport} disabled={selected.length === 0}>
-            ייצוא {selected.length > 0 ?  : ""}
+            ייצוא {selected.length > 0 ? `(${selected.length})` : ""}
           </Btn>
         </div>
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {submissions.map(s => (
-          <div key={s.id} onClick={() => toggle(s.id)} style={{ padding: "7px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer", border: , background: selected.includes(s.id) ? "rgba(79,142,247,0.12)" : C.surface2, color: selected.includes(s.id) ? C.accent : C.dim, fontWeight: selected.includes(s.id) ? 600 : 400 }}>
+          <div key={s.id} onClick={() => toggle(s.id)} style={{ padding: "7px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer", border: `1px solid ${selected.includes(s.id) ? C.accent : C.border}`, background: selected.includes(s.id) ? "rgba(79,142,247,0.12)" : C.surface2, color: selected.includes(s.id) ? C.accent : C.dim, fontWeight: selected.includes(s.id) ? 600 : 400 }}>
             {selected.includes(s.id) ? "✓ " : ""}{s.label}
           </div>
         ))}
