@@ -229,7 +229,8 @@ function ClientDetail({ client, onRefresh }) {
       {/* DATA TAB */}
       {activeTab === "data" && (
         <div>
-          <div style={{ fontWeight: 700, marginBottom: 12 }}>היסטוריית הגשות</div>
+          <ExportSection submissions={client.submissions} clientName={client.name} />
+          <div style={{ fontWeight: 700, marginBottom: 12, marginTop: 24 }}>היסטוריית הגשות</div>
           {client.submissions.length === 0 ? (
             <Card style={{ textAlign: "center", padding: 32, color: C.dim }}>טרם הוגשו קבצים</Card>
           ) : client.submissions.map(s => {
@@ -242,10 +243,7 @@ function ClientDetail({ client, onRefresh }) {
                     <div style={{ fontWeight: 600 }}>{s.label}</div>
                     <div style={{ fontSize: 11, color: C.dim }}>{new Date(s.created_at).toLocaleDateString("he-IL")} · {txs.length} עסקאות</div>
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                    <div style={{ fontWeight: 700, color: C.red, fontSize: 16 }}>₪{Math.round(total).toLocaleString()}</div>
-                    <Btn size="sm" variant="ghost" onClick={() => exportToExcel(s)}>⬇️ Excel</Btn>
-                  </div>
+                  <div style={{ fontWeight: 700, color: C.red, fontSize: 16 }}>₪{Math.round(total).toLocaleString()}</div>
                 </div>
               </Card>
             );
@@ -387,34 +385,73 @@ function PersonalTab({ client, onRefresh }) {
   );
 }
 
-// ── Export to Excel ───────────────────────────────────────────────────────────
-function exportToExcel(submission) {
-  const XLSX = window.XLSX;
-  if (!XLSX) { alert("ספריית Excel לא נטענה"); return; }
+// ── Export section with month selection ──────────────────────────────────────
+function ExportSection({ submissions, clientName }) {
+  const [selected, setSelected] = useState([]);
+  const [exporting, setExporting] = useState(false);
 
-  const txs = submission.transactions || [];
+  const toggle = (id) => setSelected(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
+  const allSelected = submissions.length > 0 && selected.length === submissions.length;
+  const toggleAll = () => setSelected(allSelected ? [] : submissions.map(s => s.id));
 
-  // Sheet 1 — transactions
-  const txRows = txs.map(t => ({
-    "תאריך": t.date,
-    "שם בית עסק": t.name,
-    "סעיף": t.cat,
-    "סכום": t.amount,
-    "מקור": t.source || "",
-    "ביטחון": t.conf === "high" ? "גבוה" : t.conf === "med" ? "בינוני" : "נמוך",
-  }));
+  const doExport = () => {
+    const XLSX = window.XLSX;
+    if (!XLSX) { alert("ספריית Excel לא נטענה"); return; }
+    const chosenSubs = submissions.filter(s => selected.includes(s.id));
+    if (!chosenSubs.length) return;
 
-  // Sheet 2 — summary by category
-  const catMap = {};
-  txs.forEach(t => { catMap[t.cat] = (catMap[t.cat] || 0) + t.amount; });
-  const summaryRows = Object.entries(catMap).sort((a, b) => b[1] - a[1]).map(([cat, amt]) => ({
-    "סעיף": cat,
-    "סכום כולל": Math.round(amt),
-    "מספר עסקאות": txs.filter(t => t.cat === cat).length,
-  }));
+    const wb = XLSX.utils.book_new();
 
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(txRows), "עסקאות");
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), "סיכום לפי סעיף");
-  XLSX.writeFile(wb, `מאזן_${submission.label || "דוח"}.xlsx`);
+    // One sheet per month
+    chosenSubs.forEach(s => {
+      const txs = s.transactions || [];
+      const txRows = txs.map(t => ({
+        "תאריך": t.date, "שם בית עסק": t.name, "סעיף": t.cat,
+        "סכום": t.amount, "מקור": t.source || "",
+        "ביטחון": t.conf === "high" ? "גבוה" : t.conf === "med" ? "בינוני" : "נמוך",
+      }));
+      const sheetName = (s.label || "חודש").substring(0, 31);
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(txRows), sheetName);
+    });
+
+    // Summary sheet — all selected months combined
+    if (chosenSubs.length > 1) {
+      const allTx = chosenSubs.flatMap(s => s.transactions || []);
+      const catMap = {};
+      allTx.forEach(t => { catMap[t.cat] = (catMap[t.cat] || 0) + t.amount; });
+      const summaryRows = Object.entries(catMap).sort((a, b) => b[1] - a[1]).map(([cat, amt]) => ({
+        "סעיף": cat,
+        "סכום כולל": Math.round(amt),
+        "מספר עסקאות": allTx.filter(t => t.cat === cat).length,
+      }));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), "סיכום משולב");
+    }
+
+    XLSX.writeFile(wb, `מאזן_${clientName}_${chosenSubs.map(s => s.label).join("_")}.xlsx`);
+  };
+
+  if (submissions.length === 0) return null;
+
+  return (
+    <Card style={{ marginBottom: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ fontWeight: 700, fontSize: 14 }}>⬇️ ייצוא לאקסל</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={toggleAll} style={{ background: "none", border: , borderRadius: 7, padding: "5px 12px", fontSize: 12, color: C.dim, cursor: "pointer", fontFamily: "inherit" }}>
+            {allSelected ? "בטל הכל" : "בחר הכל"}
+          </button>
+          <Btn size="sm" onClick={doExport} disabled={selected.length === 0}>
+            ייצוא {selected.length > 0 ?  : ""}
+          </Btn>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {submissions.map(s => (
+          <div key={s.id} onClick={() => toggle(s.id)} style={{ padding: "7px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer", border: , background: selected.includes(s.id) ? "rgba(79,142,247,0.12)" : C.surface2, color: selected.includes(s.id) ? C.accent : C.dim, fontWeight: selected.includes(s.id) ? 600 : 400 }}>
+            {selected.includes(s.id) ? "✓ " : ""}{s.label}
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
 }

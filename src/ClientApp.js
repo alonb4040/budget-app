@@ -89,6 +89,9 @@ export default function ClientApp({ session, onLogout }) {
   const [pendingRemember, setPendingRemember] = useState(null);
   const [toast, setToast] = useState("");
   const [showMonthPicker, setShowMonthPicker] = useState(false);
+  const [portfolioOpen, setPortfolioOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState("data");
+  const [portfolioTab, setPortfolioTab] = useState("control");
   const [selectedMonthKey, setSelectedMonthKey] = useState(null);
   const [selectedMonthLabel, setSelectedMonthLabel] = useState("");
   const fileInputRef = useRef();
@@ -97,11 +100,13 @@ export default function ClientApp({ session, onLogout }) {
 
   const loadUserData = async () => {
     setLoadingData(true);
-    const [{ data: subs }, { data: maps }] = await Promise.all([
+    const [{ data: subs }, { data: maps }, { data: clientData }] = await Promise.all([
       supabase.from("submissions").select("*").eq("client_id", session.id).order("created_at", { ascending: false }),
-      supabase.from("remembered_mappings").select("*").eq("client_id", session.id)
+      supabase.from("remembered_mappings").select("*").eq("client_id", session.id),
+      supabase.from("clients").select("portfolio_open").eq("id", session.id).maybeSingle()
     ]);
     setSubmissions(subs || []);
+    setPortfolioOpen(clientData?.portfolio_open || false);
     const mappingObj = {};
     (maps || []).forEach(m => { mappingObj[m.business_name] = m.category; });
     setRememberedMappings(mappingObj);
@@ -111,6 +116,7 @@ export default function ClientApp({ session, onLogout }) {
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(""), 3500); };
   const usedMonthKeys = submissions.map(s => s.month_key).filter(Boolean);
   const isOnboarding = submissions.length < REQUIRED_MONTHS;
+  const completedOnboarding = submissions.length >= REQUIRED_MONTHS;
 
   const handleFiles = (files) => {
     const newFiles = Array.from(files).filter(f => !uploadedFiles.find(u => u.name === f.name));
@@ -217,49 +223,96 @@ export default function ClientApp({ session, onLogout }) {
       {screen==="dashboard" && (
         <div style={{ maxWidth:960, margin:"0 auto", padding:"28px 20px" }}>
           {isOnboarding && <OnboardingProgress current={submissions.length} total={REQUIRED_MONTHS} />}
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))", gap:12, marginBottom:24 }}>
-            <KpiCard icon="📁" label="חודשים שהוגשו" value={`${submissions.length} / ${REQUIRED_MONTHS}`} />
-            <KpiCard icon="🧠" label="מיפויים שנזכרו" value={Object.keys(rememberedMappings).length} />
-            <KpiCard icon="💰" label="הוצאות אחרונות" value={submissions[0]?"₪"+Math.round((submissions[0].transactions||[]).reduce((s,t)=>s+t.amount,0)).toLocaleString():"—"} color={C.red} />
-          </div>
-          {chartData.length>1 && !isOnboarding && (
-            <Card style={{ marginBottom:24 }}>
-              <div style={{ fontWeight:700, marginBottom:16 }}>📈 הוצאות לאורך זמן</div>
-              <ResponsiveContainer width="100%" height={180}>
-                <BarChart data={chartData}><CartesianGrid strokeDasharray="3 3" stroke={C.border} /><XAxis dataKey="name" tick={{ fill:C.dim, fontSize:11 }} /><YAxis tick={{ fill:C.dim, fontSize:11 }} /><Tooltip contentStyle={{ background:C.surface2, border:`1px solid ${C.border}`, borderRadius:8, color:"#e8eaf6", fontFamily:"'Heebo'" }} /><Bar dataKey="הוצאות" fill={C.accent} radius={[4,4,0,0]} /></BarChart>
-              </ResponsiveContainer>
-            </Card>
+
+          {/* Tab bar — only show after onboarding */}
+          {completedOnboarding && (
+            <div style={{ display:"flex", gap:4, marginBottom:24, borderBottom:`1px solid ${C.border}` }}>
+              {[
+                { id:"data", label:"נתונים לתהליך בניה" },
+                ...(portfolioOpen ? [{ id:"portfolio", label:"📁 תיק כלכלי" }] : []),
+                { id:"personal", label:"פרטים אישיים" },
+              ].map(t => (
+                <button key={t.id} onClick={() => setActiveTab(t.id)} style={{ padding:"10px 18px", fontSize:13, fontFamily:"inherit", fontWeight:activeTab===t.id?700:400, color:activeTab===t.id?C.accent:C.dim, background:"none", border:"none", borderBottom:`2px solid ${activeTab===t.id?C.accent:"transparent"}`, cursor:"pointer", marginBottom:-1 }}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
           )}
-          {submissions.length < REQUIRED_MONTHS ? (
-            <Card style={{ marginBottom:24, border:`1px solid rgba(79,142,247,0.3)`, background:"rgba(79,142,247,0.05)" }}>
-              <div style={{ fontWeight:700, fontSize:15, marginBottom:6 }}>📂 העלה חודש {submissions.length+1} מתוך {REQUIRED_MONTHS}</div>
-              <div style={{ fontSize:13, color:C.dim, marginBottom:16 }}>{submissions.length===0?"התחל בהעלאת קובץ האשראי עבור החודש הראשון":`כמעט סיימת! עוד ${REQUIRED_MONTHS-submissions.length} חודש${REQUIRED_MONTHS-submissions.length>1?"ים":""}`}</div>
-              <Btn onClick={openUpload}>📂 העלה קובץ →</Btn>
-            </Card>
-          ) : (
-            <Btn style={{ marginBottom:24 }} onClick={openUpload}>📂 העלה חודש נוסף</Btn>
-          )}
-          <div style={{ fontWeight:700, marginBottom:12 }}>היסטוריית הגשות</div>
-          {submissions.length===0 ? (
-            <Card style={{ textAlign:"center", padding:48, color:C.dim }}><div style={{ fontSize:36, marginBottom:12 }}>📂</div><div>התחל בהעלאת הקובץ הראשון</div></Card>
-          ) : submissions.map(s => {
-            const txs=s.transactions||[]; const total=txs.reduce((sum,t)=>sum+t.amount,0);
-            const top3=Object.entries(txs.reduce((acc,t)=>{acc[t.cat]=(acc[t.cat]||0)+t.amount;return acc;},{})).sort((a,b)=>b[1]-a[1]).slice(0,3);
-            return (
-              <Card key={s.id} style={{ marginBottom:12 }}>
-                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:10 }}>
-                  <div>
-                    <div style={{ fontWeight:700 }}>{s.label}</div>
-                    <div style={{ fontSize:12, color:C.dim }}>{new Date(s.created_at).toLocaleDateString("he-IL",{day:"numeric",month:"long",year:"numeric"})} · {txs.length} עסקאות</div>
-                    <div style={{ display:"flex", gap:8, marginTop:8, flexWrap:"wrap" }}>
-                      {top3.map(([cat,amt]) => <span key={cat} style={{ background:C.surface2, border:`1px solid ${C.border}`, borderRadius:8, padding:"3px 10px", fontSize:11 }}>{cat}: ₪{Math.round(amt).toLocaleString()}</span>)}
+
+          {/* DATA / onboarding tab */}
+          {(!completedOnboarding || activeTab==="data") && (
+            <div>
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))", gap:12, marginBottom:24 }}>
+                <KpiCard icon="📁" label="חודשים שהוגשו" value={`${submissions.length} / ${REQUIRED_MONTHS}`} />
+                <KpiCard icon="🧠" label="מיפויים שנזכרו" value={Object.keys(rememberedMappings).length} />
+                <KpiCard icon="💰" label="הוצאות אחרונות" value={submissions[0]?"₪"+Math.round((submissions[0].transactions||[]).reduce((s,t)=>s+t.amount,0)).toLocaleString():"—"} color={C.red} />
+              </div>
+              {chartData.length>1 && completedOnboarding && (
+                <Card style={{ marginBottom:24 }}>
+                  <div style={{ fontWeight:700, marginBottom:16 }}>📈 הוצאות לאורך זמן</div>
+                  <ResponsiveContainer width="100%" height={180}>
+                    <BarChart data={chartData}><CartesianGrid strokeDasharray="3 3" stroke={C.border} /><XAxis dataKey="name" tick={{ fill:C.dim, fontSize:11 }} /><YAxis tick={{ fill:C.dim, fontSize:11 }} /><Tooltip contentStyle={{ background:C.surface2, border:`1px solid ${C.border}`, borderRadius:8, color:"#e8eaf6", fontFamily:"'Heebo'" }} /><Bar dataKey="הוצאות" fill={C.accent} radius={[4,4,0,0]} /></BarChart>
+                  </ResponsiveContainer>
+                </Card>
+              )}
+              {isOnboarding ? (
+                <Card style={{ marginBottom:24, border:`1px solid rgba(79,142,247,0.3)`, background:"rgba(79,142,247,0.05)" }}>
+                  <div style={{ fontWeight:700, fontSize:15, marginBottom:6 }}>📂 העלה חודש {submissions.length+1} מתוך {REQUIRED_MONTHS}</div>
+                  <div style={{ fontSize:13, color:C.dim, marginBottom:16 }}>{submissions.length===0?"התחל בהעלאת קובץ האשראי עבור החודש הראשון":`כמעט סיימת! עוד ${REQUIRED_MONTHS-submissions.length} חודש${REQUIRED_MONTHS-submissions.length>1?"ים":""}`}</div>
+                  <Btn onClick={openUpload}>📂 העלה קובץ →</Btn>
+                </Card>
+              ) : (
+                <Btn style={{ marginBottom:24 }} onClick={openUpload}>📂 העלה חודש נוסף</Btn>
+              )}
+              <div style={{ fontWeight:700, marginBottom:12 }}>היסטוריית הגשות</div>
+              {submissions.length===0 ? (
+                <Card style={{ textAlign:"center", padding:48, color:C.dim }}><div style={{ fontSize:36, marginBottom:12 }}>📂</div><div>התחל בהעלאת הקובץ הראשון</div></Card>
+              ) : submissions.map(s => {
+                const txs=s.transactions||[]; const total=txs.reduce((sum,t)=>sum+t.amount,0);
+                const top3=Object.entries(txs.reduce((acc,t)=>{acc[t.cat]=(acc[t.cat]||0)+t.amount;return acc;},{})).sort((a,b)=>b[1]-a[1]).slice(0,3);
+                return (
+                  <Card key={s.id} style={{ marginBottom:12 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:10 }}>
+                      <div>
+                        <div style={{ fontWeight:700 }}>{s.label}</div>
+                        <div style={{ fontSize:12, color:C.dim }}>{new Date(s.created_at).toLocaleDateString("he-IL",{day:"numeric",month:"long",year:"numeric"})} · {txs.length} עסקאות</div>
+                        <div style={{ display:"flex", gap:8, marginTop:8, flexWrap:"wrap" }}>
+                          {top3.map(([cat,amt]) => <span key={cat} style={{ background:C.surface2, border:`1px solid ${C.border}`, borderRadius:8, padding:"3px 10px", fontSize:11 }}>{cat}: ₪{Math.round(amt).toLocaleString()}</span>)}
+                        </div>
+                      </div>
+                      <div style={{ fontWeight:800, fontSize:20, color:C.red }}>₪{Math.round(total).toLocaleString()}</div>
                     </div>
-                  </div>
-                  <div style={{ fontWeight:800, fontSize:20, color:C.red }}>₪{Math.round(total).toLocaleString()}</div>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+
+          {/* PORTFOLIO TAB */}
+          {completedOnboarding && activeTab==="portfolio" && portfolioOpen && (
+            <div>
+              <div style={{ display:"flex", gap:4, marginBottom:20 }}>
+                {[{id:"control",label:"בקרת תיק כלכלי"},{id:"savings",label:"פירוט חסכונות"},{id:"balance",label:"מאזן מתוכנן"}].map(t => (
+                  <button key={t.id} onClick={() => setPortfolioTab(t.id)} style={{ padding:"8px 16px", fontSize:12, fontFamily:"inherit", fontWeight:portfolioTab===t.id?700:400, color:portfolioTab===t.id?"#e8eaf6":C.dim, background:portfolioTab===t.id?C.surface2:"transparent", border:`1px solid ${portfolioTab===t.id?C.border:"transparent"}`, borderRadius:8, cursor:"pointer" }}>
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+              <Card style={{ textAlign:"center", padding:"64px 32px" }}>
+                <div style={{ fontSize:48, marginBottom:16 }}>🚧</div>
+                <div style={{ fontWeight:700, fontSize:18, marginBottom:8 }}>
+                  {{control:"בקרת תיק כלכלי",savings:"פירוט חסכונות",balance:"מאזן מתוכנן"}[portfolioTab]}
                 </div>
+                <div style={{ color:C.dim, fontSize:14, marginBottom:6 }}>הסעיף הזה נמצא בפיתוח ובבנייה</div>
+                <div style={{ color:C.dim, fontSize:12 }}>בקרוב תוכל לראות כאן את המידע הפיננסי שלך</div>
               </Card>
-            );
-          })}
+            </div>
+          )}
+
+          {/* PERSONAL TAB */}
+          {completedOnboarding && activeTab==="personal" && (
+            <ClientPersonalTab session={session} />
+          )}
         </div>
       )}
 
@@ -420,6 +473,69 @@ export default function ClientApp({ session, onLogout }) {
       )}
 
       {toast && <div style={{ position:"fixed", bottom:24, left:"50%", transform:"translateX(-50%)", background:C.green, color:"#000", padding:"9px 20px", borderRadius:20, fontSize:13, fontWeight:600, zIndex:99999, whiteSpace:"nowrap" }}>{toast}</div>}
+    </div>
+  );
+}
+
+// ── Client personal tab ───────────────────────────────────────────────────────
+function ClientPersonalTab({ session }) {
+  const [editName, setEditName] = useState(session.name);
+  const [editEmail, setEditEmail] = useState("");
+  const [editPhone, setEditPhone] = useState("");
+  const [newPass, setNewPass] = useState("");
+  const [confirmPass, setConfirmPass] = useState("");
+  const [msg, setMsg] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    supabase.from("clients").select("email,phone").eq("id", session.id).maybeSingle()
+      .then(({ data }) => { if (data) { setEditEmail(data.email||""); setEditPhone(data.phone||""); } setLoaded(true); });
+  }, []);
+
+  const showMsg = (m) => { setMsg(m); setTimeout(() => setMsg(""), 3000); };
+
+  const saveDetails = async () => {
+    setLoading(true);
+    const { error } = await supabase.from("clients").update({ name: editName, email: editEmail, phone: editPhone }).eq("id", session.id);
+    if (error) showMsg("❌ שגיאה בשמירה");
+    else showMsg("✅ הפרטים עודכנו");
+    setLoading(false);
+  };
+
+  const changePassword = async () => {
+    if (newPass.length < 4) { showMsg("❌ סיסמה חייבת להיות לפחות 4 תווים"); return; }
+    if (newPass !== confirmPass) { showMsg("❌ הסיסמאות לא תואמות"); return; }
+    setLoading(true);
+    const { error } = await supabase.from("clients").update({ password: newPass }).eq("id", session.id);
+    if (error) showMsg("❌ שגיאה בעדכון סיסמה");
+    else { showMsg("✅ הסיסמה עודכנה"); setNewPass(""); setConfirmPass(""); }
+    setLoading(false);
+  };
+
+  if (!loaded) return <div style={{ color: C.dim, padding: 32, textAlign: "center" }}>טוען...</div>;
+
+  return (
+    <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))", gap:16 }}>
+      <Card>
+        <div style={{ fontWeight:700, fontSize:14, marginBottom:16 }}>👤 הפרטים שלי</div>
+        <Input label="שם מלא" value={editName} onChange={e => setEditName(e.target.value)} />
+        <Input label="מייל" type="email" value={editEmail} onChange={e => setEditEmail(e.target.value)} placeholder="example@gmail.com" />
+        <Input label="טלפון" value={editPhone} onChange={e => setEditPhone(e.target.value)} placeholder="050-0000000" />
+        <div style={{ background:C.surface2, borderRadius:8, padding:"10px 12px", fontSize:12, color:C.dim, marginBottom:14 }}>
+          <div style={{ marginBottom:4 }}>שם משתמש לכניסה</div>
+          <div style={{ color:"#e8eaf6", fontWeight:600 }}>@{session.username}</div>
+        </div>
+        {msg && <div style={{ fontSize:12, color:msg.startsWith("✅")?C.green:C.red, marginBottom:12 }}>{msg}</div>}
+        <Btn onClick={saveDetails} disabled={loading}>שמור שינויים</Btn>
+      </Card>
+      <Card>
+        <div style={{ fontWeight:700, fontSize:14, marginBottom:16 }}>🔐 שינוי סיסמה</div>
+        <Input label="סיסמה חדשה" type="password" value={newPass} onChange={e => setNewPass(e.target.value)} placeholder="לפחות 4 תווים" />
+        <Input label="אימות סיסמה" type="password" value={confirmPass} onChange={e => setConfirmPass(e.target.value)} placeholder="הכנס שוב" />
+        {msg && <div style={{ fontSize:12, color:msg.startsWith("✅")?C.green:C.red, marginBottom:12 }}>{msg}</div>}
+        <Btn onClick={changePassword} disabled={loading||!newPass||!confirmPass}>עדכן סיסמה</Btn>
+      </Card>
     </div>
   );
 }
