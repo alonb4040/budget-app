@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "./supabase";
 import { CATEGORIES, parseExcelData } from "./data";
-import { Card, Btn, Badge, Spinner, KpiCard, C } from "./ui";
+import { Card, Btn, Badge, Spinner, KpiCard, Input, C } from "./ui";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
 const REQUIRED_MONTHS = 3;
