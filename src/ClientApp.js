@@ -180,6 +180,19 @@ export default function ClientApp({ session, onLogout }) {
 
   const chartData = [...submissions].reverse().slice(0,6).map(s => ({ name: s.label||"", הוצאות: Math.round((s.transactions||[]).reduce((sum,t)=>sum+t.amount,0)) }));
 
+  const exportToExcel = () => {
+    const XLSX = window.XLSX;
+    if (!XLSX) { showToast("ספריית Excel לא נטענה"); return; }
+    const txRows = transactions.map(t => ({ "תאריך": t.date, "שם בית עסק": t.name, "סעיף": t.cat, "סכום": t.amount, "מקור": t.source || "", "ביטחון": t.conf === "high" ? "גבוה" : t.conf === "med" ? "בינוני" : "נמוך" }));
+    const catMap = {};
+    transactions.forEach(t => { catMap[t.cat] = (catMap[t.cat] || 0) + t.amount; });
+    const summaryRows = Object.entries(catMap).sort((a, b) => b[1] - a[1]).map(([cat, amt]) => ({ "סעיף": cat, "סכום כולל": Math.round(amt), "מספר עסקאות": transactions.filter(t => t.cat === cat).length }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(txRows), "עסקאות");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), "סיכום לפי סעיף");
+    XLSX.writeFile(wb, `מאזן_${selectedMonthLabel || "דוח"}.xlsx`);
+  };
+
   const summaryGroups = () => {
     const result = {};
     Object.entries(CATEGORIES).forEach(([group,items]) => { items.forEach(item => { const txs=transactions.filter(t=>t.cat===item); if (!txs.length) return; if (!result[group]) result[group]={}; result[group][item]=txs; }); });
@@ -331,7 +344,10 @@ export default function ClientApp({ session, onLogout }) {
       {screen==="summary" && (
         <div style={{ maxWidth:960, margin:"0 auto", padding:"28px 20px" }}>
           <Card style={{ marginBottom:20 }}>
-            <div style={{ fontWeight:700, fontSize:16, marginBottom:16 }}>📋 סיכום מאזן — {selectedMonthLabel}</div>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:12, marginBottom:16 }}>
+              <div style={{ fontWeight:700, fontSize:16 }}>📋 סיכום מאזן — {selectedMonthLabel}</div>
+              <Btn variant="ghost" size="sm" onClick={exportToExcel}>⬇️ ייצוא לאקסל</Btn>
+            </div>
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:12 }}>
               {[{l:'סה"כ הוצאות',v:"₪"+transactions.reduce((s,t)=>s+t.amount,0).toLocaleString(),c:C.red},{l:"עסקאות",v:transactions.length},{l:"קטגוריות",v:new Set(transactions.map(t=>t.cat)).size},{l:"לבדיקה",v:transactions.filter(t=>t.conf==="low"&&!t.edited).length,c:C.yellow}].map(k=>(
                 <div key={k.l} style={{ background:C.surface2, borderRadius:10, padding:"14px 16px" }}><div style={{ fontSize:11, color:C.dim, marginBottom:4 }}>{k.l}</div><div style={{ fontSize:20, fontWeight:800, color:k.c }}>{k.v}</div></div>
