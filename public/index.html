@@ -1,18 +1,71 @@
 <!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>מאזן חכם</title>
-  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>מאזן — ניהול פיננסי אישי</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,600;1,9..144,300;1,9..144,400&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Heebo', sans-serif; background: #0f1117; color: #e8eaf6; direction: rtl; }
-    input, select, button, textarea { font-family: 'Heebo', sans-serif; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --green-deep:   #1e4d35;
+      --green-mid:    #2d6a4f;
+      --green-soft:   #52b788;
+      --green-mint:   #d8f3dc;
+      --green-pale:   #f0faf2;
+      --gold:         #b7924c;
+      --gold-light:   #f5e6cc;
+      --bg:           #fafaf8;
+      --surface:      #ffffff;
+      --surface2:     #f4f6f3;
+      --border:       #e2ebe4;
+      --text:         #111c14;
+      --text-mid:     #2e4435;
+      --text-dim:     #4a6352;
+      --red:          #c0392b;
+      --red-light:    #fdf0ee;
+    }
+
+    html { font-size: 16px; }
+
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      direction: rtl;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: var(--surface2); }
+    ::-webkit-scrollbar-thumb { background: var(--green-mint); border-radius: 99px; }
+
+    /* Selection */
+    ::selection { background: var(--green-mint); color: var(--green-deep); }
+
+    button, input, select, textarea {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+
+    /* Fade in */
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .fade-up { animation: fadeUp 0.4s ease forwards; }
   </style>
 </head>
 <body>
   <div id="root"></div>
-  <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
 </body>
 </html>

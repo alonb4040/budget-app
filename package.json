@@ -3,19 +3,42 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "@tanstack/react-query": "^5.95.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-scripts": "5.0.1",
-    "@supabase/supabase-js": "^2.39.0",
     "recharts": "^2.10.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "@types/node": "^20.19.37",
+    "@types/react": "^18.3.28",
+    "@types/react-dom": "^18.3.7",
+    "adm-zip": "^0.5.16",
+    "concurrently": "^9.2.1",
+    "cross-env": "^7.0.3"
   },
   "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build"
+    "start": "concurrently \"react-scripts start\" \"node extension/dev-watch.js\"",
+    "build": "react-scripts build",
+    "backup": "node tests/backup.js",
+    "test": "npx playwright test --config=tests/playwright.config.js",
+    "test:headless": "cross-env HEADLESS=true npx playwright test --config=tests/playwright.config.js",
+    "test:health": "node tests/supabase-health.js",
+    "test:extension": "npx playwright test tests/specs/extension-mock.spec.js --config=tests/playwright.config.js",
+    "generate-fixtures": "node tests/fixtures/generate-excel.js",
+    "ext:watch": "node extension/dev-watch.js"
   },
   "browserslist": {
-    "production": [">0.2%", "not dead"],
-    "development": ["last 1 chrome version"]
+    "production": [
+      ">0.2%",
+      "not dead"
+    ],
+    "development": [
+      "last 1 chrome version"
+    ]
   }
 }

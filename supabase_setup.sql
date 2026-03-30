@@ -48,3 +48,15 @@ create policy "allow all" on admin_settings for all using (true);
 create policy "allow all" on clients for all using (true);
 create policy "allow all" on submissions for all using (true);
 create policy "allow all" on remembered_mappings for all using (true);
+
+-- טבלת תלושי משכורת (הרץ רק אם עוד לא קיים)
+create table if not exists payslips (
+  id bigserial primary key,
+  client_id bigint references clients(id) on delete cascade,
+  label text,
+  month_key text,
+  filename text,
+  created_at timestamptz default now()
+);
+alter table payslips enable row level security;
+create policy "allow all" on payslips for all using (true);
