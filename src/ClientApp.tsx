@@ -7,6 +7,8 @@ import DebtManager from "./components/DebtManager";
 import GrowthTools from "./components/GrowthTools";
 import InsightsPanel from "./components/InsightsPanel";
 import ClientScenarioView, { periodsOverlap, periodForYear } from "./components/ClientScenarioView";
+import AnalyticsTrends from "./components/AnalyticsTrends";
+import AnalyticsForecast from "./components/AnalyticsForecast";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, Legend, LineChart, Line } from "recharts";
 
 const REQUIRED_MONTHS = 3;
@@ -360,6 +362,8 @@ export default function ClientApp({ session, onLogout }) {
               { id:"data", label:"📂 חומרי בסיס" },
               { id:"questionnaire", label:"📝 שאלון אישי" },
               ...(completedOnboarding ? [{ id:"personal", label:"פרטים אישיים" }] : []),
+              ...(completedOnboarding ? [{ id:"analytics-trends", label:"📊 לבדיקה" }] : []),
+              ...(completedOnboarding ? [{ id:"analytics-forecast", label:"🔮 לבדיקה 2" }] : []),
             ].map(t => (
               <button key={t.id} onClick={() => switchTab(t.id)} style={{ padding:"10px 18px", fontSize:13, fontFamily:"inherit", fontWeight:activeTab===t.id?700:400, color:activeTab===t.id?"var(--green-mid)":"var(--text-dim)", background:"none", border:"none", borderBottom:`2px solid ${activeTab===t.id?"var(--green-mid)":"transparent"}`, cursor:"pointer", marginBottom:-1 }}>
                 {t.label}
@@ -498,6 +502,30 @@ export default function ClientApp({ session, onLogout }) {
           {/* PERSONAL TAB */}
           {completedOnboarding && activeTab === "personal" && (
             <ClientPersonalTab session={session} />
+          )}
+
+          {/* ANALYTICS TRENDS TAB — לבדיקה */}
+          {completedOnboarding && activeTab === "analytics-trends" && (
+            <AnalyticsTrends
+              clientId={session.id}
+              portfolioSubs={portfolioSubs}
+              importedTxs={importedTxs}
+              manualTxs={manualTxs}
+              rememberedMappings={rememberedMappings}
+              cycleStartDay={cycleStartDay}
+            />
+          )}
+
+          {/* ANALYTICS FORECAST TAB — לבדיקה 2 */}
+          {completedOnboarding && activeTab === "analytics-forecast" && (
+            <AnalyticsForecast
+              clientId={session.id}
+              portfolioSubs={portfolioSubs}
+              importedTxs={importedTxs}
+              manualTxs={manualTxs}
+              rememberedMappings={rememberedMappings}
+              cycleStartDay={cycleStartDay}
+            />
           )}
         </div>
       )}
