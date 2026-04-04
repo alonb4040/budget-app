@@ -14,3 +14,8 @@ to do/
 מדריך_הפרויקט_v2.html
 mazan_summary.docx
 test-results/
+
+# Test artifacts
+tests/ss_*.png
+tests/playwright-report/
+tests/screenshots/
