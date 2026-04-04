@@ -3,6 +3,7 @@ import { supabase } from "./supabase";
 import { CATEGORIES, IGNORED_CATEGORIES, parseExcelData, classifyTx, HEBREW_MONTHS, assignBillingMonth } from "./data";
 import ConnectCardScreen from "./ConnectCardScreen";
 import { CategoryPicker } from "./components/CategoryPicker";
+import { useCategories } from "./hooks/useCategories";
 import { Card, Btn, Badge, Spinner, KpiCard, Input, C } from "./ui";
 import DebtManager from "./components/DebtManager";
 import GrowthTools from "./components/GrowthTools";
@@ -30,6 +31,9 @@ async function sendCompletionEmail(clientName) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 export default function ClientApp({ session, onLogout }) {
+  // ── קטגוריות דינמיות ────────────────────────────────────────────────────────
+  const { sections: categories, clientCats, reload: reloadCategories } = useCategories(session.id);
+
   const [screen, setScreen]               = useState("dashboard"); // dashboard | month | upload | review | summary
   const [showConnectCard, setShowConnectCard] = useState(false);
   const [monthEntries, setMonthEntries]   = useState([]);   // month_entries rows
@@ -82,6 +86,9 @@ export default function ClientApp({ session, onLogout }) {
   const [uploadSource, setUploadSource]       = useState("dashboard"); // "dashboard" | "month"
   const [selectedMonthKey, setSelectedMonthKey]   = useState(null);
   const [selectedMonthLabel, setSelectedMonthLabel] = useState("");
+  const [analyzing, setAnalyzing]                 = useState(false);
+  const [analyzeResults, setAnalyzeResults]       = useState<{name:string,count:number,error?:string}[]>([]);
+  const [dragOver, setDragOver]                   = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -186,15 +193,35 @@ export default function ClientApp({ session, onLogout }) {
     setUploadedFiles(p => [...p, ...newFiles]);
   };
 
+  const NON_PARSEABLE_EXTS = [".pdf", ".png", ".jpg", ".jpeg", ".doc", ".docx"];
+  const isNonParseable = (name: string) => NON_PARSEABLE_EXTS.some(ext => name.toLowerCase().endsWith(ext));
+
   const analyzeFiles = async () => {
-    let allTx = [];
+    setAnalyzing(true);
+    setAnalyzeResults([]);
+    const results: {name:string,count:number,error?:string}[] = [];
+    let allTx: any[] = [];
     for (const file of uploadedFiles) {
-      const buf = await file.arrayBuffer();
-      const parsed = parseExcelData(buf, file.name, rememberedMappings);
-      allTx = allTx.concat(parsed);
+      if (isNonParseable(file.name)) {
+        results.push({ name: file.name, count: 0, error: "סוג קובץ זה אינו נתמך לניתוח אוטומטי — יש להמיר ל-Excel או CSV" });
+        setAnalyzeResults([...results]);
+        continue;
+      }
+      try {
+        const buf = await file.arrayBuffer();
+        const parsed = parseExcelData(buf, file.name, rememberedMappings);
+        allTx = allTx.concat(parsed);
+        results.push({ name: file.name, count: parsed.length });
+      } catch(e: any) {
+        results.push({ name: file.name, count: 0, error: e?.message || "שגיאה בניתוח הקובץ" });
+      }
+      setAnalyzeResults([...results]);
     }
-    setTransactions(allTx);
-    setScreen("review");
+    setAnalyzing(false);
+    if (allTx.length > 0) {
+      setTransactions(allTx);
+      setScreen("review");
+    }
   };
 
   const saveSubmission = async () => {
@@ -209,13 +236,6 @@ export default function ClientApp({ session, onLogout }) {
       created_at: new Date().toISOString()
     }]);
     if (error) { showToast("שגיאת שמירה: " + error.message); return; }
-
-    // save remembered mappings
-    for (const [biz, cat] of Object.entries(
-      Object.fromEntries((pendingRemember ? [[pendingRemember.name, pendingRemember.cat]] : []))
-    )) {
-      await supabase.from("remembered_mappings").upsert([{ client_id: session.id, business_name: biz, category: cat }], { onConflict: "client_id,business_name" });
-    }
 
     await loadUserData();
     // reload month subs
@@ -250,9 +270,12 @@ export default function ClientApp({ session, onLogout }) {
   const savePortfolioTxCat = async (submissionId, txIndex, newCat) => {
     const sub = portfolioSubs.find(s => s.id === submissionId);
     if (!sub) return;
+    const oldCat = sub.transactions?.[txIndex]?.cat || null;
+    const businessName = sub.transactions?.[txIndex]?.name || null;
     const newTxs = [...(sub.transactions || [])];
     newTxs[txIndex] = { ...newTxs[txIndex], cat: newCat, edited: true };
     await supabase.from("portfolio_submissions").update({ transactions: newTxs }).eq("id", submissionId);
+    await supabase.from("client_change_log").insert([{ client_id: session.id, event_type: "remap_business", details: { business_name: businessName, from_cat: oldCat, to_cat: newCat } }]);
     await loadUserData();
   };
 
@@ -516,6 +539,7 @@ export default function ClientApp({ session, onLogout }) {
               onDataChange={loadUserData}
               onMonthCreated={(newEntry) => setPortfolioMonths(p => [newEntry, ...p.filter(e => e.month_key !== newEntry.month_key)])}
               rememberedMappings={rememberedMappings}
+              onRememberingAdded={(name, cat) => setRememberedMappings(p => ({ ...p, [name]: cat }))}
               cycleStartDay={cycleStartDay}
               importedTxs={importedTxs}
               manualTxs={manualTxs}
@@ -524,6 +548,9 @@ export default function ClientApp({ session, onLogout }) {
               onUpdatePortfolioTxCat={savePortfolioTxCat}
               onDeletePortfolioSub={deletePortfolioSub}
               onCycleStartDayChange={setCycleStartDay}
+              categories={categories}
+              clientCats={clientCats}
+              onCategoryAdded={reloadCategories}
             />
           )}
 
@@ -563,6 +590,10 @@ export default function ClientApp({ session, onLogout }) {
         <MonthDetailScreen
           entry={activeMonth}
           subs={monthSubs}
+          categories={categories}
+          clientCats={clientCats}
+          clientId={session.id}
+          onCategoryAdded={reloadCategories}
           onAddSource={() => openUpload(activeMonth.month_key, activeMonth.label)}
           onFinalize={finalizeMonth}
           onReopen={() => reopenMonth(activeMonth.month_key)}
@@ -600,26 +631,54 @@ export default function ClientApp({ session, onLogout }) {
             <Input label="או הכנס שם ידני" value={sourceLabel} onChange={e => setSourceLabel(e.target.value)} placeholder='למשל "מקס - אמא"' />
           </Card>
 
-          <Card style={{ marginBottom:16, textAlign:"center", padding:"28px 20px" }}>
-            <div style={{ fontSize:32, marginBottom:10 }}>📎</div>
-            <div style={{ fontWeight:700, marginBottom:6 }}>גרור קבצים לכאן</div>
+          <div
+            style={{ marginBottom:16, textAlign:"center", padding:"28px 20px",
+              border:`2px dashed ${dragOver ? "var(--green-mid)" : "var(--border)"}`,
+              borderRadius:12,
+              background: dragOver ? "var(--green-mint)" : "var(--surface)",
+              transition:"border-color 0.15s, background 0.15s" }}
+            onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={e => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }}
+          >
+            <div style={{ fontSize:32, marginBottom:10 }}>{dragOver ? "⬇️" : "📎"}</div>
+            <div style={{ fontWeight:700, marginBottom:6 }}>{dragOver ? "שחרר להוספה" : "גרור קבצים לכאן"}</div>
             <div style={{ fontSize:12, color:"var(--text-dim)", marginBottom:16 }}>Excel, CSV, PDF, Word, תמונות וכל קובץ פיננסי רלוונטי</div>
             <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv,.pdf,.png,.jpg,.jpeg,.doc,.docx,.txt,.ods" multiple style={{ display:"none" }} onChange={e => handleFiles(e.target.files)} />
             <Btn onClick={() => fileInputRef.current?.click()}>בחר קבצים</Btn>
-          </Card>
+          </div>
 
           {uploadedFiles.length > 0 && (
             <Card style={{ marginBottom:16 }}>
-              {uploadedFiles.map((f,i) => (
-                <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 0", borderBottom:i<uploadedFiles.length-1?`1px solid ${"var(--border)"}22`:"none" }}>
-                  <span style={{ fontSize:13 }}>📄 {f.name}</span>
-                  <button onClick={() => setUploadedFiles(p => p.filter((_,j) => j!==i))} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize:16 }}>×</button>
-                </div>
-              ))}
+              {uploadedFiles.map((f,i) => {
+                const res = analyzeResults.find(r => r.name === f.name);
+                return (
+                  <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 0", borderBottom:i<uploadedFiles.length-1?`1px solid ${"var(--border)"}22`:"none" }}>
+                    <span style={{ fontSize:13 }}>📄 {f.name}</span>
+                    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                      {res && (
+                        <span style={{ fontSize:11, color: res.error ? "var(--red)" : res.count === 0 ? "var(--gold)" : "var(--green-soft)" }}>
+                          {res.error ? `⚠️ ${res.error}` : res.count === 0 ? "⚠️ לא זוהו תנועות" : `✓ ${res.count} תנועות`}
+                        </span>
+                      )}
+                      {analyzing && !res && <span style={{ fontSize:11, color:"var(--text-dim)" }}>מנתח...</span>}
+                      <button onClick={() => setUploadedFiles(p => p.filter((_,j) => j!==i))} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize:16 }}>×</button>
+                    </div>
+                  </div>
+                );
+              })}
             </Card>
           )}
 
-          <Btn onClick={analyzeFiles} disabled={uploadedFiles.length === 0 || !sourceLabel} style={{ width:"100%", justifyContent:"center" }}>🔍 נתח תנועות ←</Btn>
+          {analyzeResults.length > 0 && !analyzing && analyzeResults.every(r => r.count === 0) && (
+            <div style={{ background:"rgba(255,183,77,0.1)", border:"1px solid var(--gold)", borderRadius:8, padding:"10px 14px", marginBottom:14, fontSize:13, color:"var(--gold)" }}>
+              ⚠️ לא זוהו תנועות באף קובץ. בדוק שהקבצים הם Excel/CSV עם עמודות תאריך, שם ועסק וסכום.
+            </div>
+          )}
+
+          <Btn onClick={analyzeFiles} disabled={uploadedFiles.length === 0 || !sourceLabel || analyzing} style={{ width:"100%", justifyContent:"center" }}>
+            {analyzing ? "⏳ מנתח..." : "🔍 נתח תנועות ←"}
+          </Btn>
         </div>
       )}
 
@@ -647,22 +706,38 @@ export default function ClientApp({ session, onLogout }) {
 
           <RememberModal
             pendingRemember={pendingRemember}
-            onYes={async () => {
+            onAlways={async () => {
+              const oldCat = rememberedMappings[pendingRemember.name] || null;
               await supabase.from("remembered_mappings").upsert(
                 [{ client_id: session.id, business_name: pendingRemember.name, category: pendingRemember.cat }],
                 { onConflict: "client_id,business_name" }
               );
+              await supabase.from("client_change_log").insert([{ client_id: session.id, event_type: "remap_business", details: { business_name: pendingRemember.name, from_cat: oldCat, to_cat: pendingRemember.cat } }]);
               setRememberedMappings(p => ({ ...p, [pendingRemember.name]: pendingRemember.cat }));
               setPendingRemember(null);
             }}
-            onNo={() => setPendingRemember(null)}
+            onThisSession={() => {
+              const { name, cat } = pendingRemember;
+              setTransactions(p => p.map(t => t.name === name ? { ...t, cat, edited: true } : t));
+              setPendingRemember(null);
+            }}
+            onJustHere={() => setPendingRemember(null)}
           />
 
-          {filteredTx.map(tx => (
+          {filteredTx.map(tx => {
+            const isKnown = !!rememberedMappings[tx.name];
+            return (
             <Card key={tx.id} style={{ marginBottom:10, padding:"14px 18px" }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
                 <div style={{ flex:1 }}>
-                  <div style={{ fontWeight:600, fontSize:15 }}>{tx.name}</div>
+                  <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                    <span style={{ fontWeight:600, fontSize:15 }}>{tx.name}</span>
+                    <span style={{ fontSize:10, padding:"2px 7px", borderRadius:10, fontWeight:600,
+                      background: isKnown ? "rgba(46,204,138,0.12)" : "rgba(255,183,77,0.12)",
+                      color: isKnown ? "var(--green-soft)" : "var(--gold)",
+                      border: `1px solid ${isKnown ? "rgba(46,204,138,0.3)" : "rgba(255,183,77,0.3)"}`,
+                    }}>{isKnown ? "מוכר" : "חדש"}</span>
+                  </div>
                   <div style={{ fontSize:12, color:"var(--text-dim)" }}>{tx.date}</div>
                   {tx.note && (
                     <div style={{ fontSize:12, color:"var(--text-mid)", marginTop:3, fontStyle:"italic" }}>📝 {tx.note}</div>
@@ -670,7 +745,6 @@ export default function ClientApp({ session, onLogout }) {
                 </div>
                 <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
                   <span style={{ fontWeight:700, color:"var(--red)", fontSize:15 }}>₪{tx.amount.toLocaleString()}</span>
-                  <Badge conf={tx.conf} />
                   <button
                     onClick={() => { setActiveTxId(tx.id === activeTxId ? null : tx.id); setCatSearch(""); setPendingRemember(null); }}
                     style={{ background:"var(--green-mint)", border:"1px solid var(--green-soft)", borderRadius:8, padding:"5px 14px", fontSize:13, color:"var(--green-deep)", cursor:"pointer", fontFamily:"inherit", fontWeight:600 }}
@@ -688,6 +762,10 @@ export default function ClientApp({ session, onLogout }) {
                   current={tx.cat}
                   catSearch={catSearch}
                   setCatSearch={setCatSearch}
+                  categories={categories}
+                  clientCats={clientCats}
+                  clientId={session.id}
+                  onCategoryAdded={reloadCategories}
                   onSelect={(cat) => {
                     const txName = tx.name;
                     setTransactions(prev => prev.map(t =>
@@ -714,7 +792,8 @@ export default function ClientApp({ session, onLogout }) {
                 </div>
               )}
             </Card>
-          ))}
+            );
+          })}
 
           {/* Save button at bottom too */}
           <div style={{ position:"sticky", bottom:20, display:"flex", justifyContent:"center", marginTop:16 }}>
@@ -1362,7 +1441,7 @@ function OnboardingProgress({ subsCount, payslipsCount, total }) {
 }
 
 // ── Month Detail Screen ───────────────────────────────────────────────────────
-function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onBack, onDeleteSub, onUpdateSub }) {
+function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onBack, onDeleteSub, onUpdateSub, categories, clientCats, clientId, onCategoryAdded }) {
   const allTx = subs.flatMap(s => s.transactions || []);
   const total = allTx.filter(t => !IGNORED_CATEGORIES.has(t.cat)).reduce((sum, t) => sum + t.amount, 0);
   const catMap: Record<string, number> = {};
@@ -1464,6 +1543,10 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
                     current={tx.cat}
                     catSearch={catSearch}
                     setCatSearch={setCatSearch}
+                    categories={categories}
+                    clientCats={clientCats}
+                    clientId={clientId}
+                    onCategoryAdded={onCategoryAdded}
                     onSelect={(cat) => { setEditTx(p => p.map((t,j) => j===i?{...t,cat,edited:true}:t)); setEditCatOpen(null); setCatSearch(""); }}
                   />
                 </div>
@@ -1482,7 +1565,7 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
 
 
 // ── Portfolio Tab ─────────────────────────────────────────────────────────────
-function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, onDataChange, onMonthCreated, rememberedMappings, cycleStartDay, importedTxs, manualTxs, onManualTxAdded, onManualTxDeleted, onUpdatePortfolioTxCat, onDeletePortfolioSub, onCycleStartDayChange }) {
+function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, onDataChange, onMonthCreated, rememberedMappings, onRememberingAdded, cycleStartDay, importedTxs, manualTxs, onManualTxAdded, onManualTxDeleted, onUpdatePortfolioTxCat, onDeletePortfolioSub, onCycleStartDayChange, categories, clientCats, onCategoryAdded }) {
   const [tab, setTab] = useState(() => sessionStorage.getItem('mazan_portfolioTab') || "control");
   const switchPortfolioTab = (id) => { sessionStorage.setItem('mazan_portfolioTab', id); setTab(id); };
   // Lift upload state here so re-renders don't reset it
@@ -1522,6 +1605,9 @@ function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, on
           onUpdatePortfolioTxCat={onUpdatePortfolioTxCat}
           onDeletePortfolioSub={onDeletePortfolioSub}
           onNavigateToUpload={() => switchPortfolioTab("upload")}
+          categories={categories}
+          clientCats={clientCats}
+          onCategoryAdded={onCategoryAdded}
         />
       )}
 
@@ -1533,10 +1619,14 @@ function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, on
           portfolioSubs={portfolioSubs}
           onDataChange={onDataChange}
           rememberedMappings={rememberedMappings}
+          onRememberingAdded={onRememberingAdded}
           step={pStep} setStep={setPStep}
           activeEntry={activeEntry} setActiveEntry={setActiveEntry}
           entrySubs={entrySubs} setEntrySubs={setEntrySubs}
           onMonthCreated={onMonthCreated}
+          categories={categories}
+          clientCats={clientCats}
+          onCategoryAdded={onCategoryAdded}
         />
       </div>
       {tab === "control" && (
@@ -1548,6 +1638,7 @@ function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, on
           importedTxs={importedTxs || []}
           manualTxs={manualTxs || []}
           rememberedMappings={rememberedMappings || {}}
+          onCycleStartDayChange={onCycleStartDayChange}
         />
       )}
       {tab === "savings" && (
@@ -1577,7 +1668,7 @@ function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, on
 }
 
 // ── Portfolio Upload Tab ──────────────────────────────────────────────────────
-function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataChange, onMonthCreated, rememberedMappings, step, setStep, activeEntry, setActiveEntry, entrySubs, setEntrySubs }) {
+function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataChange, onMonthCreated, rememberedMappings, onRememberingAdded, step, setStep, activeEntry, setActiveEntry, entrySubs, setEntrySubs, categories, clientCats, onCategoryAdded }) {
   const [showPicker, setShowPicker]   = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState([]);
   const [sourceLabel, setSourceLabel] = useState("");
@@ -1588,6 +1679,9 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
   const [catSearch, setCatSearch]     = useState("");
   const [saving, setSaving]           = useState(false);
   const [pendingRemember, setPendingRemember] = useState(null);
+  const [analyzing, setAnalyzing]     = useState(false);
+  const [analyzeResults, setAnalyzeResults] = useState<{name:string,count:number,error?:string}[]>([]);
+  const [dragOver, setDragOver]       = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const usedKeys = portfolioMonths.map(e => e.month_key);
@@ -1641,19 +1735,35 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
     setStep("upload");
   };
 
+  const NON_PARSEABLE_EXTS = [".pdf", ".png", ".jpg", ".jpeg", ".doc", ".docx"];
+  const isNonParseable = (name: string) => NON_PARSEABLE_EXTS.some(ext => name.toLowerCase().endsWith(ext));
+
   const analyzeFiles = async () => {
-    let allTx = [];
+    setAnalyzing(true);
+    setAnalyzeResults([]);
+    const results: {name:string,count:number,error?:string}[] = [];
+    let allTx: any[] = [];
     for (const file of uploadedFiles) {
+      if (isNonParseable(file.name)) {
+        results.push({ name: file.name, count: 0, error: "סוג קובץ זה אינו נתמך לניתוח אוטומטי — יש להמיר ל-Excel או CSV" });
+        setAnalyzeResults([...results]);
+        continue;
+      }
       try {
         const buf = await file.arrayBuffer();
         const parsed = parseExcelData(buf, file.name, rememberedMappings);
         allTx = allTx.concat(parsed);
-      } catch(e) {
-        console.error("parse error", file.name, e);
+        results.push({ name: file.name, count: parsed.length });
+      } catch(e: any) {
+        results.push({ name: file.name, count: 0, error: e?.message || "שגיאה בניתוח הקובץ" });
       }
+      setAnalyzeResults([...results]);
     }
-    setTransactions(allTx);
-    setStep("review");
+    setAnalyzing(false);
+    if (allTx.length > 0) {
+      setTransactions(allTx);
+      setStep("review");
+    }
   };
 
   const saveSource = async () => {
@@ -1849,29 +1959,56 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
         <Input label="או הכנס ידנית" value={sourceLabel} onChange={e => setSourceLabel(e.target.value)} placeholder="שם המקור" />
       </Card>
 
-      <Card style={{ textAlign:"center", padding:"24px 20px", marginBottom:14 }}>
-        <div style={{ fontSize:28, marginBottom:8 }}>📎</div>
+      <div
+        style={{ textAlign:"center", padding:"24px 20px", marginBottom:14,
+          border:`2px dashed ${dragOver ? "var(--green-mid)" : "var(--border)"}`,
+          borderRadius:12,
+          background: dragOver ? "var(--green-mint)" : "var(--surface)",
+          transition:"border-color 0.15s, background 0.15s" }}
+        onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={e => { e.preventDefault(); setDragOver(false); const files = Array.from(e.dataTransfer.files) as File[]; setUploadedFiles(p => [...p, ...files.filter((f: File) => !p.find((u: File) => u.name===f.name))]); }}
+      >
+        <div style={{ fontSize:28, marginBottom:8 }}>{dragOver ? "⬇️" : "📎"}</div>
+        <div style={{ fontWeight:600, fontSize:13, marginBottom:4 }}>{dragOver ? "שחרר להוספה" : "גרור קבצים לכאן"}</div>
         <div style={{ fontSize:12, color:"var(--text-dim)", marginBottom:12 }}>Excel, CSV, PDF, Word, תמונות וכל קובץ פיננסי</div>
         <input ref={fileRef} type="file"
           accept=".xlsx,.xls,.csv,.pdf,.png,.jpg,.jpeg,.doc,.docx,.txt,.ods"
           multiple style={{ display:"none" }}
-          onChange={e => setUploadedFiles(p => [...p, ...Array.from(e.target.files).filter(f => !p.find(u => u.name===f.name))])} />
+          onChange={e => setUploadedFiles(p => [...p, ...Array.from(e.target.files as FileList).filter((f: File) => !p.find((u: File) => u.name===f.name))])} />
         <Btn size="sm" onClick={() => fileRef.current?.click()}>בחר קבצים</Btn>
-      </Card>
+      </div>
 
       {uploadedFiles.length > 0 && (
         <Card style={{ marginBottom:14 }}>
-          {uploadedFiles.map((f,i) => (
-            <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom:i<uploadedFiles.length-1?`1px solid ${"var(--border)"}22`:"none", fontSize:12 }}>
-              <span>📄 {f.name}</span>
-              <button onClick={() => setUploadedFiles(p => p.filter((_,j)=>j!==i))} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize:16 }}>×</button>
-            </div>
-          ))}
+          {uploadedFiles.map((f,i) => {
+            const res = analyzeResults.find(r => r.name === f.name);
+            return (
+              <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom:i<uploadedFiles.length-1?`1px solid ${"var(--border)"}22`:"none", fontSize:12 }}>
+                <span>📄 {f.name}</span>
+                <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                  {res && (
+                    <span style={{ fontSize:11, color: res.error ? "var(--red)" : res.count === 0 ? "var(--gold)" : "var(--green-soft)" }}>
+                      {res.error ? `⚠️ ${res.error}` : res.count === 0 ? "⚠️ לא זוהו תנועות" : `✓ ${res.count} תנועות`}
+                    </span>
+                  )}
+                  {analyzing && !res && <span style={{ fontSize:11, color:"var(--text-dim)" }}>מנתח...</span>}
+                  <button onClick={() => setUploadedFiles(p => p.filter((_,j)=>j!==i))} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize:16 }}>×</button>
+                </div>
+              </div>
+            );
+          })}
         </Card>
       )}
 
-      <Btn onClick={analyzeFiles} disabled={uploadedFiles.length===0||!sourceLabel} style={{ width:"100%", justifyContent:"center" }}>
-        🔍 נתח תנועות ←
+      {analyzeResults.length > 0 && !analyzing && analyzeResults.every(r => r.count === 0) && (
+        <div style={{ background:"rgba(255,183,77,0.1)", border:"1px solid var(--gold)", borderRadius:8, padding:"10px 14px", marginBottom:12, fontSize:12, color:"var(--gold)" }}>
+          ⚠️ לא זוהו תנועות באף קובץ. בדוק שהקבצים הם Excel/CSV עם עמודות תאריך, שם עסק וסכום.
+        </div>
+      )}
+
+      <Btn onClick={analyzeFiles} disabled={uploadedFiles.length===0||!sourceLabel||analyzing} style={{ width:"100%", justifyContent:"center" }}>
+        {analyzing ? "⏳ מנתח..." : "🔍 נתח תנועות ←"}
       </Btn>
     </div>
   );
@@ -1902,22 +2039,38 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
 
       <RememberModal
         pendingRemember={pendingRemember}
-        onYes={async () => {
+        onAlways={async () => {
+          const oldCat = rememberedMappings[pendingRemember.name] || null;
           await supabase.from("remembered_mappings").upsert(
             [{ client_id: clientId, business_name: pendingRemember.name, category: pendingRemember.cat }],
             { onConflict: "client_id,business_name" }
           );
-          rememberedMappings[pendingRemember.name] = pendingRemember.cat;
+          await supabase.from("client_change_log").insert([{ client_id: clientId, event_type: "remap_business", details: { business_name: pendingRemember.name, from_cat: oldCat, to_cat: pendingRemember.cat } }]);
+          onRememberingAdded?.(pendingRemember.name, pendingRemember.cat);
           setPendingRemember(null);
         }}
-        onNo={() => setPendingRemember(null)}
+        onThisSession={() => {
+          const { name, cat } = pendingRemember;
+          setTransactions(p => p.map(t => t.name === name ? { ...t, cat, edited: true } : t));
+          setPendingRemember(null);
+        }}
+        onJustHere={() => setPendingRemember(null)}
       />
 
-      {filteredTx.map(tx => (
+      {filteredTx.map(tx => {
+        const isKnown = !!rememberedMappings[tx.name];
+        return (
         <Card key={tx.id} style={{ marginBottom:8, padding:"12px 16px" }}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
             <div style={{ flex:1 }}>
-              <div style={{ fontWeight:600, fontSize:14 }}>{tx.name}</div>
+              <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                <span style={{ fontWeight:600, fontSize:14 }}>{tx.name}</span>
+                <span style={{ fontSize:10, padding:"2px 6px", borderRadius:10, fontWeight:600,
+                  background: isKnown ? "rgba(46,204,138,0.12)" : "rgba(255,183,77,0.12)",
+                  color: isKnown ? "var(--green-soft)" : "var(--gold)",
+                  border: `1px solid ${isKnown ? "rgba(46,204,138,0.3)" : "rgba(255,183,77,0.3)"}`,
+                }}>{isKnown ? "מוכר" : "חדש"}</span>
+              </div>
               <div style={{ fontSize:12, color:"var(--text-dim)" }}>{tx.date}</div>
               {tx.note && <div style={{ fontSize:12, color:"var(--text-mid)", marginTop:3, fontStyle:"italic" }}>📝 {tx.note}</div>}
             </div>
@@ -1939,6 +2092,10 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
               current={tx.cat}
               catSearch={catSearch}
               setCatSearch={setCatSearch}
+              categories={categories}
+              clientCats={clientCats}
+              clientId={clientId}
+              onCategoryAdded={onCategoryAdded}
               onSelect={(cat) => {
                 const txName = tx.name;
                 setTransactions(p => p.map(t =>
@@ -1963,7 +2120,8 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
             </div>
           )}
         </Card>
-      ))}
+        );
+      })}
 
       {/* Save button at bottom */}
       <div style={{ position:"sticky", bottom:20, display:"flex", justifyContent:"center", marginTop:16 }}>
@@ -1982,10 +2140,24 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
 // ── assignBillingMonth ────────────────────────────────────────────────────────
 // date: "DD/MM/YYYY" or "YYYY-MM-DD" → "YYYY-MM" based on cycleStartDay
 
-function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleStartDay, importedTxs, manualTxs, rememberedMappings }) {
+function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleStartDay, importedTxs, manualTxs, rememberedMappings, onCycleStartDayChange }) {
   const NOW_YEAR  = new Date().getFullYear();
   const NOW_MONTH = new Date().getMonth() + 1; // 1–12
   const NOW_DAY   = new Date().getDate();
+
+  const [editingCycleDay, setEditingCycleDay] = useState(false);
+  const [tempDay, setTempDay]                 = useState(String(cycleStartDay));
+  const [savingDay, setSavingDay]             = useState(false);
+
+  const saveCycleDay = async () => {
+    const d = parseInt(tempDay);
+    if (isNaN(d) || d < 1 || d > 28) return;
+    setSavingDay(true);
+    await supabase.from("clients").update({ cycle_start_day: d }).eq("id", clientId);
+    if (onCycleStartDayChange) onCycleStartDayChange(d);
+    setSavingDay(false);
+    setEditingCycleDay(false);
+  };
 
   const [selectedYear, setSelectedYear]   = useState(NOW_YEAR);
   const [allPeriods, setAllPeriods]       = useState(null);  // null = loading
@@ -2289,6 +2461,41 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
   return (
     <>
     <div>
+      {/* ── יום תחילת המחזור החודשי ── */}
+      <Card style={{ marginBottom:16, padding:"12px 18px", background:"var(--surface2)", border:"1px solid var(--border)" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+          <span style={{ fontSize:13, color:"var(--text-mid)" }}>יום תחילת המחזור החודשי:</span>
+          {editingCycleDay ? (
+            <>
+              <input type="number" min="1" max="28" value={tempDay}
+                onChange={e => setTempDay(e.target.value)}
+                style={{ width:60, padding:"5px 10px", borderRadius:8, border:"1.5px solid var(--green-mid)", fontSize:14,
+                  fontFamily:"inherit", background:"var(--surface)", color:"var(--text)", textAlign:"center" }} />
+              <button onClick={saveCycleDay} disabled={savingDay}
+                style={{ padding:"5px 14px", borderRadius:8, fontSize:13, cursor:"pointer", fontFamily:"inherit",
+                  background:"var(--green-mid)", color:"#fff", border:"none", fontWeight:700 }}>
+                {savingDay ? "שומר..." : "שמור"}
+              </button>
+              <button onClick={() => { setEditingCycleDay(false); setTempDay(String(cycleStartDay)); }}
+                style={{ padding:"5px 12px", borderRadius:8, fontSize:13, cursor:"pointer", fontFamily:"inherit",
+                  background:"transparent", color:"var(--text-dim)", border:"1px solid var(--border)" }}>
+                ביטול
+              </button>
+            </>
+          ) : (
+            <>
+              <span style={{ fontWeight:700, fontSize:15, color:"var(--green-deep)" }}>{cycleStartDay}</span>
+              <button onClick={() => { setEditingCycleDay(true); setTempDay(String(cycleStartDay)); }}
+                style={{ padding:"4px 12px", borderRadius:8, fontSize:12, cursor:"pointer", fontFamily:"inherit",
+                  background:"transparent", color:"var(--text-dim)", border:"1px solid var(--border)" }}>
+                ✏️ שנה
+              </button>
+              <span style={{ fontSize:12, color:"var(--text-dim)" }}>(שינוי ישפיע על החלוקה מעכשיו ואילך)</span>
+            </>
+          )}
+        </div>
+      </Card>
+
       {/* ── כותרת: ניווט שנה + תסריט ── */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -2481,21 +2688,38 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
 
 
 // ── Remember Modal ────────────────────────────────────────────────────────────
-function RememberModal({ pendingRemember, onYes, onNo }) {
+function RememberModal({ pendingRemember, onAlways, onThisSession, onJustHere }) {
   if (!pendingRemember) return null;
+  const btnBase: React.CSSProperties = {
+    display:"block", width:"100%", borderRadius:10, padding:"11px 16px", fontSize:14,
+    cursor:"pointer", fontFamily:"inherit", textAlign:"right", border:"1px solid var(--border)",
+    background:"var(--surface2)", color:"var(--text)", transition:"background 0.1s",
+  };
   return (
     <>
-      <div onClick={onNo} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:9000 }} />
-      <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:`1px solid ${"var(--border)"}`, borderRadius:16, padding:"28px 32px", zIndex:9001, width:"min(420px,90vw)", boxShadow:"0 20px 60px rgba(0,0,0,0.6)", textAlign:"center" }}>
-        <div style={{ fontSize:36, marginBottom:12 }}>🧠</div>
-        <div style={{ fontWeight:700, fontSize:17, marginBottom:10 }}>לזכור לפעמים הבאות?</div>
-        <div style={{ fontSize:15, color:"var(--text-dim)", marginBottom:24, lineHeight:1.6 }}>
-          <strong style={{ color:"var(--text)" }}>"{pendingRemember.name}"</strong><br/>
-          תמיד יסווג כ<strong style={{ color:"var(--green-mid)" }}> {pendingRemember.cat}</strong>
+      <div onClick={onJustHere} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:9000 }} />
+      <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:`1px solid ${"var(--border)"}`, borderRadius:16, padding:"24px 28px", zIndex:9001, width:"min(400px,90vw)", boxShadow:"0 20px 60px rgba(0,0,0,0.6)" }}>
+        <div style={{ textAlign:"center", marginBottom:16 }}>
+          <div style={{ fontSize:32, marginBottom:8 }}>🧠</div>
+          <div style={{ fontWeight:700, fontSize:16, marginBottom:6 }}>לשנות את הסיווג של</div>
+          <div style={{ fontSize:15, color:"var(--text-dim)", lineHeight:1.5 }}>
+            <strong style={{ color:"var(--text)" }}>"{pendingRemember.name}"</strong>
+            {" "}→{" "}<strong style={{ color:"var(--green-mid)" }}>{pendingRemember.cat}</strong>
+          </div>
         </div>
-        <div style={{ display:"flex", gap:12, justifyContent:"center" }}>
-          <button onClick={onYes} style={{ background:`linear-gradient(135deg,${"var(--green-soft)"},#27ae60)`, border:"none", borderRadius:10, padding:"10px 28px", fontSize:15, color:"#fff", cursor:"pointer", fontFamily:"inherit", fontWeight:700 }}>✓ כן, זכור</button>
-          <button onClick={onNo} style={{ background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:10, padding:"10px 28px", fontSize:15, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}>✕ לא</button>
+        <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+          <button onClick={onAlways} style={{ ...btnBase, borderColor:"var(--green-mid)", background:"var(--green-mint)", color:"var(--green-deep)", fontWeight:700 }}>
+            🔄 שנה תמיד לעסק זה
+            <div style={{ fontSize:11, color:"var(--green-deep)", opacity:0.7, fontWeight:400, marginTop:2 }}>ישמר לתמיד — יחול גם על תנועות עתידיות</div>
+          </button>
+          <button onClick={onThisSession} style={btnBase}>
+            📋 שנה לכל התנועות בהעלאה הנוכחית
+            <div style={{ fontSize:11, color:"var(--text-dim)", marginTop:2 }}>עדכן את כל "{pendingRemember.name}" בסיווג הנוכחי בלבד</div>
+          </button>
+          <button onClick={onJustHere} style={{ ...btnBase, color:"var(--text-dim)" }}>
+            ✎ שנה כאן בלבד
+            <div style={{ fontSize:11, color:"var(--text-dim)", marginTop:2 }}>רק תנועה זו — בלי לשנות שאר התנועות</div>
+          </button>
         </div>
       </div>
     </>
@@ -2571,19 +2795,31 @@ function normalizeAllTxs(portfolioSubs, importedTxs, rememberedMappings, cycleSt
 // ════════════════════════════════════════════════════════════════
 function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, rememberedMappings, onDataChange,
   onManualTxAdded, onManualTxDeleted,
-  cycleStartDay, onCycleStartDayChange, onUpdatePortfolioTxCat, onDeletePortfolioSub, onNavigateToUpload }) {
-  const [allTxs, setAllTxs] = useState(() =>
-    normalizeAllTxs(portfolioSubs, importedTxs, rememberedMappings, cycleStartDay, manualTxs)
-  );
+  cycleStartDay, onCycleStartDayChange, onUpdatePortfolioTxCat, onDeletePortfolioSub, onNavigateToUpload,
+  categories, clientCats, onCategoryAdded }) {
+  // ── Derived transaction list (useMemo keeps it in sync with props automatically) ──
+  const [localEdits, setLocalEdits] = useState<Map<string, string>>(new Map());
+  const [deletedUids, setDeletedUids] = useState<Set<string>>(new Set());
+  const allTxs = useMemo(() => {
+    const fresh = normalizeAllTxs(portfolioSubs, importedTxs, rememberedMappings, cycleStartDay, manualTxs);
+    return fresh
+      .filter(t => !deletedUids.has(t._uid))
+      .map(t => localEdits.has(t._uid) ? { ...t, cat: localEdits.get(t._uid)!, edited: true } : t);
+  }, [portfolioSubs, importedTxs, manualTxs, rememberedMappings, cycleStartDay, localEdits, deletedUids]);
+
   const [activeTxUid, setActiveTxUid] = useState(null);
   const [catSearch, setCatSearch] = useState("");
   const [pendingRemember, setPendingRemember] = useState(null);
-  const [filterSource, setFilterSource] = useState("all"); // "all" | "file" | "ext"
+  const [filterSource, setFilterSource] = useState("all"); // "all" | "file" | "ext" | "manual"
   const [filterProvider, setFilterProvider] = useState("all");
-  const [editingCycleDay, setEditingCycleDay] = useState(false);
-  const [tempDay, setTempDay] = useState(String(cycleStartDay));
-  const [savingDay, setSavingDay] = useState(false);
-  const [openMonthKeys, setOpenMonthKeys] = useState(new Set());
+  const [filterCat, setFilterCat] = useState("all");
+  const [searchText, setSearchText] = useState("");
+  const [sortConfig, setSortConfig] = useState<{field: "date"|"amount"|"cat", dir: "asc"|"desc"}>({ field: "date", dir: "desc" });
+  const [openMonthKeys, setOpenMonthKeys] = useState<Set<string>>(() => {
+    const now = new Date();
+    const key = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    return new Set([key]);
+  });
   const [deletingTxUid, setDeletingTxUid] = useState(null);
   const [deletingCycleKey, setDeletingCycleKey] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
@@ -2591,9 +2827,32 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
   const [selectedUids, setSelectedUids] = useState<Set<string>>(new Set());
   const toggleSelectTx = (uid: string) => setSelectedUids(prev => { const next = new Set(prev); next.has(uid) ? next.delete(uid) : next.add(uid); return next; });
   const toggleSelectMonth = (monthTxs: any[]) => {
-    const monthUids = monthTxs.filter(t => t.source === "ext" || t.source === "manual").map(t => t._uid);
+    const monthUids = monthTxs.map(t => t._uid);
     const allSelected = monthUids.every(uid => selectedUids.has(uid));
     setSelectedUids(prev => { const next = new Set(prev); allSelected ? monthUids.forEach(uid => next.delete(uid)) : monthUids.forEach(uid => next.add(uid)); return next; });
+  };
+  const deleteMonth = async (monthTxs: any[]) => {
+    if (!window.confirm(`למחוק את כל ${monthTxs.length} התנועות של חודש זה?`)) return;
+    const extIds = monthTxs.filter(t => t.source === "ext").map(t => t._dbId).filter(Boolean);
+    const manIds = monthTxs.filter(t => t.source === "manual").map(t => t._dbId).filter(Boolean);
+    if (extIds.length > 0) await supabase.from("imported_transactions").delete().in("id", extIds).eq("client_id", clientId);
+    if (manIds.length > 0) { await supabase.from("manual_transactions").delete().in("id", manIds).eq("client_id", clientId); manIds.forEach(id => onManualTxDeleted && onManualTxDeleted(id)); }
+    const fileTxs = monthTxs.filter(t => t.source === "file");
+    if (fileTxs.length > 0) {
+      const bySubmission: Record<string, number[]> = {};
+      fileTxs.forEach(t => { if (!bySubmission[t._submissionId]) bySubmission[t._submissionId] = []; bySubmission[t._submissionId].push(t._txIndex); });
+      for (const [subId, indices] of Object.entries(bySubmission)) {
+        const sub = portfolioSubs.find((s: any) => String(s.id) === String(subId));
+        if (!sub) continue;
+        const idxSet = new Set(indices);
+        const newTxs = (sub.transactions || []).filter((_: any, i: number) => !idxSet.has(i));
+        await supabase.from("portfolio_submissions").update({ transactions: newTxs }).eq("id", sub.id);
+      }
+    }
+    const uids = new Set(monthTxs.map(t => t._uid));
+    setDeletedUids(prev => { const next = new Set(prev); uids.forEach(uid => next.add(uid)); return next; });
+    setSelectedUids(prev => { const next = new Set(prev); uids.forEach(uid => next.delete(uid)); return next; });
+    onDataChange();
   };
   const deleteSelected = async () => {
     if (!window.confirm(`מחק ${selectedUids.size} תנועות נבחרות?`)) return;
@@ -2602,7 +2861,20 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
     const manIds = toDelete.filter(t => t.source === "manual").map(t => t._dbId).filter(Boolean);
     if (extIds.length > 0) await supabase.from("imported_transactions").delete().in("id", extIds).eq("client_id", clientId);
     if (manIds.length > 0) { await supabase.from("manual_transactions").delete().in("id", manIds).eq("client_id", clientId); manIds.forEach(id => onManualTxDeleted && onManualTxDeleted(id)); }
-    setAllTxs(prev => prev.filter(t => !selectedUids.has(t._uid)));
+    // file txs — group by submission and patch the transactions JSON
+    const fileTxs = toDelete.filter(t => t.source === "file");
+    if (fileTxs.length > 0) {
+      const bySubmission: Record<string, number[]> = {};
+      fileTxs.forEach(t => { if (!bySubmission[t._submissionId]) bySubmission[t._submissionId] = []; bySubmission[t._submissionId].push(t._txIndex); });
+      for (const [subId, indices] of Object.entries(bySubmission)) {
+        const sub = portfolioSubs.find((s: any) => String(s.id) === String(subId));
+        if (!sub) continue;
+        const idxSet = new Set(indices);
+        const newTxs = (sub.transactions || []).filter((_: any, i: number) => !idxSet.has(i));
+        await supabase.from("portfolio_submissions").update({ transactions: newTxs }).eq("id", sub.id);
+      }
+    }
+    setDeletedUids(prev => { const next = new Set(prev); selectedUids.forEach(uid => next.add(uid)); return next; });
     setSelectedUids(new Set());
     onDataChange();
   };
@@ -2631,27 +2903,12 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
       cat,
       type,
       payment_method: type === "expense" ? (form.payment_method || "מזומן") : null,
-      date: null,
+      date: form.date || null,
     };
     const { data, error } = await supabase.from("manual_transactions").insert([row]).select().single();
     if (error) { console.error(error); return; }
-    const normalized = {
-      _uid: `man-${data.id}`,
-      date: "",
-      name: data.name,
-      cat: data.cat,
-      amount: Number(data.amount),
-      billing_month: data.billing_month,
-      source: "manual",
-      source_label: data.payment_method ? `ידני — ${data.payment_method}` : "ידני",
-      conf: "high",
-      edited: false,
-      type: data.type,
-      _submissionId: null,
-      _txIndex: null,
-      _dbId: data.id,
-    };
-    setAllTxs(prev => [...prev, normalized]);
+    await supabase.from("client_change_log").insert([{ client_id: clientId, event_type: "manual_entry", details: { category_name: data.cat, amount: data.amount, description: data.name } }]);
+    // useMemo will pick up the new tx once onManualTxAdded updates the parent's manualTxs prop
     if (onManualTxAdded) onManualTxAdded(data);
     resetAdd(billing_month);
   };
@@ -2660,7 +2917,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
   const deleteManualTx = async (uid, dbId) => {
     setDeletingTxUid(uid);
     await supabase.from("manual_transactions").delete().eq("id", dbId).eq("client_id", clientId);
-    setAllTxs(prev => prev.filter(t => t._uid !== uid));
+    setDeletedUids(prev => { const next = new Set(prev); next.add(uid); return next; });
     if (onManualTxDeleted) onManualTxDeleted(dbId);
     setDeletingTxUid(null);
     setConfirmDelete(null);
@@ -2676,7 +2933,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
   const deleteTx = async (uid, dbId) => {
     setDeletingTxUid(uid);
     await supabase.from("imported_transactions").delete().eq("id", dbId).eq("client_id", clientId);
-    setAllTxs(prev => prev.filter(t => t._uid !== uid));
+    setDeletedUids(prev => { const next = new Set(prev); next.add(uid); return next; });
     setDeletingTxUid(null);
     setConfirmDelete(null);
     onDataChange();
@@ -2685,8 +2942,9 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
   // ── מחיקת submission שלם (portfolio) ────────────────────────────────────────
   const deleteSubmission = async (submissionId) => {
     setDeletingCycleKey(`sub-${submissionId}`);
+    const uidsToRemove = allTxs.filter(t => t._submissionId === submissionId).map(t => t._uid);
     await onDeletePortfolioSub(submissionId);
-    setAllTxs(prev => prev.filter(t => t._submissionId !== submissionId));
+    setDeletedUids(prev => { const next = new Set(prev); uidsToRemove.forEach(uid => next.add(uid)); return next; });
     setDeletingCycleKey(null);
     setConfirmDelete(null);
   };
@@ -2694,8 +2952,9 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
   // ── מחיקת כל התנועות המיובאות ────────────────────────────────────────────────
   const deleteAllImported = async () => {
     setDeletingCycleKey("all-imported");
+    const uidsToRemove = allTxs.filter(t => t.source === "ext").map(t => t._uid);
     await supabase.from("imported_transactions").delete().eq("client_id", clientId);
-    setAllTxs(prev => prev.filter(t => t.source !== "ext"));
+    setDeletedUids(prev => { const next = new Set(prev); uidsToRemove.forEach(uid => next.add(uid)); return next; });
     setDeletingCycleKey(null);
     setConfirmDelete(null);
     onDataChange();
@@ -2709,8 +2968,22 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
     if (ids.length > 0) {
       await supabase.from("imported_transactions").delete().in("id", ids).eq("client_id", clientId);
     }
-    setAllTxs(prev => prev.filter(t => !(t.billing_month === cycleKey && t.source === "ext")));
+    setDeletedUids(prev => { const next = new Set(prev); toDelete.forEach(t => next.add(t._uid)); return next; });
     setDeletingCycleKey(null);
+    setConfirmDelete(null);
+    onDataChange();
+  };
+
+  // ── מחיקת תנועה בודדת מקובץ (portfolio) ─────────────────────────────────────
+  const deleteFileTx = async (tx) => {
+    setDeletingTxUid(tx._uid);
+    const sub = portfolioSubs.find((s: any) => String(s.id) === String(tx._submissionId));
+    if (sub) {
+      const newTxs = (sub.transactions || []).filter((_: any, i: number) => i !== tx._txIndex);
+      await supabase.from("portfolio_submissions").update({ transactions: newTxs }).eq("id", sub.id);
+    }
+    setDeletedUids(prev => { const next = new Set(prev); next.add(tx._uid); return next; });
+    setDeletingTxUid(null);
     setConfirmDelete(null);
     onDataChange();
   };
@@ -2735,6 +3008,9 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
   const filteredTxs = allTxs.filter(t => {
     if (filterSource !== "all" && t.source !== filterSource) return false;
     if (filterProvider !== "all" && t.source_label !== filterProvider) return false;
+    if (filterCat !== "all" && t.cat !== filterCat) return false;
+    const q = searchText.trim().toLowerCase();
+    if (q && !(t.name || "").toLowerCase().includes(q) && !(t.cat || "").toLowerCase().includes(q)) return false;
     return true;
   });
   const byCycle = {};
@@ -2746,17 +3022,6 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
   const cycleKeys = Object.keys(byCycle).sort().reverse();
   const providerLabels = [...new Set(allTxs.map(t => t.source_label).filter(Boolean))];
   const totalAmount = filteredTxs.filter(t => !IGNORED_CATEGORIES.has(t.cat)).reduce((s,t) => s + Number(t.amount||0), 0);
-
-  // ── שמירת יום מחזור ──────────────────────────────────────────────────────────
-  const saveCycleDay = async () => {
-    const d = parseInt(tempDay);
-    if (isNaN(d) || d < 1 || d > 28) return;
-    setSavingDay(true);
-    await supabase.from("clients").update({ cycle_start_day: d }).eq("id", clientId);
-    onCycleStartDayChange(d);
-    setSavingDay(false);
-    setEditingCycleDay(false);
-  };
 
   // ── ייצוא Excel ──────────────────────────────────────────────────────────────
   const exportToExcel = () => {
@@ -2828,6 +3093,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                   else if (confirmDelete.type === "cycle") deleteCycle(confirmDelete.cycleKey);
                   else if (confirmDelete.type === "submission") deleteSubmission(confirmDelete.submissionId);
                   else if (confirmDelete.type === "manual") deleteManualTx(confirmDelete.uid, confirmDelete.dbId);
+                  else if (confirmDelete.type === "file") deleteFileTx(confirmDelete.tx);
                   else deleteTx(confirmDelete.uid, confirmDelete.dbId);
                 }}
                 disabled={!!deletingTxUid || !!deletingCycleKey}
@@ -2840,22 +3106,30 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
       )}
 
       {/* Header */}
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:20, flexWrap:"wrap", gap:10 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16, flexWrap:"wrap", gap:10 }}>
         <div>
           <div style={{ fontFamily:"'Fraunces', serif", fontSize:20, fontWeight:600, color:"var(--green-deep)" }}>
             כל התנועות
           </div>
           <div style={{ fontSize:13, color:"var(--text-dim)", marginTop:3 }}>
-            {allTxs.length} תנועות · ₪{Math.round(totalAmount).toLocaleString()} סה"כ
+            {filteredTxs.length}{filteredTxs.length !== allTxs.length ? ` מתוך ${allTxs.length}` : ""} תנועות · ₪{Math.round(totalAmount).toLocaleString()} סה"כ
           </div>
         </div>
         <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
           {selectedUids.size > 0 && (
-            <button onClick={deleteSelected}
-              style={{ padding:"7px 14px", borderRadius:8, fontSize:13, cursor:"pointer", fontFamily:"inherit",
-                border:"1.5px solid #e53935", background:"#fff8f8", color:"#e53935", fontWeight:700, display:"flex", alignItems:"center", gap:5 }}>
-              🗑️ מחק {selectedUids.size} נבחרות
-            </button>
+            <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+              <span style={{ fontSize:12, color:"var(--text-dim)" }}>{selectedUids.size} נבחרו</span>
+              <button onClick={() => setSelectedUids(new Set())}
+                style={{ padding:"5px 10px", borderRadius:7, fontSize:12, cursor:"pointer", fontFamily:"inherit",
+                  border:"1px solid var(--border)", background:"transparent", color:"var(--text-dim)" }}>
+                ✕ בטל
+              </button>
+              <button onClick={deleteSelected}
+                style={{ padding:"7px 16px", borderRadius:8, fontSize:13, cursor:"pointer", fontFamily:"inherit",
+                  border:"1.5px solid #e53935", background:"#e53935", color:"#fff", fontWeight:700, display:"flex", alignItems:"center", gap:5 }}>
+                🗑️ מחק {selectedUids.size}
+              </button>
+            </div>
           )}
           <button onClick={onNavigateToUpload}
             style={{ padding:"7px 14px", borderRadius:8, fontSize:13, cursor:"pointer", fontFamily:"inherit",
@@ -2870,48 +3144,21 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
         </div>
       </div>
 
-      {/* הגדרת יום התחלת מחזור */}
-      <Card style={{ marginBottom:16, padding:"12px 18px", background:"var(--surface2)", border:"1px solid var(--border)" }}>
-        <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-          <span style={{ fontSize:13, color:"var(--text-mid)" }}>יום תחילת המחזור החודשי:</span>
-          {editingCycleDay ? (
-            <>
-              <input type="number" min="1" max="28" value={tempDay}
-                onChange={e => setTempDay(e.target.value)}
-                style={{ width:60, padding:"5px 10px", borderRadius:8, border:"1.5px solid var(--green-mid)", fontSize:14,
-                  fontFamily:"inherit", background:"var(--surface)", color:"var(--text)", textAlign:"center" }} />
-              <button onClick={saveCycleDay} disabled={savingDay}
-                style={{ padding:"5px 14px", borderRadius:8, fontSize:13, cursor:"pointer", fontFamily:"inherit",
-                  background:"var(--green-mid)", color:"#fff", border:"none", fontWeight:700 }}>
-                {savingDay ? "שומר..." : "שמור"}
-              </button>
-              <button onClick={() => { setEditingCycleDay(false); setTempDay(String(cycleStartDay)); }}
-                style={{ padding:"5px 12px", borderRadius:8, fontSize:13, cursor:"pointer", fontFamily:"inherit",
-                  background:"transparent", color:"var(--text-dim)", border:"1px solid var(--border)" }}>
-                ביטול
-              </button>
-            </>
-          ) : (
-            <>
-              <span style={{ fontWeight:700, fontSize:15, color:"var(--green-deep)" }}>{cycleStartDay}</span>
-              <button onClick={() => { setEditingCycleDay(true); setTempDay(String(cycleStartDay)); }}
-                style={{ padding:"4px 12px", borderRadius:8, fontSize:12, cursor:"pointer", fontFamily:"inherit",
-                  background:"transparent", color:"var(--text-dim)", border:"1px solid var(--border)" }}>
-                ✏️ שנה
-              </button>
-              <span style={{ fontSize:12, color:"var(--text-dim)" }}>
-                (שינוי ישפיע על החלוקה מעכשיו ואילך)
-              </span>
-            </>
-          )}
-        </div>
-      </Card>
+      {/* Search + filters */}
+      <div style={{ marginBottom:10 }}>
+        <input
+          value={searchText} onChange={e => setSearchText(e.target.value)}
+          placeholder="🔍 חיפוש לפי שם עסק או קטגוריה..."
+          style={{ width:"100%", padding:"8px 14px", borderRadius:8, border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text)", fontSize:14, fontFamily:"inherit", boxSizing:"border-box" }}
+        />
+      </div>
 
       {/* Source filter */}
-      <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap" }}>
-        {[["all","הכל"], ["file","📁 קבצים"], ["ext","💳 מקס"]].map(([v,l]) => (
+      <div style={{ display:"flex", gap:8, marginBottom:8, flexWrap:"wrap", alignItems:"center" }}>
+        <span style={{ fontSize:12, color:"var(--text-dim)" }}>מקור:</span>
+        {[["all","הכל"], ["file","📁 קבצים"], ["ext","💳 מקס"], ["manual","✏️ ידני"]].map(([v,l]) => (
           <button key={v} onClick={() => { setFilterSource(v); setFilterProvider("all"); }}
-            style={{ padding:"5px 14px", borderRadius:20, fontSize:13, cursor:"pointer", fontFamily:"inherit",
+            style={{ padding:"4px 12px", borderRadius:20, fontSize:12, cursor:"pointer", fontFamily:"inherit",
               border:`1px solid ${filterSource===v?"var(--green-mid)":"var(--border)"}`,
               background:filterSource===v?"var(--green-mint)":"transparent",
               color:filterSource===v?"var(--green-deep)":"var(--text-mid)" }}>
@@ -2919,11 +3166,34 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
           </button>
         ))}
       </div>
+
+      {/* Category filter */}
+      {(() => {
+        const allCatOptions = [...new Set(allTxs.map(t => t.cat).filter(Boolean))].sort();
+        if (allCatOptions.length === 0) return null;
+        return (
+          <div style={{ display:"flex", gap:8, marginBottom:8, alignItems:"center", flexWrap:"wrap" }}>
+            <span style={{ fontSize:12, color:"var(--text-dim)" }}>קטגוריה:</span>
+            <select value={filterCat} onChange={e => setFilterCat(e.target.value)}
+              style={{ padding:"4px 10px", borderRadius:8, border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text)", fontSize:12, fontFamily:"inherit" }}>
+              <option value="all">הכל</option>
+              {allCatOptions.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            {(filterCat !== "all" || filterSource !== "all" || searchText.trim()) && (
+              <button onClick={() => { setFilterCat("all"); setFilterSource("all"); setFilterProvider("all"); setSearchText(""); }}
+                style={{ padding:"3px 10px", borderRadius:8, fontSize:11, cursor:"pointer", fontFamily:"inherit", border:"1px solid var(--border)", background:"transparent", color:"var(--text-dim)" }}>
+                נקה פילטרים
+              </button>
+            )}
+          </div>
+        );
+      })()}
+
       {providerLabels.length > 1 && (
-        <div style={{ display:"flex", gap:8, marginBottom:16, flexWrap:"wrap" }}>
+        <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap" }}>
           {[["all","הכל"], ...providerLabels.map(p => [p, p])].map(([v,l]) => (
             <button key={v} onClick={() => setFilterProvider(v)}
-              style={{ padding:"5px 14px", borderRadius:20, fontSize:12, cursor:"pointer", fontFamily:"inherit",
+              style={{ padding:"4px 12px", borderRadius:20, fontSize:12, cursor:"pointer", fontFamily:"inherit",
                 border:`1px solid ${filterProvider===v?"var(--green-mid)":"var(--border)"}`,
                 background:filterProvider===v?"var(--green-mint)":"transparent",
                 color:filterProvider===v?"var(--green-deep)":"var(--text-mid)" }}>
@@ -2935,21 +3205,42 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
 
       {/* ── Unified expandable month list ── */}
       <RememberModal pendingRemember={pendingRemember}
-        onYes={async () => {
+        onAlways={async () => {
+          const oldCat = rememberedMappings[pendingRemember.name] || null;
           await supabase.from("remembered_mappings").upsert(
             [{ client_id: clientId, business_name: pendingRemember.name, category: pendingRemember.cat }],
             { onConflict: "client_id,business_name" }
           );
+          await supabase.from("client_change_log").insert([{ client_id: clientId, event_type: "remap_business", details: { business_name: pendingRemember.name, from_cat: oldCat, to_cat: pendingRemember.cat } }]);
           setPendingRemember(null);
         }}
-        onNo={() => setPendingRemember(null)}
+        onThisSession={() => {
+          const { name, cat } = pendingRemember;
+          const matching = allTxs.filter(t => t.name === name);
+          setLocalEdits(prev => {
+            const next = new Map(prev);
+            matching.forEach(t => next.set(t._uid, cat));
+            return next;
+          });
+          setPendingRemember(null);
+        }}
+        onJustHere={() => setPendingRemember(null)}
       />
 
       {cycleKeys.map((key, idx) => {
         const cycleTxs = byCycle[key] || [];
         if (cycleTxs.length === 0) return null;
-        const activeTxs = cycleTxs.filter(t => !IGNORED_CATEGORIES.has(t.cat));
-        const ignoredTxs = cycleTxs.filter(t => IGNORED_CATEGORIES.has(t.cat));
+        const sortedCycleTxs = [...cycleTxs].sort((a, b) => {
+          const { field, dir } = sortConfig;
+          let va: any = a[field], vb: any = b[field];
+          if (field === "amount") { va = Number(va || 0); vb = Number(vb || 0); }
+          else { va = (va || "").toString(); vb = (vb || "").toString(); }
+          if (va < vb) return dir === "asc" ? -1 : 1;
+          if (va > vb) return dir === "asc" ? 1 : -1;
+          return 0;
+        });
+        const activeTxs = sortedCycleTxs.filter(t => !IGNORED_CATEGORIES.has(t.cat));
+        const ignoredTxs = sortedCycleTxs.filter(t => IGNORED_CATEGORIES.has(t.cat));
         const cycleTotal = activeTxs.reduce((s,t) => s + Number(t.amount||0), 0);
         const catMap: Record<string, number> = {};
         activeTxs.forEach(t => { catMap[t.cat] = (catMap[t.cat]||0) + Number(t.amount||0); });
@@ -2989,35 +3280,41 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                     fontSize:12, color:"var(--green-deep)", cursor:"pointer", fontFamily:"inherit", fontWeight:600 }}>
                   {tx.cat || "לא מסווג"}
                 </button>
-                {(tx.source === "ext" || tx.source === "manual") && (
-                  <input type="checkbox" checked={selectedUids.has(tx._uid)}
-                    onChange={() => toggleSelectTx(tx._uid)}
-                    onClick={e => e.stopPropagation()}
-                    style={{ width:16, height:16, cursor:"pointer", accentColor:"var(--green-mid)" }}
-                  />
-                )}
-                {(tx.source === "ext" || tx.source === "manual") && (
-                  <button onClick={() => tx.source === "manual"
-                    ? setConfirmDelete({ type:"manual", uid:tx._uid, dbId:tx._dbId, label:tx.name })
-                    : setConfirmDelete({ type:"tx", uid:tx._uid, dbId:tx._dbId, label:tx.name })}
-                    title="מחק תנועה"
-                    style={{ padding:"3px 7px", borderRadius:6, border:"1px solid #ffcdd2", background:"#fff8f8", color:"#e53935", fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>
-                    🗑️
-                  </button>
-                )}
+                <input type="checkbox" checked={selectedUids.has(tx._uid)}
+                  onChange={() => toggleSelectTx(tx._uid)}
+                  onClick={e => e.stopPropagation()}
+                  style={{ width:16, height:16, cursor:"pointer", accentColor:"var(--green-mid)" }}
+                />
+                <button onClick={() => {
+                    if (tx.source === "manual") setConfirmDelete({ type:"manual", uid:tx._uid, dbId:tx._dbId, label:tx.name });
+                    else if (tx.source === "file") setConfirmDelete({ type:"file", uid:tx._uid, tx, label:tx.name });
+                    else setConfirmDelete({ type:"tx", uid:tx._uid, dbId:tx._dbId, label:tx.name });
+                  }}
+                  title="מחק תנועה"
+                  style={{ padding:"3px 7px", borderRadius:6, border:"1px solid #ffcdd2", background:"#fff8f8", color:"#e53935", fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>
+                  🗑️
+                </button>
               </div>
             </div>
             {activeTxUid === tx._uid && (
               <CategoryPicker current={tx.cat} catSearch={catSearch} setCatSearch={setCatSearch}
+                categories={categories} clientCats={clientCats} clientId={clientId} onCategoryAdded={onCategoryAdded}
                 onSelect={async (cat) => {
                   if (tx.source === "ext") {
-                    setAllTxs(p => p.map(t => t.name === tx.name && t.source === "ext" ? {...t, cat, edited:true} : t));
+                    // update all ext txs with same business name (optimistic)
+                    setLocalEdits(prev => {
+                      const next = new Map(prev);
+                      allTxs.filter(t => t.source === "ext" && t.name === tx.name).forEach(t => next.set(t._uid, cat));
+                      return next;
+                    });
                     setPendingRemember({ name: tx.name, cat });
                   } else if (tx.source === "manual") {
+                    const oldCat = tx.cat;
                     await supabase.from("manual_transactions").update({ cat }).eq("id", tx._dbId);
-                    setAllTxs(p => p.map(t => t._uid === tx._uid ? {...t, cat} : t));
+                    await supabase.from("client_change_log").insert([{ client_id: clientId, event_type: "remap_business", details: { business_name: tx.name, from_cat: oldCat, to_cat: cat } }]);
+                    setLocalEdits(prev => { const next = new Map(prev); next.set(tx._uid, cat); return next; });
                   } else {
-                    setAllTxs(p => p.map(t => t._uid === tx._uid ? {...t, cat, edited:true} : t));
+                    setLocalEdits(prev => { const next = new Map(prev); next.set(tx._uid, cat); return next; });
                     await onUpdatePortfolioTxCat(tx._submissionId, tx._txIndex, cat);
                   }
                   setActiveTxUid(null);
@@ -3055,16 +3352,23 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                   ₪{Math.round(cycleTotal).toLocaleString()}
                 </span>
                 {(() => {
-                  const deletable = cycleTxs.filter(t => t.source === "ext" || t.source === "manual");
-                  if (deletable.length === 0) return null;
-                  const allSel = deletable.every(t => selectedUids.has(t._uid));
+                  if (cycleTxs.length === 0) return null;
+                  const allSel = cycleTxs.every(t => selectedUids.has(t._uid));
                   return (
-                    <button onClick={e => { e.stopPropagation(); toggleSelectMonth(cycleTxs); }}
-                      style={{ padding:"3px 10px", fontSize:11, borderRadius:6, fontFamily:"inherit", cursor:"pointer",
-                        border:"1px solid var(--border)", background: allSel ? "rgba(229,57,53,0.08)" : "transparent",
-                        color: allSel ? "#e53935" : "var(--text-dim)" }}>
-                      {allSel ? "בטל בחירה" : "בחר הכל"}
-                    </button>
+                    <div style={{ display:"flex", gap:6 }} onClick={e => e.stopPropagation()}>
+                      <button onClick={() => toggleSelectMonth(cycleTxs)}
+                        style={{ padding:"3px 10px", fontSize:11, borderRadius:6, fontFamily:"inherit", cursor:"pointer",
+                          border:"1px solid var(--border)", background: allSel ? "rgba(229,57,53,0.08)" : "transparent",
+                          color: allSel ? "#e53935" : "var(--text-dim)" }}>
+                        {allSel ? "בטל בחירה" : "בחר הכל"}
+                      </button>
+                      <button onClick={() => deleteMonth(cycleTxs)}
+                        title="מחק את כל תנועות החודש"
+                        style={{ padding:"3px 10px", fontSize:11, borderRadius:6, fontFamily:"inherit", cursor:"pointer",
+                          border:"1px solid rgba(229,57,53,0.4)", background:"rgba(229,57,53,0.06)", color:"#e53935" }}>
+                        🗑️ מחק חודש
+                      </button>
+                    </div>
                   );
                 })()}
                 <span style={{ color:"var(--text-dim)", fontSize:16 }}>{isOpen ? "▲" : "▼"}</span>
@@ -3074,14 +3378,45 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
             {/* Expanded content */}
             {isOpen && (
               <div style={{ border:"1.5px solid var(--border)", borderTop:"none", borderRadius:"0 0 10px 10px", padding:"12px 12px 8px" }}>
+                {/* Sort controls */}
+                <div style={{ display:"flex", gap:6, marginBottom:10, alignItems:"center", flexWrap:"wrap" }}>
+                  <span style={{ fontSize:11, color:"var(--text-dim)" }}>מיון:</span>
+                  {([["date","תאריך"], ["amount","סכום"], ["cat","קטגוריה"]] as const).map(([field, label]) => {
+                    const active = sortConfig.field === field;
+                    return (
+                      <button key={field} onClick={() => setSortConfig(prev => ({ field, dir: prev.field === field && prev.dir === "asc" ? "desc" : "asc" }))}
+                        style={{ padding:"2px 10px", borderRadius:14, fontSize:11, cursor:"pointer", fontFamily:"inherit",
+                          border:`1px solid ${active?"var(--green-mid)":"var(--border)"}`,
+                          background:active?"var(--green-mint)":"transparent",
+                          color:active?"var(--green-deep)":"var(--text-dim)" }}>
+                        {label} {active ? (sortConfig.dir === "asc" ? "↑" : "↓") : ""}
+                      </button>
+                    );
+                  })}
+                </div>
                 {activeTxs.map(tx => renderTxRow(tx, false))}
-                {ignoredTxs.map(tx => renderTxRow(tx, true))}
+                {/* Hidden transactions */}
+                {ignoredTxs.length > 0 && (
+                  <>
+                    <div style={{ marginTop:8, marginBottom:4, display:"flex", alignItems:"center", gap:8 }}>
+                      <span style={{ fontSize:11, color:"var(--text-dim)" }} title={`קטגוריות מוסתרות: ${[...IGNORED_CATEGORIES].join(", ")}`}>
+                        🚫 {ignoredTxs.length} תנועות מוסתרות (קטגוריות מסוננות)
+                      </span>
+                      <button onClick={() => setIgnoredOpen(p => ({ ...p, [key]: !p[key] }))}
+                        style={{ padding:"2px 10px", borderRadius:10, fontSize:11, cursor:"pointer", fontFamily:"inherit",
+                          border:"1px solid var(--border)", background:"transparent", color:"var(--text-dim)" }}>
+                        {ignoredOpen[key] ? "הסתר" : "הצג"}
+                      </button>
+                    </div>
+                    {ignoredOpen[key] && ignoredTxs.map(tx => renderTxRow(tx, true))}
+                  </>
+                )}
 
                 {/* הוסף תנועה ידנית */}
                 {(() => {
                   const mode = addingTx[key];
                   const form = addForm[key] || {};
-                  const allCats = Object.values(CATEGORIES).flat();
+                  const allCats = [...Object.values(categories || CATEGORIES).flat(), ...(clientCats || [])];
                   const inputS = { border:"1px solid var(--border)", borderRadius:6, padding:"6px 10px", fontSize:13, fontFamily:"inherit", background:"var(--surface2)", color:"var(--text)", width:"100%" };
                   const rowS: React.CSSProperties = { display:"flex", gap:8, flexWrap:"wrap", alignItems:"flex-end", marginBottom:8 };
 
@@ -3121,6 +3456,10 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                         <div style={{ flex:1, minWidth:90 }}>
                           <div style={{ fontSize:11, color:"var(--text-dim)", marginBottom:3 }}>סכום (₪) *</div>
                           <input type="number" style={inputS} value={form.amount||""} onChange={e=>updateForm(key,"amount",e.target.value)} placeholder="0" />
+                        </div>
+                        <div style={{ flex:1, minWidth:110 }}>
+                          <div style={{ fontSize:11, color:"var(--text-dim)", marginBottom:3 }}>תאריך (אופציונלי)</div>
+                          <input type="date" style={inputS} value={form.date||""} onChange={e=>updateForm(key,"date",e.target.value)} />
                         </div>
                       </div>
                       <div style={{ display:"flex", gap:8 }}>
@@ -3175,12 +3514,21 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                           <div style={{ fontSize:11, color:"var(--text-dim)", marginBottom:3 }}>סיווג *</div>
                           <select style={inputS} value={form.cat||""} onChange={e=>updateForm(key,"cat",e.target.value)}>
                             <option value="">בחר קטגוריה...</option>
-                            {Object.entries(CATEGORIES).map(([section, cats]) => (
+                            {Object.entries(categories || CATEGORIES).map(([section, cats]) => (
                               <optgroup key={section} label={section}>
-                                {cats.map(c => <option key={c} value={c}>{c}</option>)}
+                                {(cats as string[]).map(c => <option key={c} value={c}>{c}</option>)}
                               </optgroup>
                             ))}
+                            {clientCats && clientCats.length > 0 && (
+                              <optgroup label="⭐ הקטגוריות שלי">
+                                {clientCats.map(c => <option key={c} value={c}>{c}</option>)}
+                              </optgroup>
+                            )}
                           </select>
+                        </div>
+                        <div style={{ flex:1, minWidth:110 }}>
+                          <div style={{ fontSize:11, color:"var(--text-dim)", marginBottom:3 }}>תאריך (אופציונלי)</div>
+                          <input type="date" style={inputS} value={form.date||""} onChange={e=>updateForm(key,"date",e.target.value)} />
                         </div>
                       </div>
                       <div style={{ display:"flex", gap:8 }}>

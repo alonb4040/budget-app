@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import ScenarioTab from "./ScenarioTab";
 import { supabase } from "./supabase";
 import { Card, Btn, Input, C } from "./ui";
+import CategoryManager from "./components/CategoryManager";
 
 const HEB_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
 function monthKeyToLabel(mk) {
@@ -244,6 +245,7 @@ export default function AdminPanel({ onLogout }) {
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           {view !== "list" && <Btn variant="ghost" size="sm" onClick={() => { setView("list"); setMsg(""); setSelected(null); setJustCreated(null); }}>← חזור</Btn>}
+          {view === "list" && <Btn variant="ghost" size="sm" onClick={() => setView("categories")}>🏷️ קטגוריות</Btn>}
           <Btn variant="ghost" size="sm" onClick={onLogout}>יציאה</Btn>
         </div>
       </div>
@@ -389,6 +391,9 @@ export default function AdminPanel({ onLogout }) {
         {view === "detail" && selected && (
           <ClientDetail client={selected} onRefresh={async () => { await loadClients(); const fresh = clients.find(c => c.id === selected.id) || selected; await openClient(fresh); }} />
         )}
+
+        {/* CATEGORY MANAGER */}
+        {view === "categories" && <CategoryManager />}
       </div>
     </div>
   );
@@ -763,7 +768,7 @@ function ClientDetail({ client, onRefresh }) {
 
       {/* LOG TAB */}
       {activeTab === "log" && (
-        <ChangeLogTab clientId={client.id} />
+        <ChangeLogTab clientId={client.id} clientName={client.name} clientLastName={client.last_name} />
       )}
 
       {/* PERSONAL TAB */}
@@ -968,16 +973,18 @@ function ExportSection({ submissions, clientName }) {
 }
 
 // ── לוג שינויים ──────────────────────────────────────────────────────────────
-function ChangeLogTab({ clientId }) {
+function ChangeLogTab({ clientId, clientName, clientLastName }) {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
 
   useEffect(() => {
     supabase.from("client_change_log")
       .select("*").eq("client_id", clientId)
       .order("created_at", { ascending: false })
-      .limit(200)
+      .limit(500)
       .then(({ data }) => { setLogs(data || []); setLoading(false); });
   }, [clientId]);
 
@@ -997,13 +1004,38 @@ function ChangeLogTab({ clientId }) {
     manual_entry:   "var(--surface2)",
   };
 
-  const filtered = filter === "all" ? logs : logs.filter(l => l.event_type === filter);
+  const filtered = logs.filter(l => {
+    if (filter !== "all" && l.event_type !== filter) return false;
+    if (dateFrom && new Date(l.created_at) < new Date(dateFrom)) return false;
+    if (dateTo && new Date(l.created_at) > new Date(dateTo + "T23:59:59")) return false;
+    return true;
+  });
+
+  const detailsToText = (log) => {
+    const d = log.details || {};
+    switch (log.event_type) {
+      case "remap_business": return `בית עסק: ${d.business_name} | ${d.from_cat || "?"} → ${d.to_cat}`;
+      case "add_category":   return `סעיף חדש: ${d.category_name} | יעד: ₪${d.amount}`;
+      case "edit_budget":    return `סעיף: ${d.category_name} | ₪${d.old_amount} → ₪${d.new_amount}`;
+      case "reset_balance":  return `סעיף: ${d.category_name || "כלל"} | יתרה שאופסה: ₪${d.balance} | ${d.note || ""}`;
+      case "manual_entry":   return `סעיף: ${d.category_name} | ₪${d.amount} | ${d.description}`;
+      default:               return JSON.stringify(d);
+    }
+  };
 
   const renderDetails = (log) => {
     const d = log.details || {};
     switch (log.event_type) {
       case "remap_business":
-        return <span>בית עסק: <strong>{d.business_name}</strong> | {d.from_cat} → <strong>{d.to_cat}</strong></span>;
+        return (
+          <span>
+            בית עסק: <strong>{d.business_name}</strong>
+            {" | סיווג אוטומטי: "}
+            <span style={{ color: "var(--text-dim)" }}>{d.from_cat || "לא ידוע"}</span>
+            {" → סיווג חדש: "}
+            <strong style={{ color: "var(--green-deep)" }}>{d.to_cat}</strong>
+          </span>
+        );
       case "add_category":
         return <span>סעיף חדש: <strong>{d.category_name}</strong> | יעד: ₪{d.amount}</span>;
       case "edit_budget":
@@ -1017,12 +1049,32 @@ function ChangeLogTab({ clientId }) {
     }
   };
 
+  const exportToExcel = () => {
+    const XLSX = (window as any).XLSX;
+    if (!XLSX) { alert("ספריית Excel לא נטענה"); return; }
+    const rows = filtered.map(l => {
+      const d = l.details || {};
+      return {
+        "תאריך": new Date(l.created_at).toLocaleString("he-IL", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }),
+        "שם פרטי": clientName || "",
+        "שם משפחה": clientLastName || "",
+        "סיווג אוטומטי": l.event_type === "remap_business" ? (d.from_cat || "") : "",
+        "סיווג חדש": l.event_type === "remap_business" ? (d.to_cat || "") : "",
+        "סוג פעולה": EVENT_LABELS[l.event_type] || l.event_type,
+        "פרטים נוספים": l.event_type !== "remap_business" ? detailsToText(l) : (d.business_name || ""),
+      };
+    });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "לוג שינויים");
+    XLSX.writeFile(wb, `לוג_שינויים_${clientName || clientId}.xlsx`);
+  };
+
   if (loading) return <div style={{ color: "var(--text-dim)", padding: 32 }}>טוען...</div>;
 
   return (
     <div>
-      {/* פילטר */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+      {/* שורת כלים */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
         {[["all", "הכל"], ...Object.entries(EVENT_LABELS)].map(([k, v]) => (
           <button key={k} onClick={() => setFilter(k)}
             style={{ padding: "5px 14px", borderRadius: 20, fontSize: 13, cursor: "pointer", fontFamily: "inherit",
@@ -1032,6 +1084,28 @@ function ChangeLogTab({ clientId }) {
             {v}
           </button>
         ))}
+      </div>
+
+      {/* סינון תאריך + ייצוא */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+        <label style={{ fontSize: 12, color: "var(--text-dim)" }}>מתאריך</label>
+        <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+          style={{ fontSize: 13, padding: "4px 8px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontFamily: "inherit" }} />
+        <label style={{ fontSize: 12, color: "var(--text-dim)" }}>עד תאריך</label>
+        <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+          style={{ fontSize: 13, padding: "4px 8px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontFamily: "inherit" }} />
+        {(dateFrom || dateTo) && (
+          <button onClick={() => { setDateFrom(""); setDateTo(""); }}
+            style={{ fontSize: 12, padding: "4px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--text-dim)", cursor: "pointer", fontFamily: "inherit" }}>
+            נקה
+          </button>
+        )}
+        <div style={{ marginRight: "auto" }}>
+          <button onClick={exportToExcel} disabled={filtered.length === 0}
+            style={{ fontSize: 13, padding: "5px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", cursor: filtered.length === 0 ? "default" : "pointer", fontFamily: "inherit", opacity: filtered.length === 0 ? 0.5 : 1 }}>
+            📥 ייצוא Excel ({filtered.length})
+          </button>
+        </div>
       </div>
 
       {filtered.length === 0 ? (

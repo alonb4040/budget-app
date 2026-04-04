@@ -128,7 +128,7 @@ export default function App() {
           }
           if (!cancelled) markReady();
         } else {
-          const storedSession = localStorage.getItem('sb-fygffuihotnkjmxmveyt-auth-token');
+          const storedSession = sessionStorage.getItem('sb-fygffuihotnkjmxmveyt-auth-token');
           if (storedSession) {
             console.log('[Auth] INITIAL_SESSION null — stored token found, awaiting refresh cycle');
             awaitingRefresh = true;
@@ -198,6 +198,7 @@ export default function App() {
 
   const handleLogout = async (): Promise<void> => {
     clearSessionCache();
+    try { localStorage.removeItem("mazan_client_id"); } catch {}
     await supabase.auth.signOut();
     setSession(null);
   };
@@ -237,7 +238,7 @@ const SESSION_CACHE_KEY = "mazan-session-cache";
 
 function readSessionCache(userId: string): Session | null {
   try {
-    const raw = localStorage.getItem(SESSION_CACHE_KEY);
+    const raw = sessionStorage.getItem(SESSION_CACHE_KEY);
     if (!raw) return null;
     const cached = JSON.parse(raw);
     if (cached.userId !== userId) return null;
@@ -246,11 +247,11 @@ function readSessionCache(userId: string): Session | null {
 }
 
 function writeSessionCache(userId: string, session: Session) {
-  try { localStorage.setItem(SESSION_CACHE_KEY, JSON.stringify({ userId, session })); } catch {}
+  try { sessionStorage.setItem(SESSION_CACHE_KEY, JSON.stringify({ userId, session })); } catch {}
 }
 
 function clearSessionCache() {
-  try { localStorage.removeItem(SESSION_CACHE_KEY); } catch {}
+  try { sessionStorage.removeItem(SESSION_CACHE_KEY); } catch {}
 }
 
 // ── Build app Session from a Supabase Auth session ───────────────────────────
@@ -283,6 +284,8 @@ async function buildSession(authSession: { user: { id: string; app_metadata?: Re
 
   const session: Session = { role: "client", username: client.username, name: client.name, id: String(client.id), must_reset_password: client.must_reset_password ?? false };
   writeSessionCache(userId, session);
+  // כתוב client_id ל-localStorage — נדרש לבוקמרקלט מקס שרץ מדומיין אחר
+  try { localStorage.setItem("mazan_client_id", String(client.id)); } catch {}
   // fire-and-forget — don't block login
   supabase.from("clients").update({ last_active: new Date().toISOString() }).eq("id", client.id).then(() => {});
   return session;
