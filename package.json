@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
-    "@supabase/supabase-js": "^2.39.0",
+    "@supabase/supabase-js": "^2.101.1",
     "@tanstack/react-query": "^5.95.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
@@ -19,7 +19,8 @@
     "@types/react-dom": "^18.3.7",
     "adm-zip": "^0.5.16",
     "concurrently": "^9.2.1",
-    "cross-env": "^7.0.3"
+    "cross-env": "^7.0.3",
+    "puppeteer": "^24.40.0"
   },
   "scripts": {
     "start": "concurrently \"react-scripts start\" \"node extension/dev-watch.js\"",

@@ -16,54 +16,72 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
 
   const handleLogin = async () => {
     setLoading(true); setError("");
+    // Clear any stale/orphaned Supabase session before attempting sign-in.
+    // Without this, a lingering session can cause signInWithPassword to hang
+    // while Supabase tries (and fails) to auto-refresh the stale token.
+    await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+
+    // Timeout wrapper — if any network call hangs, we bail after 10s
+    function withTimeout<T>(p: Promise<T>, label: string): Promise<T> {
+      return Promise.race([
+        p,
+        new Promise<T>((_, reject) =>
+          setTimeout(() => reject(new Error(`timeout:${label}`)), 10000)
+        ),
+      ]);
+    }
+
     try {
       const email = `${username}@mazan.local`;
 
       // ── Step 1: try Supabase Auth directly ──────────────────────
-      const { data: authData, error: authErr } = await supabase.auth.signInWithPassword({ email, password });
+      const { data: authData, error: authErr } = await withTimeout(
+        supabase.auth.signInWithPassword({ email, password }),
+        "signIn"
+      );
 
       if (!authErr && authData.session) {
-        // Auth succeeded — App.tsx onAuthStateChange will call buildSession and setSession.
-        // We just need to build a Session here to pass to onLogin immediately.
         const meta = authData.user?.app_metadata ?? {};
         if (meta.is_admin) {
           onLogin({ role: "admin", username: "admin" });
         } else {
-          const { data: client } = await supabase.from("clients").select("id, username, name").maybeSingle();
-          if (!client) throw new Error("לקוח לא נמצא");
-          onLogin({ role: "client", username: (client as any).username, name: (client as any).name, id: String((client as any).id) });
+          const { data: client } = await supabase.from("clients").select("id, username, name, is_blocked, must_reset_password").eq("username", username).maybeSingle();
+          if (!client) throw new Error("שם משתמש או סיסמה שגויים");
+          if ((client as any).is_blocked) throw new Error("שם משתמש או סיסמה שגויים");
+          onLogin({ role: "client", username: (client as any).username, name: (client as any).name, id: String((client as any).id), must_reset_password: (client as any).must_reset_password ?? false });
         }
         return;
       }
 
       // ── Step 2: Auth failed — try legacy migration via Edge Function ──
-      // The Edge Function verifies the plaintext password from the DB,
-      // creates a Supabase Auth account, then we sign in again.
-      const { data: migrateData, error: migrateErr } = await supabase.functions.invoke("manage-auth", {
-        body: { action: "migrate_login", username, password },
-      });
+      const { data: migrateData, error: migrateErr } = await withTimeout(
+        supabase.functions.invoke("manage-auth", {
+          body: { action: "migrate_login", username, password },
+        }),
+        "edgeFunction"
+      );
 
       if (migrateErr || !migrateData?.ok) {
-        const msg = migrateData?.error || migrateErr?.message || "שם משתמש או סיסמה שגויים";
-        throw new Error(msg);
+        throw new Error("שם משתמש או סיסמה שגויים");
       }
 
       // Migration succeeded — now sign in with Supabase Auth
-      const { data: authData2, error: authErr2 } = await supabase.auth.signInWithPassword({ email, password });
-      if (authErr2 || !authData2.session) throw new Error("שגיאת התחברות לאחר הגירה");
+      const { data: authData2, error: authErr2 } = await withTimeout(
+        supabase.auth.signInWithPassword({ email, password }),
+        "signIn2"
+      );
+      if (authErr2 || !authData2.session) throw new Error("שם משתמש או סיסמה שגויים");
 
-      const meta = authData2.user?.app_metadata ?? {};
-      if (meta.is_admin) {
+      if (migrateData.role === "admin") {
         onLogin({ role: "admin", username: "admin" });
       } else {
-        const { data: client } = await supabase.from("clients").select("id, username, name").maybeSingle();
-        if (!client) throw new Error("לקוח לא נמצא");
-        onLogin({ role: "client", username: (client as any).username, name: (client as any).name, id: String((client as any).id) });
+        onLogin({ role: "client", username: migrateData.username, name: migrateData.name, id: String(migrateData.id) });
       }
     } catch (err: any) {
-      setError(err.message || "שם משתמש או סיסמה שגויים");
+      setError("שם משתמש או סיסמה שגויים");
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const inputStyle = (name: string): React.CSSProperties => ({

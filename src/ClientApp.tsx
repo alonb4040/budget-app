@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { supabase } from "./supabase";
 import { CATEGORIES, IGNORED_CATEGORIES, parseExcelData, classifyTx, HEBREW_MONTHS, assignBillingMonth } from "./data";
 import ConnectCardScreen from "./ConnectCardScreen";
+import { CategoryPicker } from "./components/CategoryPicker";
 import { Card, Btn, Badge, Spinner, KpiCard, Input, C } from "./ui";
 import DebtManager from "./components/DebtManager";
 import GrowthTools from "./components/GrowthTools";
@@ -40,8 +41,14 @@ export default function ClientApp({ session, onLogout }) {
   const [portfolioSubs, setPortfolioSubs]     = useState([]);
   const [portfolioOpenedAt, setPortfolioOpenedAt] = useState(null);
   const [loadingData, setLoadingData]     = useState(true);
-  const [activeTab, setActiveTab]         = useState(() => sessionStorage.getItem('mazan_activeTab') || "data");
+  const [activeTab, setActiveTab]         = useState(() => {
+    const saved = sessionStorage.getItem('mazan_activeTab') || "data";
+    return saved === "questionnaire" ? "data" : saved;
+  });
   const switchTab = (id) => { sessionStorage.setItem('mazan_activeTab', id); setActiveTab(id); };
+  const [dataSubTab, setDataSubTab]       = useState(() =>
+    sessionStorage.getItem('mazan_activeTab') === "questionnaire" ? "questionnaire" : "documents"
+  ); // documents | questionnaire
   const [showWelcome, setShowWelcome]     = useState(false);
   const [portfolioTab, setPortfolioTab]   = useState("control");
   const [importedTxs, setImportedTxs]     = useState([]);
@@ -53,6 +60,8 @@ export default function ClientApp({ session, onLogout }) {
   const [submittedAt, setSubmittedAt]     = useState(null);
   const [requiredDocs, setRequiredDocs]   = useState(null);
   const [questionnaireSpouses, setQuestionnaireSpouses] = useState(null);
+  const [docNotes, setDocNotes]           = useState<Record<string,string>>({});
+  const [customDocs, setCustomDocs]       = useState<{id:string;label:string;icon?:string}[]>([]);
 
   // active month context
   const [activeMonth, setActiveMonth]     = useState(null); // month_entry row
@@ -80,12 +89,14 @@ export default function ClientApp({ session, onLogout }) {
 
   const loadUserData = async () => {
     setLoadingData(true);
+    // Fire-and-forget: update last seen timestamp for admin visibility
+    supabase.from("clients").update({ last_seen_at: new Date().toISOString() }).eq("id", session.id);
     try {
       const [{ data: entries }, { data: subs }, { data: maps }, { data: clientData }, { data: pays }, { data: pMonths }, { data: pSubs }, { data: iTxs }, { data: mTxs }, { data: cDocs }] = await Promise.all([
         supabase.from("month_entries").select("*").eq("client_id", session.id).order("month_key", { ascending: false }),
         supabase.from("submissions").select("*").eq("client_id", session.id).order("created_at", { ascending: true }),
         supabase.from("remembered_mappings").select("*").eq("client_id", session.id),
-        supabase.from("clients").select("portfolio_open,portfolio_opened_at,email,phone,cycle_start_day,plan,submitted_at,required_docs,questionnaire_spouses").eq("id", session.id).maybeSingle(),
+        supabase.from("clients").select("portfolio_open,portfolio_opened_at,email,phone,cycle_start_day,plan,submitted_at,required_docs,questionnaire_spouses,doc_notes,custom_docs").eq("id", session.id).maybeSingle(),
         supabase.from("payslips").select("*").eq("client_id", session.id).order("created_at", { ascending: false }),
         supabase.from("portfolio_months").select("*").eq("client_id", session.id).order("month_key", { ascending: false }),
         supabase.from("portfolio_submissions").select("*").eq("client_id", session.id).order("created_at", { ascending: true }),
@@ -106,6 +117,8 @@ export default function ClientApp({ session, onLogout }) {
       setSubmittedAt(clientData?.submitted_at || null);
       setRequiredDocs(clientData?.required_docs ?? null);
       setQuestionnaireSpouses(clientData?.questionnaire_spouses ?? null);
+      setDocNotes(clientData?.doc_notes ?? {});
+      setCustomDocs(clientData?.custom_docs ?? []);
       setClientDocs(cDocs || []);
       setPortfolioMonths(pMonths || []);
       setPortfolioSubs(pSubs || []);
@@ -299,7 +312,7 @@ export default function ClientApp({ session, onLogout }) {
   return (
     <div style={{ background:"var(--bg)", minHeight:"100vh", color:"var(--text)" }}>
       {/* Navbar */}
-      <div style={{ background:"var(--surface)", borderBottom:"1px solid var(--border)", padding:"14px 28px", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+      <div style={{ position:"sticky", top:0, zIndex:100, background:"var(--surface)", borderBottom:"1px solid var(--border)", padding:"14px 28px", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
         <div style={{ display:"flex", alignItems:"center", gap:14 }}>
           <div style={{ display:"flex", alignItems:"center", justifyContent:"center", width:38, height:38, background:"var(--green-mid)", borderRadius:10, flexShrink:0 }}>
             <svg width="20" height="20" viewBox="0 0 32 32" fill="none">
@@ -360,10 +373,9 @@ export default function ClientApp({ session, onLogout }) {
             {[
               ...(portfolioOpen ? [{ id:"portfolio", label:"📁 תיק כלכלי" }] : []),
               { id:"data", label:"📂 חומרי בסיס" },
-              { id:"questionnaire", label:"📝 שאלון אישי" },
               ...(completedOnboarding ? [{ id:"personal", label:"פרטים אישיים" }] : []),
-              ...(completedOnboarding ? [{ id:"analytics-trends", label:"📊 לבדיקה" }] : []),
-              ...(completedOnboarding ? [{ id:"analytics-forecast", label:"🔮 לבדיקה 2" }] : []),
+              ...(completedOnboarding ? [{ id:"analytics-trends", label:"📊 מגמות" }] : []),
+              ...(completedOnboarding ? [{ id:"analytics-forecast", label:"🔮 תחזית" }] : []),
             ].map(t => (
               <button key={t.id} onClick={() => switchTab(t.id)} style={{ padding:"10px 18px", fontSize:13, fontFamily:"inherit", fontWeight:activeTab===t.id?700:400, color:activeTab===t.id?"var(--green-mid)":"var(--text-dim)", background:"none", border:"none", borderBottom:`2px solid ${activeTab===t.id?"var(--green-mid)":"transparent"}`, cursor:"pointer", marginBottom:-1 }}>
                 {t.label}
@@ -371,8 +383,27 @@ export default function ClientApp({ session, onLogout }) {
             ))}
           </div>
 
+          {/* Sub-tab bar for חומרי בסיס */}
+          {activeTab === "data" && (
+            <div style={{ display:"flex", gap:4, marginBottom:20, borderBottom:`1px solid ${"var(--border)"}` }}>
+              {[
+                { id:"documents", label:"📂 מסמכים" },
+                { id:"questionnaire", label:"📝 שאלון אישי" },
+              ].map(t => (
+                <button key={t.id} onClick={() => setDataSubTab(t.id)} style={{ padding:"8px 16px", fontSize:13, fontFamily:"inherit", fontWeight:dataSubTab===t.id?700:400, color:dataSubTab===t.id?"var(--green-mid)":"var(--text-dim)", background:"none", border:"none", borderBottom:`2px solid ${dataSubTab===t.id?"var(--green-mid)":"transparent"}`, cursor:"pointer", marginBottom:-1 }}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Questionnaire sub-tab */}
+          {activeTab === "data" && dataSubTab === "questionnaire" && (
+            <CoachingQuestionnaire session={session} spousesCount={questionnaireSpouses || 1} onNavigateBack={() => setDataSubTab("documents")} />
+          )}
+
           {/* Onboarding checklist — מוצג בטאב data לפני השלמה */}
-          {!submittedAt && (activeTab === "data" || !completedOnboarding) && activeTab !== "questionnaire" && (
+          {!submittedAt && activeTab === "data" && dataSubTab === "documents" && (
             <OnboardingChecklist
               session={session}
               finalizedMonths={finalizedMonths}
@@ -381,9 +412,11 @@ export default function ClientApp({ session, onLogout }) {
               submittedAt={submittedAt}
               requiredDocs={requiredDocs}
               questionnaireSpouses={questionnaireSpouses}
+              docNotes={docNotes}
+              customDocs={customDocs}
               onNavigateTxs={openNewMonth}
               onNavigatePayslips={() => setScreen("payslips")}
-              onNavigateQuestionnaire={() => switchTab("questionnaire")}
+              onNavigateQuestionnaire={() => { switchTab("data"); setDataSubTab("questionnaire"); }}
               onMonthsChange={loadUserData}
               onDocsChange={async () => {
                 const { data } = await supabase.from("client_documents").select("*").eq("client_id", session.id);
@@ -399,7 +432,7 @@ export default function ClientApp({ session, onLogout }) {
           )}
 
           {/* DATA TAB */}
-          {activeTab === "data" && completedOnboarding && (
+          {activeTab === "data" && completedOnboarding && dataSubTab === "documents" && (
             <div>
               {/* KPIs */}
               <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))", gap:12, marginBottom:24 }}>
@@ -494,17 +527,12 @@ export default function ClientApp({ session, onLogout }) {
             />
           )}
 
-          {/* QUESTIONNAIRE TAB — נגיש תמיד, גם בזמן onboarding */}
-          {activeTab === "questionnaire" && (
-            <CoachingQuestionnaire session={session} spousesCount={questionnaireSpouses || 1} onNavigateBack={() => switchTab("data")} />
-          )}
-
           {/* PERSONAL TAB */}
           {completedOnboarding && activeTab === "personal" && (
             <ClientPersonalTab session={session} />
           )}
 
-          {/* ANALYTICS TRENDS TAB — לבדיקה */}
+          {/* ANALYTICS TRENDS TAB — מגמות */}
           {completedOnboarding && activeTab === "analytics-trends" && (
             <AnalyticsTrends
               clientId={session.id}
@@ -516,7 +544,7 @@ export default function ClientApp({ session, onLogout }) {
             />
           )}
 
-          {/* ANALYTICS FORECAST TAB — לבדיקה 2 */}
+          {/* ANALYTICS FORECAST TAB — תחזית */}
           {completedOnboarding && activeTab === "analytics-forecast" && (
             <AnalyticsForecast
               clientId={session.id}
@@ -811,7 +839,9 @@ const LOAN_TYPES = [
   { id:"loan_other",    label:"הלוואה אחרת",          icon:"📄", type:"both" },
 ];
 
-function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submittedAt, requiredDocs, questionnaireSpouses, onNavigateTxs, onNavigatePayslips, onNavigateQuestionnaire, onDocsChange, onMonthsChange, onSubmit }) {
+function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submittedAt, requiredDocs, questionnaireSpouses, docNotes, customDocs, onNavigateTxs, onNavigatePayslips, onNavigateQuestionnaire, onDocsChange, onMonthsChange, onSubmit }) {
+  docNotes = docNotes || {};
+  customDocs = customDocs || [];
   const [expanded, setExpanded]       = useState(null);
   const [activeLoanTypes, setActiveLoanTypes] = useState([]);
   const [showLoanPicker, setShowLoanPicker]   = useState(false);
@@ -1004,6 +1034,12 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
     setSubmitting(false);
   };
 
+  const NoteBar = ({ docKey }: { docKey: string }) => {
+    const note = docNotes[docKey];
+    if (!note) return null;
+    return <div style={{ fontSize:12, color:"var(--text-mid)", background:"rgba(46,125,82,0.07)", borderRadius:6, padding:"6px 12px", marginBottom:6, borderRight:"3px solid var(--green-mid)" }}>📌 {note}</div>;
+  };
+
   const SectionHeader = ({ id, icon, label, required = false, done, partial, onClick }) => (
     <div onClick={onClick} style={{ display:"flex", alignItems:"center", gap:12, padding:"14px 18px", background: done?"rgba(46,204,138,0.06)":"var(--surface2)", borderRadius: expanded===id?"10px 10px 0 0":10, border:`1px solid ${done?"rgba(46,204,138,0.3)":partial?"rgba(79,142,247,0.3)":"var(--border)"}`, cursor:"pointer", userSelect:"none" }}>
       <span style={{ fontSize:20 }}>{icon}</span>
@@ -1134,6 +1170,7 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
       {visibleOptional.includes("loans") && (
         <div style={{ marginBottom:8 }}>
           <SectionHeader id="loans" icon="📋" label="מסמכי הלוואות" done={loansDone} partial={loansHasAny&&!loansDone} onClick={()=>toggle("loans")} />
+          <NoteBar docKey="loans" />
           <DoneLine done={loansDone} />
           {expanded==="loans" && (
             <div style={bodyStyle}>
@@ -1193,6 +1230,7 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
       {visibleOptional.includes("provident") && (
         <div style={{ marginBottom:8 }}>
           <SectionHeader id="provident" icon="💰" label="יתרת קרן השתלמות" done={isDone("provident_fund")} partial={hasFiles("provident_fund")&&!isDone("provident_fund")} onClick={()=>toggle("provident")} />
+          <NoteBar docKey="provident" />
           <DoneLine done={isDone("provident_fund")} />
           {expanded==="provident" && <div style={bodyStyle}><div style={descStyle}>העלה דוח יתרה מחברת הביטוח / קרן הפנסיה</div><UploadArea cat="provident_fund" /><Btn onClick={()=>saveAndDone("provident_fund","קרן השתלמות")} disabled={!hasFiles("provident_fund")||saving==="provident_fund"} style={{ marginTop:14, width:"100%" }}>{saving==="provident_fund"?"שומר...":"✓ סיימתי"}</Btn></div>}
         </div>
@@ -1202,6 +1240,7 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
       {visibleOptional.includes("pl") && (
         <div style={{ marginBottom:8 }}>
           <SectionHeader id="pl" icon="📊" label="דוח רווח והפסד (לעצמאיים)" done={isDone("profit_loss")} partial={hasFiles("profit_loss")&&!isDone("profit_loss")} onClick={()=>toggle("pl")} />
+          <NoteBar docKey="pl" />
           <DoneLine done={isDone("profit_loss")} />
           {expanded==="pl" && <div style={bodyStyle}><div style={descStyle}>רלוונטי לעצמאיים — העלה דוח רווח והפסד שנתי + מאזן בוחן של שנה קודמת</div><UploadArea cat="profit_loss" /><Btn onClick={()=>saveAndDone("profit_loss","דוח רווח והפסד")} disabled={!hasFiles("profit_loss")||saving==="profit_loss"} style={{ marginTop:14, width:"100%" }}>{saving==="profit_loss"?"שומר...":"✓ סיימתי"}</Btn></div>}
         </div>
@@ -1211,6 +1250,7 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
       {visibleOptional.includes("savings") && (
         <div style={{ marginBottom:8 }}>
           <SectionHeader id="savings" icon="🏦" label="פירוט חסכונות ופנסיה" done={isDone("savings_pension")} partial={hasFiles("savings_pension")&&!isDone("savings_pension")} onClick={()=>toggle("savings")} />
+          <NoteBar docKey="savings" />
           <DoneLine done={isDone("savings_pension")} />
           {expanded==="savings" && <div style={bodyStyle}><div style={descStyle}>כולל: פנסיה, קופות גמל, ביטוח מנהלים, חסכונות בנקאיים, השקעות. ציין גם מועדי נזילות.</div><UploadArea cat="savings_pension" /><Btn onClick={()=>saveAndDone("savings_pension","חסכונות ופנסיה")} disabled={!hasFiles("savings_pension")||saving==="savings_pension"} style={{ marginTop:14, width:"100%" }}>{saving==="savings_pension"?"שומר...":"✓ סיימתי"}</Btn></div>}
         </div>
@@ -1220,6 +1260,7 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
       {visibleOptional.includes("retirement") && (
         <div style={{ marginBottom:8 }}>
           <SectionHeader id="retirement" icon="👴" label="דוח תחזית פרישה (מעל גיל 55)" done={isDone("retirement_forecast")} partial={hasFiles("retirement_forecast")&&!isDone("retirement_forecast")} onClick={()=>toggle("retirement")} />
+          <NoteBar docKey="retirement" />
           <DoneLine done={isDone("retirement_forecast")} />
           {expanded==="retirement" && <div style={bodyStyle}><div style={descStyle}>רלוונטי למי שמעל גיל 55 — דוח תחזית פרישה מסוכן הביטוח</div><UploadArea cat="retirement_forecast" /><Btn onClick={()=>saveAndDone("retirement_forecast","דוח תחזית פרישה")} disabled={!hasFiles("retirement_forecast")||saving==="retirement_forecast"} style={{ marginTop:14, width:"100%" }}>{saving==="retirement_forecast"?"שומר...":"✓ סיימתי"}</Btn></div>}
         </div>
@@ -1229,6 +1270,7 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
       {visibleOptional.includes("checks") && (
         <div style={{ marginBottom:8 }}>
           <SectionHeader id="checks" icon="📄" label="שיקים דחויים" done={isDone("deferred_checks")} partial={hasFiles("deferred_checks")&&!isDone("deferred_checks")} onClick={()=>toggle("checks")} />
+          <NoteBar docKey="checks" />
           <DoneLine done={isDone("deferred_checks")} />
           {expanded==="checks" && <div style={bodyStyle}><div style={descStyle}>שיקים דחויים שאינם חלק מהוצאה שוטפת</div><UploadArea cat="deferred_checks" /><Btn onClick={()=>saveAndDone("deferred_checks","שיקים דחויים")} disabled={!hasFiles("deferred_checks")||saving==="deferred_checks"} style={{ marginTop:14, width:"100%" }}>{saving==="deferred_checks"?"שומר...":"✓ סיימתי"}</Btn></div>}
         </div>
@@ -1238,10 +1280,30 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
       {visibleOptional.includes("debts_other") && (
         <div style={{ marginBottom:8 }}>
           <SectionHeader id="debts_other" icon="⚠️" label="פיגורי תשלומים וחובות אחרים" done={isDone("debts_other")} partial={hasFiles("debts_other")&&!isDone("debts_other")} onClick={()=>toggle("debts_other")} />
+          <NoteBar docKey="debts_other" />
           <DoneLine done={isDone("debts_other")} />
           {expanded==="debts_other" && <div style={bodyStyle}><div style={descStyle}>חובות לאנשים פרטיים, גמ"ח, מקום עבודה, פיגורים בתשלומים</div><UploadArea cat="debts_other" /><Btn onClick={()=>saveAndDone("debts_other","פיגורי תשלומים וחובות")} disabled={!hasFiles("debts_other")||saving==="debts_other"} style={{ marginTop:14, width:"100%" }}>{saving==="debts_other"?"שומר...":"✓ סיימתי"}</Btn></div>}
         </div>
       )}
+
+      {/* מסמכים מותאמים אישית */}
+      {customDocs.filter(cd => (requiredDocs||[]).includes(cd.id)).map(cd => {
+        const cat = cd.id;
+        const cdDone = isDone(cat);
+        const cdPartial = hasFiles(cat) && !cdDone;
+        return (
+          <div key={cd.id} style={{ marginBottom:8 }}>
+            <SectionHeader id={cd.id} icon={cd.icon||"📄"} label={cd.label} done={cdDone} partial={cdPartial} onClick={()=>toggle(cd.id)} />
+            <NoteBar docKey={cd.id} />
+            {expanded===cd.id && (
+              <div style={bodyStyle}>
+                <UploadArea cat={cd.id} />
+                <Btn onClick={()=>saveAndDone(cd.id, cd.label)} disabled={!hasFiles(cd.id)||saving===cd.id} style={{ marginTop:14, width:"100%" }}>{saving===cd.id?"שומר...":"✓ סיימתי"}</Btn>
+              </div>
+            )}
+          </div>
+        );
+      })}
 
       {/* שאלון אישי */}
       {needsQuestionnaire && (
@@ -1430,7 +1492,6 @@ function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, on
 
   const tabs = [
     { id:"txs",     label:"📋 פירוט תנועות" },
-    { id:"upload",  label:"העלאת קבצים" },
     { id:"control", label:"בקרת תיק כלכלי" },
     { id:"savings", label:"פירוט חסכונות" },
     { id:"balance", label:"מאזן מתוכנן" },
@@ -2527,6 +2588,24 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
   const [deletingCycleKey, setDeletingCycleKey] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [ignoredOpen, setIgnoredOpen] = useState({});
+  const [selectedUids, setSelectedUids] = useState<Set<string>>(new Set());
+  const toggleSelectTx = (uid: string) => setSelectedUids(prev => { const next = new Set(prev); next.has(uid) ? next.delete(uid) : next.add(uid); return next; });
+  const toggleSelectMonth = (monthTxs: any[]) => {
+    const monthUids = monthTxs.filter(t => t.source === "ext" || t.source === "manual").map(t => t._uid);
+    const allSelected = monthUids.every(uid => selectedUids.has(uid));
+    setSelectedUids(prev => { const next = new Set(prev); allSelected ? monthUids.forEach(uid => next.delete(uid)) : monthUids.forEach(uid => next.add(uid)); return next; });
+  };
+  const deleteSelected = async () => {
+    if (!window.confirm(`מחק ${selectedUids.size} תנועות נבחרות?`)) return;
+    const toDelete = allTxs.filter(t => selectedUids.has(t._uid));
+    const extIds = toDelete.filter(t => t.source === "ext").map(t => t._dbId).filter(Boolean);
+    const manIds = toDelete.filter(t => t.source === "manual").map(t => t._dbId).filter(Boolean);
+    if (extIds.length > 0) await supabase.from("imported_transactions").delete().in("id", extIds).eq("client_id", clientId);
+    if (manIds.length > 0) { await supabase.from("manual_transactions").delete().in("id", manIds).eq("client_id", clientId); manIds.forEach(id => onManualTxDeleted && onManualTxDeleted(id)); }
+    setAllTxs(prev => prev.filter(t => !selectedUids.has(t._uid)));
+    setSelectedUids(new Set());
+    onDataChange();
+  };
   // addingTx: { [billing_month]: null | "menu" | "income" | "expense-choice" | "expense-cash" | "expense-other" }
   const [addingTx, setAddingTx] = useState({});
   // addForm: per-month form fields
@@ -2771,6 +2850,13 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
           </div>
         </div>
         <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+          {selectedUids.size > 0 && (
+            <button onClick={deleteSelected}
+              style={{ padding:"7px 14px", borderRadius:8, fontSize:13, cursor:"pointer", fontFamily:"inherit",
+                border:"1.5px solid #e53935", background:"#fff8f8", color:"#e53935", fontWeight:700, display:"flex", alignItems:"center", gap:5 }}>
+              🗑️ מחק {selectedUids.size} נבחרות
+            </button>
+          )}
           <button onClick={onNavigateToUpload}
             style={{ padding:"7px 14px", borderRadius:8, fontSize:13, cursor:"pointer", fontFamily:"inherit",
               border:"1.5px solid var(--green-mid)", background:"var(--green-mint)", color:"var(--green-deep)", display:"flex", alignItems:"center", gap:5 }}>
@@ -2904,6 +2990,13 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                   {tx.cat || "לא מסווג"}
                 </button>
                 {(tx.source === "ext" || tx.source === "manual") && (
+                  <input type="checkbox" checked={selectedUids.has(tx._uid)}
+                    onChange={() => toggleSelectTx(tx._uid)}
+                    onClick={e => e.stopPropagation()}
+                    style={{ width:16, height:16, cursor:"pointer", accentColor:"var(--green-mid)" }}
+                  />
+                )}
+                {(tx.source === "ext" || tx.source === "manual") && (
                   <button onClick={() => tx.source === "manual"
                     ? setConfirmDelete({ type:"manual", uid:tx._uid, dbId:tx._dbId, label:tx.name })
                     : setConfirmDelete({ type:"tx", uid:tx._uid, dbId:tx._dbId, label:tx.name })}
@@ -2961,6 +3054,19 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                 <span style={{ fontFamily:"'Fraunces', serif", fontSize:17, fontWeight:700, color:"var(--red)" }}>
                   ₪{Math.round(cycleTotal).toLocaleString()}
                 </span>
+                {(() => {
+                  const deletable = cycleTxs.filter(t => t.source === "ext" || t.source === "manual");
+                  if (deletable.length === 0) return null;
+                  const allSel = deletable.every(t => selectedUids.has(t._uid));
+                  return (
+                    <button onClick={e => { e.stopPropagation(); toggleSelectMonth(cycleTxs); }}
+                      style={{ padding:"3px 10px", fontSize:11, borderRadius:6, fontFamily:"inherit", cursor:"pointer",
+                        border:"1px solid var(--border)", background: allSel ? "rgba(229,57,53,0.08)" : "transparent",
+                        color: allSel ? "#e53935" : "var(--text-dim)" }}>
+                      {allSel ? "בטל בחירה" : "בחר הכל"}
+                    </button>
+                  );
+                })()}
                 <span style={{ color:"var(--text-dim)", fontSize:16 }}>{isOpen ? "▲" : "▼"}</span>
               </div>
             </div>
@@ -3155,55 +3261,6 @@ function classifyImported(tx, rememberedMappings) {
 }
 
 
-// ── Category Picker ───────────────────────────────────────────────────────────
-function CategoryPicker({ current, catSearch, setCatSearch, onSelect }) {
-  const filtered = catSearch
-    ? Object.values(CATEGORIES).flat().filter(c => c.includes(catSearch))
-    : null;
-
-  return (
-    <div style={{ marginTop:8 }}>
-      <input
-        value={catSearch}
-        onChange={e => setCatSearch(e.target.value)}
-        placeholder="חפש סעיף..."
-        style={{ width:"100%", background:"var(--surface)", border:`1px solid ${"var(--border)"}`, borderRadius:8, padding:"7px 12px", color:"var(--text)", fontSize:14, fontFamily:"inherit", outline:"none", marginBottom:8, boxSizing:"border-box" }}
-      />
-      {filtered ? (
-        <div style={{ display:"flex", gap:6, flexWrap:"wrap", maxHeight:150, overflowY:"auto" }}>
-          {filtered.map(cat => (
-            <button key={cat} onClick={e => { e.stopPropagation(); onSelect(cat); }}
-              style={{ padding:"5px 13px", borderRadius:16, fontSize:13, cursor:"pointer", fontFamily:"inherit",
-                border:`1px solid ${current===cat?"var(--green-mid)":"var(--border)"}`,
-                background:current===cat?"rgba(79,142,247,0.15)":"var(--surface2)",
-                color:current===cat?"var(--green-mid)":"var(--text)", fontWeight:current===cat?700:400 }}>
-              {cat}
-            </button>
-          ))}
-        </div>
-      ) : (
-        <div style={{ maxHeight:260, overflowY:"auto" }}>
-          {Object.entries(CATEGORIES).map(([group, cats]) => (
-            <div key={group} style={{ marginBottom:10 }}>
-              <div style={{ fontSize:12, color:"var(--text-dim)", fontWeight:700, marginBottom:5, padding:"0 2px" }}>{group}</div>
-              <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
-                {cats.map(cat => (
-                  <button key={cat} onClick={e => { e.stopPropagation(); onSelect(cat); }}
-                    style={{ padding:"4px 11px", borderRadius:14, fontSize:13, cursor:"pointer", fontFamily:"inherit",
-                      border:`1px solid ${current===cat?"var(--green-mid)":"var(--border)"}`,
-                      background:current===cat?"rgba(79,142,247,0.15)":"var(--surface2)",
-                      color:current===cat?"var(--green-mid)":"var(--text)", fontWeight:current===cat?700:400 }}>
-                    {cat}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ── Payslips Screen ───────────────────────────────────────────────────────────
 function PayslipsScreen({ clientId, payslips, subsCount, clientName, onDone, onBack }) {

@@ -2,8 +2,8 @@
 // מנהל משתמשי Supabase Auth עבור האפליקציה
 // פעולות: migrate_login, create, update_password, delete, migrate_all
 
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.101.1";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -72,6 +72,22 @@ async function upsertAuthUser(
   throw error;
 }
 
+// ── Delete all rows for a test client (by id) ───────────────────
+async function cleanupTestClient(id: number) {
+  const tables = [
+    "scenario_items", "scenarios", "active_scenario",
+    "imported_transactions", "import_batches",
+    "month_entries", "submissions", "payslips",
+    "remembered_mappings", "portfolio_months", "portfolio_submissions",
+    "client_change_log", "client_documents", "manual_transactions",
+    "client_questionnaire",
+  ];
+  for (const t of tables) {
+    try { await supabaseAdmin.from(t).delete().eq("client_id", id); } catch { /* table may not exist */ }
+  }
+  await supabaseAdmin.from("clients").delete().eq("id", id);
+}
+
 // ════════════════════════════════════════════════════════════════
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
@@ -125,6 +141,56 @@ serve(async (req) => {
       }
 
       return json({ ok: true, role: "client", username: client.username, name: client.name, id: client.id });
+    }
+
+    // ── migrate_all — no auth required (internal one-time migration) ──
+    if (action === "migrate_all") {
+      const { data: pending } = await supabaseAdmin
+        .from("clients").select("id, username, password").is("auth_id", null);
+
+      const results: Array<{ id: number; status: string; message?: string }> = [];
+      for (const client of pending || []) {
+        try {
+          const authUser = await upsertAuthUser(
+            `${client.username}@mazan.local`,
+            client.password,
+            { is_admin: false },
+          );
+          if (authUser) {
+            await supabaseAdmin.from("clients").update({ auth_id: authUser.id }).eq("id", client.id);
+            results.push({ id: client.id, status: "ok" });
+          }
+        } catch (e: any) {
+          results.push({ id: client.id, status: "error", message: e.message });
+        }
+      }
+      return json({ ok: true, migrated: results.length, results });
+    }
+
+    // ── seed — creates a test client row + auth user (no auth required, test-only) ──
+    if (action === "seed") {
+      const { name, username, password: pwd } = body as { name: string; username: string; password: string };
+      const { data: existing } = await supabaseAdmin.from("clients").select("id").eq("username", username).maybeSingle();
+      if (existing) return json({ ok: true, id: existing.id, existed: true });
+      const { data: inserted, error: insertErr } = await supabaseAdmin
+        .from("clients")
+        .insert([{ name, username, password: pwd }])
+        .select("id")
+        .single();
+      if (insertErr) return json({ error: insertErr.message }, 500);
+      const authUser = await upsertAuthUser(`${username}@mazan.local`, pwd, { is_admin: false }).catch(() => null);
+      if (authUser) await supabaseAdmin.from("clients").update({ auth_id: authUser.id }).eq("id", inserted.id);
+      return json({ ok: true, id: inserted.id });
+    }
+
+    // ── unseed — deletes a test client + auth user (no auth required, test-only) ──
+    if (action === "unseed") {
+      const { username } = body as { username: string };
+      const { data: client } = await supabaseAdmin.from("clients").select("id, auth_id").eq("username", username).maybeSingle();
+      if (!client) return json({ ok: true, existed: false });
+      if (client.auth_id) await supabaseAdmin.auth.admin.deleteUser(client.auth_id).catch(() => {});
+      await cleanupTestClient(client.id);
+      return json({ ok: true });
     }
 
     // ──────────────────────────────────────────────────────────────
@@ -182,28 +248,87 @@ serve(async (req) => {
       return json({ ok: true });
     }
 
-    // ── migrate_all — migrates all clients that don't have auth_id yet ──
-    if (action === "migrate_all") {
-      const { data: pending } = await supabaseAdmin
-        .from("clients").select("id, username, password").is("auth_id", null);
+    // ── send_reminder — sends an HTML reminder email via Gmail SMTP ──
+    if (action === "send_reminder") {
+      const { clientId } = body as { clientId: number };
+      const { data: client } = await supabaseAdmin
+        .from("clients")
+        .select("name, last_name, email")
+        .eq("id", clientId)
+        .single();
+      if (!client?.email) return json({ error: "אין מייל ללקוח" }, 400);
 
-      const results: Array<{ id: number; status: string; message?: string }> = [];
-      for (const client of pending || []) {
-        try {
-          const authUser = await upsertAuthUser(
-            `${client.username}@mazan.local`,
-            client.password,
-            { is_admin: false },
-          );
-          if (authUser) {
-            await supabaseAdmin.from("clients").update({ auth_id: authUser.id }).eq("id", client.id);
-            results.push({ id: client.id, status: "ok" });
-          }
-        } catch (e: any) {
-          results.push({ id: client.id, status: "error", message: e.message });
-        }
+      const family = client.last_name ? `משפחת ${client.last_name}` : client.name;
+
+      const htmlBody = `<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f6f3;font-family:'Segoe UI',Arial,sans-serif;direction:rtl;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f3;padding:32px 0;">
+    <tr><td align="center">
+      <table width="560" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+        <tr>
+          <td style="background:#2d6a4f;padding:32px 40px;text-align:center;">
+            <div style="color:#ffffff;font-size:22px;font-weight:700;">ממתינים לכם 📂</div>
+            <div style="color:rgba(255,255,255,0.8);font-size:14px;margin-top:4px;">תזכורת ידידותית מאלון בן בסת</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:36px 40px;">
+            <p style="font-size:17px;color:#1a3328;font-weight:600;margin:0 0 16px;">היי ${family} 👋</p>
+            <p style="font-size:15px;color:#4a5568;line-height:1.7;margin:0 0 16px;">רציתי לבדוק שהכל בסדר — שמתי לב שעוד לא הועלו המסמכים הנדרשים.</p>
+            <p style="font-size:15px;color:#4a5568;line-height:1.7;margin:0 0 28px;">ברגע שנקבל את המסמכים נוכל להתקדם יחד לשלב הבא 🙂</p>
+            <table cellpadding="0" cellspacing="0" style="margin:0 auto 28px;">
+              <tr>
+                <td style="background:#2d6a4f;border-radius:10px;padding:14px 32px;text-align:center;">
+                  <a href="https://www.alonb.com" style="color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;">כניסה לאתר ←</a>
+                </td>
+              </tr>
+            </table>
+            <hr style="border:none;border-top:1px solid #e8ede8;margin:0 0 24px;">
+            <p style="font-size:14px;color:#6b7280;line-height:1.6;margin:0;">
+              לכל שאלה אני כאן,<br>
+              <strong style="color:#1a3328;">אלון בן בסת</strong><br>
+              מאמן ויועץ לכלכלת המשפחה<br>
+              054-255-8557
+            </p>
+          </td>
+        </tr>
+        <tr>
+          <td style="background:#f9fafb;padding:16px 40px;text-align:center;border-top:1px solid #e8ede8;">
+            <p style="font-size:12px;color:#9ca3af;margin:0;">מאזן — ניהול פיננסי אישי חכם</p>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+      try {
+        const nodemailer = await import("npm:nodemailer@6");
+        const transporter = nodemailer.default.createTransport({
+          host: "smtp.gmail.com",
+          port: 465,
+          secure: true,
+          auth: {
+            user: "alonb4040@gmail.com",
+            pass: Deno.env.get("GMAIL_APP_PASSWORD")!,
+          },
+        });
+
+        await transporter.sendMail({
+          from: `"אלון בן בסת | מאזן" <alonb4040@gmail.com>`,
+          to: client.email,
+          subject: `תזכורת — ממתינים לך ${family} 📂`,
+          html: htmlBody,
+        });
+
+        return json({ ok: true });
+      } catch (e: any) {
+        console.error("[send_reminder] SMTP error:", e.message);
+        return json({ error: "שגיאה בשליחת המייל" }, 500);
       }
-      return json({ ok: true, migrated: results.length, results });
     }
 
     return json({ error: "פעולה לא ידועה" }, 400);

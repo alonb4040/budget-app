@@ -370,8 +370,15 @@ export default function GrowthTools() {
     { id:"calc", label:"🧮 מחשבון ריבית דה ריבית" },
     { id:"loan", label:"🏦 מחשבון הלוואות" },
   ];
+  const titles: Record<string, string> = {
+    calc: "🧮 מחשבון ריבית דה ריבית",
+    loan: "🏦 מחשבון הלוואות",
+  };
   return (
     <div>
+      <div style={{ fontWeight: 700, fontSize: 20, marginBottom: 16, textAlign: "center" }}>
+        {titles[tool]}
+      </div>
       <div style={{ display:"flex", gap:4, marginBottom:20, flexWrap:"wrap" }}>
         {tools.map(t => (
           <button key={t.id} onClick={() => setTool(t.id)} style={{ padding:"8px 16px", fontSize:12, fontFamily:"inherit", fontWeight:tool===t.id?700:400, color:tool===t.id?"var(--text)":"var(--text-dim)", background:tool===t.id?"var(--surface2)":"transparent", border:`1px solid ${tool===t.id?"var(--border)":"transparent"}`, borderRadius:8, cursor:"pointer" }}>{t.label}</button>

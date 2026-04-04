@@ -19,6 +19,7 @@ export interface Session {
   username: string;
   name?: string;
   id?: string;
+  must_reset_password?: boolean;
 }
 
 export interface MonthEntry {

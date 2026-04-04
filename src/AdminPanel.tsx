@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import ScenarioTab from "./ScenarioTab";
 import { supabase } from "./supabase";
 import { Card, Btn, Input, C } from "./ui";
@@ -10,20 +10,143 @@ function monthKeyToLabel(mk) {
   return `${HEB_MONTHS[parseInt(m)-1]} ${y}`;
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function formatRelativeTime(isoDate: string): string {
+  const diffDays = Math.floor((Date.now() - new Date(isoDate).getTime()) / 86400000);
+  if (diffDays === 0) return "היום";
+  if (diffDays === 1) return "אתמול";
+  if (diffDays < 7) return `לפני ${diffDays} ימים`;
+  if (diffDays < 30) return `לפני ${Math.floor(diffDays / 7)} שבועות`;
+  if (diffDays < 365) return `לפני ${Math.floor(diffDays / 30)} חודשים`;
+  return `לפני ${Math.floor(diffDays / 365)} שנים`;
+}
+
+const EMAILJS_SVC  = process.env.REACT_APP_EMAILJS_SERVICE_ID  || "";
+const EMAILJS_WELCOME_TPL = process.env.REACT_APP_EMAILJS_WELCOME_TEMPLATE_ID || "";
+const EMAILJS_KEY  = process.env.REACT_APP_EMAILJS_PUBLIC_KEY  || "";
+
+const INACTIVITY_DAYS = 5;
+
+// ── Reminder email button ─────────────────────────────────────────────────────
+function ReminderEmailBtn({ client }: { client: any }) {
+  const [status, setStatus] = useState<"idle"|"sending"|"sent"|"error">("idle");
+  if (!client.email) return null;
+
+  const sendReminder = async () => {
+    setStatus("sending");
+    try {
+      const res = await supabase.functions.invoke("manage-auth", {
+        body: { action: "send_reminder", clientId: client.id },
+      });
+      if (res.error || !res.data?.ok) throw new Error(res.data?.error || "שגיאה");
+      setStatus("sent");
+      setTimeout(() => setStatus("idle"), 3000);
+    } catch {
+      setStatus("error");
+      setTimeout(() => setStatus("idle"), 3000);
+    }
+  };
+
+  return (
+    <Btn
+      size="sm"
+      variant="ghost"
+      onClick={sendReminder}
+      disabled={status === "sending" || status === "sent"}
+    >
+      {status === "sending" ? "שולח..." : status === "sent" ? "✅ נשלח!" : status === "error" ? "❌ שגיאה" : "📨 שלח תזכורת"}
+    </Btn>
+  );
+}
+
+// ── Welcome email card ────────────────────────────────────────────────────────
+function WelcomeEmailCard({ name, last_name, username, password, email, clientId, onSent }: {
+  name: string; last_name?: string; username: string; password?: string;
+  email?: string; clientId?: number; onSent?: () => void;
+}) {
+  const [status, setStatus] = useState<"idle"|"sending"|"sent"|"error">("idle");
+
+  const family_greeting = last_name
+    ? `ברוכים הבאים משפחת ${last_name}!`
+    : `היי ${name}!`;
+  const subject_family = last_name ? ` משפחת ${last_name}` : "";
+
+  const sendEmail = async () => {
+    if (!email) return;
+    setStatus("sending");
+    try {
+      await (window as any).emailjs.send(
+        EMAILJS_SVC, EMAILJS_WELCOME_TPL,
+        { to_email: email, to_name: name, last_name: last_name || "", family_greeting, subject_family, username, password: password || "", site_url: "https://www.alonb.com" },
+        EMAILJS_KEY,
+      );
+      if (clientId) {
+        await supabase.from("clients").update({ welcome_sent_at: new Date().toISOString() }).eq("id", clientId);
+      }
+      setStatus("sent");
+      if (onSent) onSent();
+    } catch (e) {
+      console.error("EmailJS welcome:", e);
+      setStatus("error");
+    }
+  };
+
+  const notConfigured = !EMAILJS_SVC || !EMAILJS_WELCOME_TPL || !EMAILJS_KEY;
+
+  return (
+    <div style={{ background: "var(--surface2)", borderRadius: 12, padding: 16, border: "1px solid var(--border)" }}>
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>📧 שלח הוראות כניסה במייל</div>
+      {!email ? (
+        <div style={{ fontSize: 13, color: "var(--text-dim)" }}>לא הוזנה כתובת מייל — הוסף בפרטי הלקוח ושלח משם</div>
+      ) : notConfigured ? (
+        <div style={{ fontSize: 12, color: "var(--gold)" }}>⚠️ חסר <code>REACT_APP_EMAILJS_WELCOME_TEMPLATE_ID</code> ב-.env</div>
+      ) : (
+        <>
+          <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 14 }}>
+            ישלח אל: <strong style={{ color: "var(--text)" }}>{email}</strong>
+          </div>
+          <Btn onClick={sendEmail} disabled={status === "sending" || status === "sent"}>
+            {status === "idle" ? "📧 שלח מייל" : status === "sending" ? "שולח..." : status === "sent" ? "✅ נשלח!" : "❌ שגיאה — נסה שוב"}
+          </Btn>
+          {status === "error" && (
+            <div style={{ fontSize: 12, color: "var(--red)", marginTop: 8 }}>שגיאה — בדוק שהתבנית ב-EmailJS מוגדרת נכון</div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function AdminPanel({ onLogout }) {
   const [clients, setClients] = useState([]);
+  const [subCounts, setSubCounts] = useState<Record<number, number>>({});
+  const [clientFilter, setClientFilter] = useState<"all"|"active"|"waiting"|"collecting"|"blocked">("all");
+  const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState<"created"|"last_active"|"name">("created");
+  const [sortAsc, setSortAsc] = useState(false);
   const [view, setView] = useState("list"); // list | new | detail
   const [selected, setSelected] = useState(null);
-  const [form, setForm] = useState({ name: "", username: "", password: "" });
+  const [form, setForm] = useState({ name: "", last_name: "", username: "", password: "", email: "", phone: "" });
+  const [justCreated, setJustCreated] = useState<{id:number;name:string;last_name:string;username:string;password:string;email:string}|null>(null);
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(true);
 
   const loadClients = async () => {
     try {
-      const { data } = await supabase.from("clients").select("*").order("created_at", { ascending: false });
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10000);
+      const [{ data, error }, { data: allSubs }] = await Promise.all([
+        supabase.from("clients").select("*").order("created_at", { ascending: false }).abortSignal(controller.signal),
+        supabase.from("submissions").select("client_id"),
+      ]);
+      clearTimeout(timer);
+      if (error) console.error("loadClients error:", error.message);
       setClients(data || []);
-    } catch(err) {
-      console.error("loadClients error:", err);
+      const counts: Record<number, number> = {};
+      (allSubs || []).forEach((s: any) => { counts[s.client_id] = (counts[s.client_id] || 0) + 1; });
+      setSubCounts(counts);
+    } catch(err: any) {
+      if (err?.name !== "AbortError") console.error("loadClients error:", err);
     } finally {
       setLoading(false);
     }
@@ -33,10 +156,10 @@ export default function AdminPanel({ onLogout }) {
 
   const createClient = async () => {
     if (!form.name || !form.username || !form.password) return;
-    // 1. Insert the client row
+    // 1. Insert the client row (without password — credentials are managed by Supabase Auth only)
     const { data: newClient, error } = await supabase
       .from("clients")
-      .insert([{ ...form, created_at: new Date().toISOString() }])
+      .insert([{ name: form.name, last_name: form.last_name || null, username: form.username, email: form.email || null, phone: form.phone || null, created_at: new Date().toISOString() }])
       .select("id")
       .single();
     if (error) { setMsg("❌ " + (error.message.includes("unique") ? "שם משתמש תפוס" : error.message)); return; }
@@ -45,14 +168,14 @@ export default function AdminPanel({ onLogout }) {
     const { data: authResult, error: fnErr } = await supabase.functions.invoke("manage-auth", {
       body: { action: "create", username: form.username, password: form.password, clientId: (newClient as any).id },
     });
+    const saved = { id: (newClient as any).id, name: form.name, last_name: form.last_name, username: form.username, password: form.password, email: form.email };
+    setForm({ name: "", last_name: "", username: "", password: "", email: "", phone: "" });
+    loadClients();
     if (fnErr || !authResult?.ok) {
       setMsg("⚠️ לקוח נוצר אך חשבון Auth נכשל: " + (authResult?.error || fnErr?.message || "שגיאה"));
     } else {
-      setMsg("✅ לקוח נוצר בהצלחה");
+      setJustCreated(saved);
     }
-    setForm({ name: "", username: "", password: "" });
-    loadClients();
-    setView("list");
   };
 
   const deleteClient = async (id, name) => {
@@ -67,8 +190,17 @@ export default function AdminPanel({ onLogout }) {
 
   const migrateAllClients = async () => {
     setMsg("⏳ מגיר לקוחות...");
-    const { data, error } = await supabase.functions.invoke("manage-auth", { body: { action: "migrate_all" } });
-    if (error || !data?.ok) { setMsg("❌ " + (data?.error || error?.message)); return; }
+    const supabaseUrl = process.env.REACT_APP_SUPABASE_URL || "";
+    const anonKey = process.env.REACT_APP_SUPABASE_ANON_KEY || "";
+    const url = `${supabaseUrl}/functions/v1/manage-auth`;
+    if (!supabaseUrl || !anonKey) { setMsg("❌ חסרים פרטי Supabase ב-.env"); return; }
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${anonKey}` },
+      body: JSON.stringify({ action: "migrate_all" }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { setMsg("❌ " + (data?.error || "שגיאה")); return; }
     setMsg(`✅ הגירה הושלמה — ${data.migrated} לקוחות עודכנו`);
     loadClients();
   };
@@ -77,9 +209,9 @@ export default function AdminPanel({ onLogout }) {
     const [{ data: subs }, { data: maps }, { data: freshClient }] = await Promise.all([
       supabase.from("submissions").select("*").eq("client_id", client.id).order("created_at", { ascending: false }),
       supabase.from("remembered_mappings").select("*").eq("client_id", client.id),
-      supabase.from("clients").select("required_docs,questionnaire_spouses").eq("id", client.id).maybeSingle(),
+      supabase.from("clients").select("required_docs,questionnaire_spouses,is_blocked").eq("id", client.id).maybeSingle(),
     ]);
-    setSelected({ ...client, required_docs: freshClient?.required_docs ?? client.required_docs, questionnaire_spouses: freshClient?.questionnaire_spouses ?? client.questionnaire_spouses, submissions: subs || [], mappings: maps || [] });
+    setSelected({ ...client, required_docs: freshClient?.required_docs ?? client.required_docs, questionnaire_spouses: freshClient?.questionnaire_spouses ?? client.questionnaire_spouses, is_blocked: freshClient?.is_blocked ?? client.is_blocked, submissions: subs || [], mappings: maps || [] });
     setView("detail");
   };
 
@@ -100,7 +232,7 @@ export default function AdminPanel({ onLogout }) {
   return (
     <div style={{ background: "var(--bg)", minHeight: "100vh", color: "var(--text)" }}>
       {/* Header */}
-      <div style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)", padding: "16px 28px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <div style={{ position: "sticky", top: 0, zIndex: 100, background: "var(--surface)", borderBottom: "1px solid var(--border)", padding: "16px 28px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
           <div style={{ display:"flex", alignItems:"center", justifyContent:"center", width:38, height:38, background:"var(--green-mid)", borderRadius:10 }}>
             <svg width="20" height="20" viewBox="0 0 32 32" fill="none"><path d="M6 24 L12 16 L18 20 L26 10" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M22 10 H26 V14" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
@@ -111,7 +243,7 @@ export default function AdminPanel({ onLogout }) {
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          {view !== "list" && <Btn variant="ghost" size="sm" onClick={() => { setView("list"); setMsg(""); setSelected(null); }}>← חזור</Btn>}
+          {view !== "list" && <Btn variant="ghost" size="sm" onClick={() => { setView("list"); setMsg(""); setSelected(null); setJustCreated(null); }}>← חזור</Btn>}
           <Btn variant="ghost" size="sm" onClick={onLogout}>יציאה</Btn>
         </div>
       </div>
@@ -124,39 +256,111 @@ export default function AdminPanel({ onLogout }) {
         )}
 
         {/* LIST */}
-        {view === "list" && (
-          <>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-              <div style={{ fontSize: 18, fontWeight: 700 }}>לקוחות ({clients.length})</div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <Btn variant="ghost" size="sm" onClick={migrateAllClients}>🔄 מגר Auth</Btn>
-                <Btn size="sm" onClick={() => { setView("new"); setMsg(""); }}>+ לקוח חדש</Btn>
+        {view === "list" && (() => {
+          const active    = clients.filter(c => c.portfolio_open && !c.is_blocked);
+          const waiting   = clients.filter(c => !c.is_blocked && !c.portfolio_open && (subCounts[c.id] || 0) >= 3);
+          const collecting = clients.filter(c => !c.is_blocked && !c.portfolio_open && (subCounts[c.id] || 0) < 3);
+          const blocked   = clients.filter(c => c.is_blocked);
+          const byFilter = clientFilter === "active" ? active : clientFilter === "waiting" ? waiting : clientFilter === "collecting" ? collecting : clientFilter === "blocked" ? blocked : clients;
+          const bySearch = search.trim() ? byFilter.filter(c => `${c.name} ${c.username} ${c.last_name || ""}`.toLowerCase().includes(search.trim().toLowerCase())) : byFilter;
+          const filteredClients = [...bySearch].sort((a, b) => {
+            let cmp = 0;
+            if (sortBy === "name") cmp = (a.name || "").localeCompare(b.name || "", "he");
+            else if (sortBy === "last_active") cmp = (b.last_active || "").localeCompare(a.last_active || "");
+            else cmp = (b.created_at || "").localeCompare(a.created_at || "");
+            return sortAsc ? -cmp : cmp;
+          });
+
+
+          const kpiItems = [
+            { id: "all",        label: "כולם",             count: clients.length,  color: "var(--text)" },
+            { id: "active",     label: "תיק פעיל",         count: active.length,   color: "var(--green-mid)" },
+            { id: "waiting",    label: "ממתין לפתיחה",     count: waiting.length,  color: "var(--gold)" },
+            { id: "collecting", label: "אוסף נתונים",      count: collecting.length, color: "var(--text-mid)" },
+            ...(blocked.length > 0 ? [{ id: "blocked", label: "חסום", count: blocked.length, color: "var(--red)" }] : []),
+          ];
+
+          return (
+            <>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <div style={{ fontSize: 18, fontWeight: 700 }}>
+                  לקוחות ({clientFilter === "all" && !search.trim() ? clients.length : `${filteredClients.length} מתוך ${clients.length}`})
+                </div>
+                <Btn size="sm" onClick={() => { setView("new"); setMsg(""); setJustCreated(null); }}>+ לקוח חדש</Btn>
               </div>
-            </div>
-            {loading ? (
-              <div style={{ textAlign: "center", padding: 40, color: "var(--text-dim)" }}>טוען...</div>
-            ) : clients.length === 0 ? (
-              <Card style={{ textAlign: "center", padding: "48px 24px" }}>
-                <div style={{ fontSize: 40, marginBottom: 12 }}>👥</div>
-                <div style={{ color: "var(--text-dim)" }}>אין לקוחות עדיין</div>
-              </Card>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {clients.map(c => (
-                  <ClientRow key={c.id} client={c} onOpen={openClient} onPortfolio={openPortfolio} onDelete={deleteClient} />
-                ))}
-              </div>
-            )}
-          </>
-        )}
+
+              {/* Search */}
+              {!loading && clients.length > 0 && (
+                <input
+                  value={search} onChange={e => setSearch(e.target.value)}
+                  placeholder="🔍 חיפוש לפי שם או שם משתמש..."
+                  style={{ width: "100%", padding: "10px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: 14, fontFamily: "inherit", boxSizing: "border-box", marginBottom: 12, direction: "rtl" }}
+                />
+              )}
+
+              {/* Sort */}
+              {!loading && clients.length > 0 && (
+                <div style={{ display: "flex", gap: 6, marginBottom: 12, alignItems: "center" }}>
+                  <span style={{ fontSize: 12, color: "var(--text-dim)" }}>מיון:</span>
+                  {([["created","הצטרפות"],["last_active","פעילות אחרונה"],["name","שם"]] as const).map(([val, label]) => (
+                    <button key={val} onClick={() => { if (sortBy === val) setSortAsc(p => !p); else { setSortBy(val); setSortAsc(false); } }} style={{
+                      padding: "4px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 12,
+                      background: sortBy === val ? "var(--green-mid)" : "var(--surface2)",
+                      color: sortBy === val ? "white" : "var(--text-dim)", fontWeight: sortBy === val ? 700 : 400,
+                    }}>
+                      {label}{sortBy === val ? (sortAsc ? " ↑" : " ↓") : ""}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* KPI Bar */}
+              {!loading && clients.length > 0 && (
+                <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
+                  {kpiItems.map(k => (
+                    <button key={k.id} onClick={() => setClientFilter(k.id as any)} style={{
+                      padding: "10px 18px", borderRadius: 12, cursor: "pointer", fontFamily: "inherit",
+                      background: clientFilter === k.id ? "var(--surface2)" : "var(--surface)",
+                      border: `1px solid ${clientFilter === k.id ? "var(--green-mid)" : "var(--border)"}`,
+                      display: "flex", flexDirection: "column", alignItems: "center", gap: 3, minWidth: 76,
+                    }}>
+                      <span style={{ fontSize: 22, fontWeight: 800, color: k.color }}>{k.count}</span>
+                      <span style={{ fontSize: 11, color: clientFilter === k.id ? "var(--green-mid)" : "var(--text-dim)" }}>{k.label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {loading ? (
+                <div style={{ textAlign: "center", padding: 40, color: "var(--text-dim)" }}>טוען...</div>
+              ) : clients.length === 0 ? (
+                <Card style={{ textAlign: "center", padding: "48px 24px" }}>
+                  <div style={{ fontSize: 40, marginBottom: 12 }}>👥</div>
+                  <div style={{ color: "var(--text-dim)" }}>אין לקוחות עדיין</div>
+                </Card>
+              ) : filteredClients.length === 0 ? (
+                <Card style={{ textAlign: "center", padding: "32px 24px", color: "var(--text-dim)" }}>אין לקוחות בקטגוריה זו</Card>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {filteredClients.map(c => (
+                    <ClientRow key={c.id} client={c} subCount={subCounts[c.id] ?? 0} onOpen={openClient} onDelete={deleteClient} />
+                  ))}
+                </div>
+              )}
+            </>
+          );
+        })()}
 
         {/* NEW CLIENT */}
-        {view === "new" && (
+        {view === "new" && !justCreated && (
           <Card style={{ maxWidth: 440 }}>
             <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 20 }}>➕ לקוח חדש</div>
-            <Input label="שם מלא" value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} placeholder="ישראל ישראלי" />
+            <Input label="שם פרטי" value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} placeholder="ישראל" />
+            <Input label="שם משפחה" value={form.last_name} onChange={e => setForm(p => ({ ...p, last_name: e.target.value }))} placeholder="ישראלי" />
             <Input label="שם משתמש" value={form.username} onChange={e => setForm(p => ({ ...p, username: e.target.value.replace(/\s/g, "").toLowerCase() }))} placeholder="israel123" />
             <Input label="סיסמה" value={form.password} onChange={e => setForm(p => ({ ...p, password: e.target.value }))} placeholder="לפחות 6 תווים" />
+            <Input label="מייל (לשליחת הוראות כניסה)" type="email" value={form.email} onChange={e => setForm(p => ({ ...p, email: e.target.value }))} placeholder="israel@gmail.com" />
+            <Input label="טלפון" type="tel" value={form.phone} onChange={e => setForm(p => ({ ...p, phone: e.target.value }))} placeholder="050-0000000" />
             {msg && <div style={{ color: "var(--red)", fontSize: 12, marginBottom: 12 }}>{msg}</div>}
             <div style={{ display: "flex", gap: 10 }}>
               <Btn onClick={createClient} disabled={!form.name || !form.username || form.password.length < 4}>צור לקוח</Btn>
@@ -165,9 +369,25 @@ export default function AdminPanel({ onLogout }) {
           </Card>
         )}
 
+        {/* NEW CLIENT SUCCESS + WHATSAPP */}
+        {view === "new" && justCreated && (
+          <div style={{ maxWidth: 480 }}>
+            <Card style={{ textAlign: "center", padding: "24px 24px 20px", marginBottom: 16 }}>
+              <div style={{ fontSize: 44, marginBottom: 10 }}>✅</div>
+              <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 4 }}>הלקוח נוצר בהצלחה!</div>
+              <div style={{ fontSize: 13, color: "var(--text-dim)" }}>{justCreated.name} · @{justCreated.username}</div>
+            </Card>
+            <WelcomeEmailCard name={justCreated.name} last_name={justCreated.last_name} username={justCreated.username} password={justCreated.password} email={justCreated.email} clientId={justCreated.id} onSent={loadClients} />
+            <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+              <Btn onClick={() => setJustCreated(null)}>+ לקוח נוסף</Btn>
+              <Btn variant="ghost" onClick={() => { setView("list"); setJustCreated(null); }}>חזור לרשימה</Btn>
+            </div>
+          </div>
+        )}
+
         {/* CLIENT DETAIL */}
         {view === "detail" && selected && (
-          <ClientDetail client={selected} onRefresh={() => openClient(selected)} />
+          <ClientDetail client={selected} onRefresh={async () => { await loadClients(); const fresh = clients.find(c => c.id === selected.id) || selected; await openClient(fresh); }} />
         )}
       </div>
     </div>
@@ -175,50 +395,53 @@ export default function AdminPanel({ onLogout }) {
 }
 
 // ── Client row in list ────────────────────────────────────────────────────────
-function ClientRow({ client, onOpen, onPortfolio, onDelete }) {
-  const [subCount, setSubCount] = useState(null);
-  const [portfolioOpen, setPortfolioOpen] = useState(false);
-
-  useEffect(() => {
-    supabase.from("submissions").select("id", { count: "exact" }).eq("client_id", client.id)
-      .then(({ count }) => {
-        setSubCount(count || 0);
-        setPortfolioOpen(client.portfolio_open || false);
-      });
-  }, [client.id]);
-
+function ClientRow({ client, subCount, onOpen, onDelete }) {
   const REQUIRED = 3;
   const done = subCount >= REQUIRED;
+  const isBlocked = client.is_blocked || false;
+
+  // 5-day inactivity warning
+  const daysSinceWelcome = client.welcome_sent_at ? Math.floor((Date.now() - new Date(client.welcome_sent_at).getTime()) / 86400000) : null;
+  const lastActivity = client.last_active ? new Date(client.last_active) : null;
+  const daysSinceActivity = lastActivity ? Math.floor((Date.now() - lastActivity.getTime()) / 86400000) : 999;
+  const showInactiveWarning = !isBlocked && client.welcome_sent_at && daysSinceWelcome >= INACTIVITY_DAYS && daysSinceActivity >= INACTIVITY_DAYS;
 
   return (
-    <Card style={{ display: "flex", alignItems: "center", gap: 14, padding: "16px 20px", flexWrap: "wrap" }}>
-      <div style={{ width: 42, height: 42, borderRadius: 10, background: "var(--surface2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>👤</div>
+    <Card style={{ display: "flex", alignItems: "center", gap: 14, padding: "16px 20px", flexWrap: "wrap", borderRight: showInactiveWarning ? "3px solid var(--red)" : undefined }}>
       <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 700 }}>{client.name}</div>
+        <div style={{ fontWeight: 700, display:"flex", alignItems:"center", gap:8 }}>
+          {client.name}
+          {showInactiveWarning && <span style={{ fontSize:11, color:"var(--red)", background:"rgba(192,57,43,0.1)", borderRadius:20, padding:"2px 8px", fontWeight:600 }}>⚠️ לא פעיל {daysSinceActivity >= 999 ? `${daysSinceWelcome}+` : daysSinceActivity} ימים</span>}
+        </div>
         <div style={{ fontSize: 12, color: "var(--text-dim)", display:"flex", flexWrap:"wrap", gap:"0 12px" }}>
-          <span>@{client.username}</span>
-          <span>הצטרף {new Date(client.created_at).toLocaleDateString("he-IL")}</span>
-          {subCount !== null && (
+          {client.last_active && <span style={{ color: "var(--text-mid)" }}>פעיל {formatRelativeTime(client.last_active)}</span>}
+          {client.welcome_sent_at
+            ? <span style={{ color: "var(--green-soft)" }}>✉️ מייל נשלח {new Date(client.welcome_sent_at).toLocaleDateString("he-IL")}</span>
+            : client.email ? <span style={{ color: "var(--text-dim)" }}>✉️ טרם נשלח</span> : null}
+          {!isBlocked && !client.portfolio_open && (
             <span style={{ color: done ? "var(--green-soft)" : "var(--gold)" }}>
               {done ? "✅ 3/3 חודשים" : `⏳ ${subCount}/3 חודשים`}
             </span>
           )}
-          {client.portfolio_open
-            ? <span style={{ color: "var(--green-mid)" }}>📁 תיק פעיל</span>
-            : done ? <span style={{ color: "var(--gold)" }}>ממתין לפתיחת תיק</span> : null
-          }
+          {!isBlocked && client.portfolio_open && <span style={{ color: "var(--green-mid)" }}>📁 תיק פעיל</span>}
+          {!isBlocked && !client.portfolio_open && done && <span style={{ color: "var(--gold)" }}>ממתין לפתיחת תיק</span>}
         </div>
       </div>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{
+          padding: "5px 14px", borderRadius: 20, fontSize: 12, fontWeight: 700,
+          background: isBlocked ? "rgba(192,57,43,0.12)" : "rgba(46,125,82,0.12)",
+          color: isBlocked ? "var(--red)" : "var(--green-mid)",
+        }}>
+          {isBlocked ? "🔒 חסום" : "✅ פעיל"}
+        </span>
         <Btn variant="ghost" size="sm" onClick={() => onOpen(client)}>👁 פרטים</Btn>
-        {done && !client.portfolio_open && (
+        {!client.portfolio_open && <ReminderEmailBtn client={client} />}
+        {done && !client.portfolio_open && !isBlocked && (
           <Btn variant="success" size="sm" onClick={async () => {
             await supabase.from("clients").update({ portfolio_open: true }).eq("id", client.id);
             onOpen(client);
           }}>📁 פתח תיק כלכלי</Btn>
-        )}
-        {client.portfolio_open && (
-          <Btn size="sm" onClick={() => onPortfolio(client)}>📁 תיק כלכלי</Btn>
         )}
         <Btn variant="danger" size="sm" onClick={() => onDelete(client.id, client.name)}>מחק</Btn>
       </div>
@@ -572,6 +795,17 @@ function PersonalTab({ client, onRefresh }) {
   const [confirmPass, setConfirmPass] = useState("");
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
+  const isBlocked = client.is_blocked || false;
+
+  const toggleBlock = async () => {
+    const action = isBlocked ? "שחרר" : "חסום";
+    if (!window.confirm(`${action} את ${client.name}?`)) return;
+    setLoading(true);
+    const { error } = await supabase.from("clients").update({ is_blocked: !isBlocked }).eq("id", client.id);
+    if (error) showMsg("❌ שגיאה");
+    else { showMsg(isBlocked ? "✅ הלקוח שוחרר" : "✅ הלקוח נחסם"); onRefresh(); }
+    setLoading(false);
+  };
 
   const showMsg = (m) => { setMsg(m); setTimeout(() => setMsg(""), 3000); };
 
@@ -587,15 +821,12 @@ function PersonalTab({ client, onRefresh }) {
     if (newPass.length < 4) { showMsg("❌ סיסמה חייבת להיות לפחות 4 תווים"); return; }
     if (newPass !== confirmPass) { showMsg("❌ הסיסמאות לא תואמות"); return; }
     setLoading(true);
-    // Update plaintext password in clients table (kept for legacy / admin reference)
-    const { error } = await supabase.from("clients").update({ password: newPass }).eq("id", client.id);
-    if (error) { showMsg("❌ שגיאה בעדכון סיסמה"); setLoading(false); return; }
-    // Sync to Supabase Auth via Edge Function
+    // Update via Supabase Auth only (no plaintext stored)
     const { data: authResult, error: fnErr } = await supabase.functions.invoke("manage-auth", {
       body: { action: "update_password", clientId: client.id, password: newPass },
     });
     if (fnErr || !authResult?.ok) {
-      showMsg("⚠️ הסיסמה עודכנה בDB אך Auth נכשל: " + (authResult?.error || fnErr?.message));
+      showMsg("❌ שגיאה בעדכון סיסמה: " + (authResult?.error || fnErr?.message));
     } else {
       showMsg("✅ הסיסמה עודכנה"); setNewPass(""); setConfirmPass("");
     }
@@ -625,6 +856,23 @@ function PersonalTab({ client, onRefresh }) {
         <Input label="אימות סיסמה" type="password" value={confirmPass} onChange={e => setConfirmPass(e.target.value)} placeholder="הכנס שוב את הסיסמה" />
         {msg && <div style={{ fontSize: 12, color: msg.startsWith("✅") ? "var(--green-soft)" : "var(--red)", marginBottom: 12 }}>{msg}</div>}
         <Btn onClick={changePassword} disabled={loading || !newPass || !confirmPass}>עדכן סיסמה</Btn>
+      </Card>
+
+      {/* Block card */}
+      <Card>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 16 }}>🔒 ניהול גישה</div>
+        <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 14 }}>
+          {isBlocked ? "הלקוח חסום — לא יכול להתחבר לאפליקציה." : "הלקוח פעיל — יכול להתחבר לאפליקציה."}
+        </div>
+        <Btn variant={isBlocked ? "secondary" : "danger"} onClick={toggleBlock} disabled={loading}>
+          {isBlocked ? "🔓 שחרר לקוח" : "🔒 חסום לקוח"}
+        </Btn>
+      </Card>
+
+      {/* Welcome email card */}
+      <Card>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 16 }}>📧 שלח הוראות כניסה</div>
+        <WelcomeEmailCard name={client.name} last_name={client.last_name || ""} username={client.username} email={client.email || ""} clientId={client.id} onSent={onRefresh} />
       </Card>
 
       {/* Info card */}
@@ -826,6 +1074,22 @@ function RequiredDocsTab({ client, onRefresh }) {
   const [showSpouseModal, setShowSpouseModal] = useState(false);
   const [saving, setSaving]             = useState(false);
   const [saved, setSaved]               = useState(false);
+  const [docNotes, setDocNotes]         = useState<Record<string,string>>(client.doc_notes || {});
+  const [customDocs, setCustomDocs]     = useState<{id:string;label:string}[]>(client.custom_docs || []);
+  const [newCustom, setNewCustom]       = useState("");
+  const [showCustomInput, setShowCustomInput] = useState(false);
+  const [docProgress, setDocProgress]   = useState<{done: string[]; partial: string[]}>({ done: [], partial: [] });
+
+  useEffect(() => {
+    supabase.from("client_documents").select("category, marked_done, files")
+      .eq("client_id", client.id)
+      .then(({ data }) => {
+        if (!data) return;
+        const done = data.filter(d => d.marked_done).map(d => d.category);
+        const partial = data.filter(d => !d.marked_done && d.files?.length > 0).map(d => d.category);
+        setDocProgress({ done, partial });
+      });
+  }, [client.id]);
 
   const questionnaireSelected = (selected || []).includes("questionnaire");
 
@@ -870,7 +1134,7 @@ function RequiredDocsTab({ client, onRefresh }) {
     }
     setSaveError("");
     setSaving(true);
-    const { error } = await supabase.from("clients").update({ required_docs: selected, questionnaire_spouses: spouses }).eq("id", client.id);
+    const { error } = await supabase.from("clients").update({ required_docs: selected, questionnaire_spouses: spouses, doc_notes: docNotes, custom_docs: customDocs }).eq("id", client.id);
     setSaving(false);
     if (error) { setSaveError("שגיאה בשמירה: " + error.message); return; }
     setSaved(true);
@@ -880,7 +1144,34 @@ function RequiredDocsTab({ client, onRefresh }) {
 
   const cur = selected || [];
   const isNull = selected === null;
-  const allOptions = [...ALL_REQUIRED_DOC_OPTIONS, { id: "questionnaire", label: "שאלון אישי", icon: "📝" }];
+  const allOptions = [
+    ...ALL_REQUIRED_DOC_OPTIONS,
+    ...customDocs,
+    { id: "questionnaire", label: "שאלון אישי", icon: "📝" },
+  ];
+
+  // progress
+  const DOC_ID_MAP: Record<string,string> = { loans:"loans_section", provident:"provident_fund", pl:"profit_loss", savings:"savings_pension", retirement:"retirement_forecast", checks:"deferred_checks", debts_other:"debts_other" };
+  const totalSelected = cur.filter(id => id !== "questionnaire").length;
+  const doneCount = cur.filter(id => {
+    const cat = DOC_ID_MAP[id] || id;
+    return docProgress.done.includes(cat);
+  }).length;
+  const partialCount = cur.filter(id => {
+    const cat = DOC_ID_MAP[id] || id;
+    return docProgress.partial.includes(cat);
+  }).length;
+
+  const addCustomDoc = () => {
+    const label = newCustom.trim();
+    if (!label) return;
+    const id = "custom_" + Date.now();
+    setCustomDocs(p => [...p, { id, label, icon: "📄" } as any]);
+    setSelected(p => [...(p||[]), id]);
+    setNewCustom("");
+    setShowCustomInput(false);
+    setSaved(false);
+  };
 
   return (
     <div>
@@ -903,11 +1194,11 @@ function RequiredDocsTab({ client, onRefresh }) {
         </div>
       )}
 
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
         <div>
           <div style={{ fontWeight:700, fontSize:15 }}>📌 מסמכים נדרשים — {client.name}</div>
           <div style={{ fontSize:12, color:"var(--text-dim)", marginTop:4 }}>
-            {isNull ? "לא הוגדר — הלקוח רואה הכל (ברירת מחדל)" : cur.length === 0 ? "לא נבחרו — הלקוח לא רואה אף סעיף" : `נבחרו ${cur.length} סעיפים`}
+            {isNull ? "לא הוגדר — הלקוח לא רואה כלום" : cur.length === 0 ? "לא נבחרו — הלקוח לא רואה אף סעיף" : `נבחרו ${cur.length} סעיפים`}
             {spouses && <span style={{ marginRight:8, color:"var(--green-mid)" }}>· שאלון: {spouses === 1 ? "בן/בת זוג אחד/ת" : "שני בני זוג"}</span>}
           </div>
         </div>
@@ -920,33 +1211,95 @@ function RequiredDocsTab({ client, onRefresh }) {
         </div>
       </div>
 
-      <Card>
-        {allOptions.map((opt, i) => (
-          <div key={opt.id} onClick={() => toggle(opt.id)} style={{
-            display:"flex", alignItems:"center", gap:14, padding:"14px 16px",
-            borderBottom: i < allOptions.length-1 ? "1px solid var(--border)22" : "none",
-            cursor:"pointer",
-            background: cur.includes(opt.id) ? "rgba(46,204,138,0.04)" : "transparent",
-          }}>
-            <div style={{
-              width:22, height:22, borderRadius:6, border:`2px solid ${cur.includes(opt.id) ? "var(--green-mid)" : "var(--border)"}`,
-              background: cur.includes(opt.id) ? "var(--green-mid)" : "transparent",
-              display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0,
-            }}>
-              {cur.includes(opt.id) && <span style={{ color:"white", fontSize:13, fontWeight:700 }}>✓</span>}
-            </div>
-            <span style={{ fontSize:18 }}>{opt.icon}</span>
-            <div style={{ flex:1 }}>
-              <span style={{ fontSize:14, fontWeight: cur.includes(opt.id) ? 600 : 400 }}>{opt.label}</span>
-              {opt.id === "questionnaire" && cur.includes("questionnaire") && spouses && (
-                <span style={{ fontSize:12, color:"var(--green-mid)", marginRight:8 }}>({spouses === 1 ? "בן/בת זוג אחד/ת" : "שני בני זוג"}) <button onClick={e=>{e.stopPropagation();setShowSpouseModal(true);}} style={{ fontSize:11, color:"var(--text-dim)", background:"none", border:"none", cursor:"pointer", textDecoration:"underline" }}>שנה</button></span>
-              )}
-            </div>
+      {/* Progress bar */}
+      {totalSelected > 0 && (
+        <div style={{ marginBottom:16, background:"var(--surface2)", borderRadius:10, padding:"12px 16px" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:6 }}>
+            <span style={{ color:"var(--text-dim)" }}>התקדמות הגשת מסמכים</span>
+            <span style={{ fontWeight:700, color: doneCount===totalSelected ? "var(--green-mid)" : "var(--text-mid)" }}>{doneCount}/{totalSelected}</span>
           </div>
-        ))}
+          <div style={{ height:8, background:"var(--border)", borderRadius:4, overflow:"hidden" }}>
+            <div style={{ height:"100%", width:`${totalSelected>0?(doneCount/totalSelected)*100:0}%`, background:"var(--green-mid)", borderRadius:4, transition:"width 0.3s" }} />
+          </div>
+          {partialCount > 0 && <div style={{ fontSize:11, color:"var(--gold)", marginTop:4 }}>⏳ {partialCount} מסמכים בתהליך</div>}
+        </div>
+      )}
+
+      <Card>
+        {allOptions.map((opt, i) => {
+          const cat = DOC_ID_MAP[opt.id] || opt.id;
+          const isDone = docProgress.done.includes(cat);
+          const isPartial = docProgress.partial.includes(cat);
+          return (
+            <div key={opt.id}>
+              <div onClick={() => toggle(opt.id)} style={{
+                display:"flex", alignItems:"center", gap:14, padding:"14px 16px",
+                borderBottom: "none",
+                cursor:"pointer",
+                background: cur.includes(opt.id) ? "rgba(46,204,138,0.04)" : "transparent",
+              }}>
+                <div style={{
+                  width:22, height:22, borderRadius:6, border:`2px solid ${cur.includes(opt.id) ? "var(--green-mid)" : "var(--border)"}`,
+                  background: cur.includes(opt.id) ? "var(--green-mid)" : "transparent",
+                  display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0,
+                }}>
+                  {cur.includes(opt.id) && <span style={{ color:"white", fontSize:13, fontWeight:700 }}>✓</span>}
+                </div>
+                <span style={{ fontSize:18 }}>{(opt as any).icon}</span>
+                <div style={{ flex:1 }}>
+                  <span style={{ fontSize:14, fontWeight: cur.includes(opt.id) ? 600 : 400 }}>{opt.label}</span>
+                  {opt.id === "questionnaire" && cur.includes("questionnaire") && spouses && (
+                    <span style={{ fontSize:12, color:"var(--green-mid)", marginRight:8 }}>({spouses === 1 ? "בן/בת זוג אחד/ת" : "שני בני זוג"}) <button onClick={e=>{e.stopPropagation();setShowSpouseModal(true);}} style={{ fontSize:11, color:"var(--text-dim)", background:"none", border:"none", cursor:"pointer", textDecoration:"underline" }}>שנה</button></span>
+                  )}
+                </div>
+                {cur.includes(opt.id) && opt.id !== "questionnaire" && (
+                  <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20,
+                    background: isDone ? "rgba(46,204,138,0.12)" : isPartial ? "rgba(255,193,7,0.15)" : "var(--surface2)",
+                    color: isDone ? "var(--green-mid)" : isPartial ? "var(--gold)" : "var(--text-dim)" }}>
+                    {isDone ? "✅ הוגש" : isPartial ? "⏳ חלקי" : "⬜ טרם הוגש"}
+                  </span>
+                )}
+              </div>
+              {/* Note field — shown when selected */}
+              {cur.includes(opt.id) && opt.id !== "questionnaire" && (
+                <div onClick={e=>e.stopPropagation()} style={{ padding:"0 16px 12px 16px", marginRight:50 }}>
+                  <input
+                    value={docNotes[opt.id] || ""}
+                    onChange={e => { setDocNotes(p => ({...p,[opt.id]:e.target.value})); setSaved(false); }}
+                    placeholder="הוסף הנחיה ללקוח (אופציונלי) — למשל: 3 חודשים אחרונים מבנק מזרחי"
+                    style={{ width:"100%", boxSizing:"border-box", fontSize:12, padding:"6px 10px", borderRadius:6, border:"1px dashed var(--border)", background:"var(--surface2)", color:"var(--text)", fontFamily:"inherit", outline:"none" }}
+                  />
+                </div>
+              )}
+              {i < allOptions.length-1 && <div style={{ height:1, background:"rgba(0,0,0,0.05)", marginRight:16, marginLeft:16 }} />}
+            </div>
+          );
+        })}
+
+        {/* מסמך מותאם אישית */}
+        <div style={{ padding:"12px 16px", borderTop:"1px dashed var(--border)" }}>
+          {!showCustomInput ? (
+            <button onClick={()=>setShowCustomInput(true)} style={{ background:"none", border:"none", color:"var(--green-mid)", fontSize:13, cursor:"pointer", fontFamily:"inherit", fontWeight:600 }}>
+              + הוסף מסמך מותאם אישית
+            </button>
+          ) : (
+            <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+              <input
+                value={newCustom}
+                onChange={e=>setNewCustom(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&addCustomDoc()}
+                placeholder="שם המסמך..."
+                autoFocus
+                style={{ flex:1, padding:"7px 10px", borderRadius:6, border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text)", fontSize:13, fontFamily:"inherit", outline:"none" }}
+              />
+              <Btn size="sm" onClick={addCustomDoc} disabled={!newCustom.trim()}>הוסף</Btn>
+              <Btn size="sm" variant="ghost" onClick={()=>{setShowCustomInput(false);setNewCustom("");}}>ביטול</Btn>
+            </div>
+          )}
+        </div>
       </Card>
 
-      <div style={{ marginTop:16, fontSize:12, color:"var(--text-dim)" }}>
+      <div style={{ marginTop:12, fontSize:12, color:"var(--text-dim)" }}>
         הלקוח יראה <strong>רק</strong> את הסעיפים שסומנו. פירוט תנועות ותלושי שכר תמיד מוצגים.
       </div>
     </div>
@@ -961,9 +1314,9 @@ const INTAKE_SECTIONS = [
     id: "why",
     title: "📌 רקע ומניע",
     fields: [
-      { key: "why_came", label: "למה הגיעו אליך?", type: "textarea" },
-      { key: "why_situation", label: "למה לדעתם הגיעו למצב הנוכחי?", type: "textarea" },
-      { key: "emotional_state", label: "מצב רגשי ורמת מוטיבציה", type: "textarea" },
+      { key: "why_came", label: "למה הגיעו אליך?", type: "textarea", placeholder: "מה הניע אותם לפנות דווקא עכשיו?" },
+      { key: "why_situation", label: "למה לדעתם הגיעו למצב הנוכחי?", type: "textarea", placeholder: "חוסר ידע, הרגלים, אירוע מסוים..." },
+      { key: "emotional_state", label: "מצב רגשי ורמת מוטיבציה", type: "textarea", placeholder: "מתוחים / נינוחים, נחושים / מהססים..." },
     ],
   },
   {
@@ -971,32 +1324,45 @@ const INTAKE_SECTIONS = [
     title: "👨‍👩‍👧 פרטי המשפחה",
     fields: [
       { key: "_spouse1_header", label: "", type: "header", text: "בן/בת זוג ראשון" },
-      { key: "spouse1_name",   label: "שם",                                  type: "text" },
-      { key: "spouse1_age",    label: "גיל",                                  type: "text" },
-      { key: "spouse1_job",    label: "עיסוק",                                type: "text" },
-      { key: "spouse1_salary", label: "שכר חודשי ברוטו",                     type: "text" },
-      { key: "spouse1_salary_net", label: "שכר חודשי נטו",                   type: "text" },
-      { key: "spouse1_notes",  label: "הערות (תואר, תנאים מיוחדים וכו')",   type: "textarea" },
+      { key: "spouse1_name",        label: "שם",                                type: "text" },
+      { key: "spouse1_age",         label: "גיל",                               type: "text" },
+      { key: "spouse1_job",         label: "עיסוק",                             type: "text" },
+      { key: "spouse1_salary",      label: "שכר חודשי ברוטו (₪)",              type: "number" },
+      { key: "spouse1_salary_net",  label: "שכר חודשי נטו (₪)",               type: "number" },
+      { key: "spouse1_notes",       label: "הערות (תואר, תנאים מיוחדים...)",  type: "textarea" },
       { key: "_spouse2_header", label: "", type: "header", text: "בן/בת זוג שני" },
-      { key: "spouse2_name",   label: "שם",                                  type: "text" },
-      { key: "spouse2_age",    label: "גיל",                                  type: "text" },
-      { key: "spouse2_job",    label: "עיסוק",                                type: "text" },
-      { key: "spouse2_salary", label: "שכר חודשי ברוטו",                     type: "text" },
-      { key: "spouse2_salary_net", label: "שכר חודשי נטו",                   type: "text" },
-      { key: "spouse2_notes",  label: "הערות",                               type: "textarea" },
-      { key: "_children_header", label: "", type: "header", text: "ילדים וכללי" },
-      { key: "children",       label: "ילדים — גילים ומיוחד כלכלי",          type: "textarea" },
-      { key: "pets",           label: "חיות מחמד — סוג ומצב בריאותי",       type: "text" },
+      { key: "spouse2_name",        label: "שם",                                type: "text" },
+      { key: "spouse2_age",         label: "גיל",                               type: "text" },
+      { key: "spouse2_job",         label: "עיסוק",                             type: "text" },
+      { key: "spouse2_salary",      label: "שכר חודשי ברוטו (₪)",              type: "number" },
+      { key: "spouse2_salary_net",  label: "שכר חודשי נטו (₪)",               type: "number" },
+      { key: "spouse2_notes",       label: "הערות",                             type: "textarea" },
+      { key: "_children_header", label: "", type: "header", text: "ילדים, תלויים וחיות" },
+      { key: "children",       label: "ילדים — כמה, גילים, חוגים / טיפול מיוחד / פנימיות", type: "textarea" },
+      { key: "dependents",     label: "תלויים נוספים (הורים, אחים וכו')", type: "textarea", placeholder: "האם מישהו תלוי בהם פיננסית?" },
+      { key: "pets",           label: "חיות מחמד — סוג, גיל, עלויות שוטפות (וטרינר, מזון)", type: "textarea" },
     ],
   },
   {
-    id: "assets",
-    title: "🏠 נכסים",
+    id: "housing",
+    title: "🏠 מגורים ונכסים",
     fields: [
-      { key: "apt1", label: "דירה ראשונה — חדרים, מיקום, שווי, מצב, משכנתה", type: "textarea" },
-      { key: "apt2", label: "דירה נוספת (אם יש)", type: "textarea" },
-      { key: "car", label: "רכב — שנה, מצב כללי, תדירות תיקונים", type: "textarea" },
-      { key: "investments", label: "השקעות, קרנות השתלמות, קופות גמל", type: "textarea" },
+      { key: "_housing_header", label: "", type: "header", text: "מגורים" },
+      { key: "housing_type", label: "סוג מגורים", type: "text", placeholder: "בעלות / שכירות" },
+      { key: "housing_rent", label: "שכר דירה חודשי (₪) — אם בשכירות", type: "number" },
+      { key: "_apt1_header", label: "", type: "header", text: "דירה ראשונה (אם בבעלות)" },
+      { key: "apt1_details", label: "חדרים, מיקום, שווי משוער", type: "textarea" },
+      { key: "apt1_mortgage", label: "משכנתה חודשית (₪)", type: "number" },
+      { key: "apt1_rented", label: "האם מושכרת?", type: "text", placeholder: "כן / לא — ואם כן, כמה גובים?" },
+      { key: "_apt2_header", label: "", type: "header", text: "דירה נוספת (אם יש)" },
+      { key: "apt2_details", label: "חדרים, מיקום, שווי משוער", type: "textarea" },
+      { key: "apt2_mortgage", label: "משכנתה חודשית (₪)", type: "number" },
+      { key: "apt2_rented", label: "האם מושכרת?", type: "text", placeholder: "כן / לא — ואם כן, כמה גובים?" },
+      { key: "_assets_header", label: "", type: "header", text: "נכסים נוספים" },
+      { key: "car", label: "רכב — שנה, מצב. האם דורש תיקונים תכופים?", type: "textarea" },
+      { key: "investments", label: "השקעות", type: "textarea" },
+      { key: "pension_fund", label: "קרנות השתלמות / קופות גמל", type: "textarea" },
+      { key: "pension_pct", label: "% הפרשה לפנסיה (מעסיק)", type: "text" },
       { key: "other_assets", label: "נכסים נוספים", type: "textarea" },
     ],
   },
@@ -1004,21 +1370,31 @@ const INTAKE_SECTIONS = [
     id: "debts",
     title: "💳 חובות ואשראי",
     fields: [
-      { key: "overdraft", label: "אוברדראפט — כמה ומאיפה", type: "text" },
-      { key: "monthly_deficit", label: "גרעון חודשי משוער (לפי תחושתם)", type: "text" },
-      { key: "credit_cards_count", label: "כמה כרטיסי אשראי", type: "text" },
-      { key: "loans_summary", label: "סיכום הלוואות (בנוסף לפירוט המסמכים)", type: "textarea" },
+      { key: "overdraft", label: "אוברדראפט — כמה ומאיפה (₪)", type: "number" },
+      { key: "monthly_deficit", label: "גרעון חודשי משוער לפי תחושתם (₪)", type: "number" },
+      { key: "credit_cards_count", label: "כמה כרטיסי אשראי יש?", type: "text" },
+      { key: "credit_cards_debt", label: "חוב כולל בכרטיסי אשראי (₪)", type: "number" },
+      { key: "garnishment", label: "האם יש עיקולים או הגבלות בנקאיות?", type: "text", placeholder: "כן / לא — פרט אם כן" },
+      { key: "loan_cycle", label: "האם נוטים לקחת הלוואה לכיסוי הלוואה קיימת?", type: "text", placeholder: "כן / לא / לפעמים" },
+    ],
+  },
+  {
+    id: "loans",
+    title: "🏦 הלוואות",
+    fields: [
+      { key: "_loans_table", label: "", type: "loans_table" },
     ],
   },
   {
     id: "goals",
     title: "🎯 יעדים ותכנונים",
     fields: [
+      { key: "success_definition", label: "מה ההגדרה שלהם להצלחה?", type: "textarea", placeholder: "בעוד שנה, מה ישמח אותם?" },
       { key: "goals_short", label: "יעדים לטווח קצר (עד שנה)", type: "textarea" },
       { key: "goals_long", label: "יעדים לטווח ארוך (3-10 שנים)", type: "textarea" },
       { key: "planned_expenses", label: "הוצאות עתידיות צפויות (רכב, חתונה, שיפוץ...)", type: "textarea" },
       { key: "expected_changes", label: "שינויים צפויים בהכנסה/הוצאות", type: "textarea" },
-      { key: "earning_potential", label: "פוטנציאל השתכרות נוסף", type: "textarea" },
+      { key: "earning_potential", label: "פוטנציאל השתכרות נוסף", type: "textarea", placeholder: "קידום צפוי, עסק צד, בן/בת זוג חוזר לעבוד..." },
     ],
   },
   {
@@ -1033,6 +1409,7 @@ const INTAKE_SECTIONS = [
     id: "coach_notes",
     title: "📝 הערות המאמן",
     fields: [
+      { key: "client_quote", label: "ציטוט — מה הם אמרו שהם רוצים להשיג", type: "textarea", placeholder: "משפט מדויק בלשונם" },
       { key: "first_impression", label: "רושם ראשוני", type: "textarea" },
       { key: "key_challenges", label: "אתגרים מרכזיים שזוהו", type: "textarea" },
       { key: "action_items", label: "צעדי פעולה מיידיים", type: "textarea" },
@@ -1041,49 +1418,140 @@ const INTAKE_SECTIONS = [
   },
 ];
 
+function LoansTable({ loans, onChange }: { loans: {desc:string;amount:string;monthly:string}[]; onChange: (v: any[]) => void }) {
+  const rows = loans?.length ? loans : [];
+  const total_amount = rows.reduce((s,r) => s + (parseFloat(r.amount)||0), 0);
+  const total_monthly = rows.reduce((s,r) => s + (parseFloat(r.monthly)||0), 0);
+  const addRow = () => onChange([...rows, { desc:"", amount:"", monthly:"" }]);
+  const updateRow = (i, key, val) => { const next = rows.map((r,idx) => idx===i ? {...r,[key]:val} : r); onChange(next); };
+  const removeRow = (i) => onChange(rows.filter((_,idx) => idx!==i));
+  const cellStyle: React.CSSProperties = { padding: "6px 8px", background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text)", fontSize: 13, fontFamily: "inherit", width: "100%" };
+  return (
+    <div>
+      <table style={{ width:"100%", borderCollapse:"separate", borderSpacing:"0 6px" }}>
+        <thead>
+          <tr style={{ fontSize:12, color:"var(--text-dim)" }}>
+            <th style={{ textAlign:"right", paddingBottom:4, fontWeight:600 }}>סוג הלוואה</th>
+            <th style={{ textAlign:"right", paddingBottom:4, fontWeight:600 }}>סכום כולל (₪)</th>
+            <th style={{ textAlign:"right", paddingBottom:4, fontWeight:600 }}>תשלום חודשי (₪)</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => (
+            <tr key={i}>
+              <td><input value={row.desc} onChange={e=>updateRow(i,"desc",e.target.value)} style={cellStyle} placeholder="בנק, גמ״ח, רכב..." /></td>
+              <td><input type="number" value={row.amount} onChange={e=>updateRow(i,"amount",e.target.value)} style={cellStyle} placeholder="0" /></td>
+              <td><input type="number" value={row.monthly} onChange={e=>updateRow(i,"monthly",e.target.value)} style={cellStyle} placeholder="0" /></td>
+              <td><button onClick={()=>removeRow(i)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize:16, padding:"0 4px" }}>✕</button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {rows.length > 0 && (
+        <div style={{ display:"flex", gap:24, marginTop:8, fontSize:13, color:"var(--text-mid)", fontWeight:600 }}>
+          <span>סה"כ חוב: <strong style={{color:"var(--text)"}}>{total_amount.toLocaleString("he-IL")} ₪</strong></span>
+          <span>סה"כ חודשי: <strong style={{color:"var(--text)"}}>{total_monthly.toLocaleString("he-IL")} ₪</strong></span>
+        </div>
+      )}
+      <button onClick={addRow} style={{ marginTop:10, background:"none", border:"1px dashed var(--border)", borderRadius:8, padding:"6px 14px", fontSize:12, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}>+ הוסף הלוואה</button>
+    </div>
+  );
+}
+
 function IntakeForm({ client }) {
-  const [data, setData]       = useState({});
+  const [data, setData]       = useState<Record<string,any>>({});
   const [saving, setSaving]   = useState(false);
   const [saved, setSaved]     = useState(false);
   const [loaded, setLoaded]   = useState(false);
   const [openSection, setOpenSection] = useState("why");
+  const autoSaveRef = useState<ReturnType<typeof setTimeout>|null>(null);
 
   useEffect(() => {
-    supabase.from("client_intake").select("data").eq("client_id", client.id).maybeSingle()
-      .then(({ data: row }) => { if (row?.data) setData(row.data); setLoaded(true); });
+    supabase.from("client_intake").select("data,meeting_date").eq("client_id", client.id).maybeSingle()
+      .then(({ data: row }) => {
+        if (row?.data) setData(row.data);
+        else setData({ meeting_date: new Date(client.created_at || Date.now()).toISOString().slice(0,10) });
+        setLoaded(true);
+      });
   }, [client.id]);
 
-  const update = (key, val) => { setData(prev => ({ ...prev, [key]: val })); setSaved(false); };
-
-  const save = async () => {
+  const saveData = async (newData: Record<string,any>) => {
     setSaving(true);
     await supabase.from("client_intake").upsert(
-      [{ client_id: client.id, data, updated_at: new Date().toISOString() }],
+      [{ client_id: client.id, data: newData, updated_at: new Date().toISOString() }],
       { onConflict: "client_id" }
     );
     setSaving(false);
     setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
+    setTimeout(() => setSaved(false), 2000);
   };
 
-  const filledCount = (section) => section.fields.filter(f => f.type !== "header" && data[f.key] && String(data[f.key]).trim()).length;
+  const update = (key, val) => {
+    const newData = { ...data, [key]: val };
+    setData(newData);
+    setSaved(false);
+    if (autoSaveRef[0]) clearTimeout(autoSaveRef[0]);
+    autoSaveRef[0] = setTimeout(() => saveData(newData), 2000);
+  };
+
+  const save = () => {
+    if (autoSaveRef[0]) clearTimeout(autoSaveRef[0]);
+    saveData(data);
+  };
+
+  const filledCount = (section) => section.fields.filter(f =>
+    f.type !== "header" && f.type !== "loans_table" &&
+    data[f.key] !== undefined && data[f.key] !== null && String(data[f.key]).trim()
+  ).length;
+  const realFieldCount = (section) => section.fields.filter(f => f.type !== "header" && f.type !== "loans_table").length;
+
+  // Summary numbers
+  const s1net = parseFloat(data.spouse1_salary_net)||0;
+  const s2net = parseFloat(data.spouse2_salary_net)||0;
+  const totalIncome = s1net + s2net;
+  const overdraft = parseFloat(data.overdraft)||0;
+  const creditDebt = parseFloat(data.credit_cards_debt)||0;
+  const loansTotal = (data.loans||[]).reduce((s,r)=>s+(parseFloat(r.amount)||0),0);
+  const totalDebt = overdraft + creditDebt + loansTotal;
+  const monthlyDeficit = parseFloat(data.monthly_deficit)||0;
 
   if (!loaded) return <div style={{ color: "var(--text-dim)", padding: 32, textAlign: "center" }}>טוען...</div>;
 
-  const fieldStyle = { width: "100%", boxSizing: "border-box", background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 8, padding: "9px 12px", color: "var(--text)", fontSize: 13, fontFamily: "inherit", outline: "none" };
+  const fieldStyle: React.CSSProperties = { width: "100%", boxSizing: "border-box", background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 8, padding: "9px 12px", color: "var(--text)", fontSize: 13, fontFamily: "inherit", outline: "none" };
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+      {/* Header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <div style={{ fontWeight: 700, fontSize: 16 }}>📋 טופס פגישה ראשונה — {client.name}</div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          {saved && <span style={{ fontSize: 13, color: "var(--green-soft)" }}>✅ נשמר</span>}
-          <Btn onClick={save} disabled={saving}>{saving ? "שומר..." : "💾 שמור"}</Btn>
+          {saving && <span style={{ fontSize: 12, color: "var(--text-dim)" }}>שומר...</span>}
+          {saved && !saving && <span style={{ fontSize: 12, color: "var(--green-soft)" }}>✅ נשמר</span>}
+          <Btn onClick={save} disabled={saving}>💾 שמור</Btn>
         </div>
       </div>
 
+      {/* תאריך פגישה */}
+      <div style={{ marginBottom: 16, display:"flex", alignItems:"center", gap:12 }}>
+        <span style={{ fontSize:13, color:"var(--text-dim)", fontWeight:600 }}>📅 תאריך פגישה:</span>
+        <input type="date" value={data.meeting_date||""} onChange={e=>update("meeting_date",e.target.value)}
+          style={{ ...fieldStyle, width:"auto", padding:"6px 10px" }} />
+      </div>
+
+      {/* Summary bar */}
+      {(totalIncome > 0 || overdraft > 0 || totalDebt > 0 || monthlyDeficit > 0) && (
+        <div style={{ display:"flex", gap:12, flexWrap:"wrap", marginBottom:16, background:"var(--surface2)", borderRadius:10, padding:"12px 16px" }}>
+          {totalIncome > 0 && <div style={{ fontSize:13 }}>💰 הכנסה נטו: <strong style={{color:"var(--green-mid)"}}>{totalIncome.toLocaleString("he-IL")} ₪</strong></div>}
+          {overdraft > 0 && <div style={{ fontSize:13 }}>🔴 אוברדראפט: <strong style={{color:"var(--red)"}}>{overdraft.toLocaleString("he-IL")} ₪</strong></div>}
+          {totalDebt > 0 && <div style={{ fontSize:13 }}>💳 חוב כולל: <strong style={{color:"var(--red)"}}>{totalDebt.toLocaleString("he-IL")} ₪</strong></div>}
+          {monthlyDeficit > 0 && <div style={{ fontSize:13 }}>📉 גרעון חודשי: <strong style={{color:"var(--gold)"}}>{monthlyDeficit.toLocaleString("he-IL")} ₪</strong></div>}
+        </div>
+      )}
+
       {INTAKE_SECTIONS.map(section => {
         const filled = filledCount(section);
+        const total = realFieldCount(section);
         const isOpen = openSection === section.id;
         return (
           <div key={section.id} style={{ marginBottom: 8 }}>
@@ -1096,7 +1564,7 @@ function IntakeForm({ client }) {
             }}>
               <span style={{ fontSize: 17 }}>{section.title.split(" ")[0]}</span>
               <div style={{ flex: 1, fontWeight: 600, fontSize: 14 }}>{section.title.slice(section.title.indexOf(" ") + 1)}</div>
-              {filled > 0 && <span style={{ fontSize: 11, color: "var(--green-mid)", background: "rgba(46,204,138,0.12)", borderRadius: 20, padding: "2px 10px" }}>{filled}/{section.fields.length}</span>}
+              {filled > 0 && <span style={{ fontSize: 11, color: "var(--green-mid)", background: "rgba(46,204,138,0.12)", borderRadius: 20, padding: "2px 10px" }}>{filled}/{total}</span>}
               <span style={{ color: "var(--text-dim)", fontSize: 13 }}>{isOpen ? "▲" : "▼"}</span>
             </div>
             {isOpen && (
@@ -1104,20 +1572,29 @@ function IntakeForm({ client }) {
                 <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
                   {section.fields.map((field, fi) => {
                     if (field.type === "header") return (
-                      <div key={field.key} style={{ gridColumn:"1/-1", fontWeight:700, fontSize:13, color:"var(--green-mid)", borderBottom:"2px solid var(--green-mid)", paddingBottom:6, marginTop: fi === 0 ? 0 : 18, marginBottom:10 }}>
+                      <div key={field.key} style={{ fontWeight:700, fontSize:13, color:"var(--green-mid)", borderBottom:"2px solid var(--green-mid)", paddingBottom:6, marginTop: fi === 0 ? 0 : 18, marginBottom:10 }}>
                         {field.text}
                       </div>
+                    );
+                    if (field.type === "loans_table") return (
+                      <LoansTable key="loans" loans={data.loans||[]} onChange={v => update("loans", v)} />
                     );
                     if (field.type === "textarea") return (
                       <div key={field.key} style={{ marginBottom: 12 }}>
                         <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 5, fontWeight: 500 }}>{field.label}</div>
-                        <textarea value={data[field.key] || ""} onChange={e => update(field.key, e.target.value)} rows={3} style={{ ...fieldStyle, resize: "vertical", lineHeight: 1.5, width:"100%", boxSizing:"border-box" }} placeholder="..." />
+                        <textarea value={data[field.key] || ""} onChange={e => update(field.key, e.target.value)} rows={3} style={{ ...fieldStyle, resize: "vertical", lineHeight: 1.5 }} placeholder={(field as any).placeholder || "..."} />
+                      </div>
+                    );
+                    if (field.type === "number") return (
+                      <div key={field.key} style={{ marginBottom: 12 }}>
+                        <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 5, fontWeight: 500 }}>{field.label}</div>
+                        <input type="number" value={data[field.key] || ""} onChange={e => update(field.key, e.target.value)} style={fieldStyle} placeholder="0" />
                       </div>
                     );
                     return (
                       <div key={field.key} style={{ marginBottom: 12 }}>
                         <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 5, fontWeight: 500 }}>{field.label}</div>
-                        <input type="text" value={data[field.key] || ""} onChange={e => update(field.key, e.target.value)} style={{ ...fieldStyle, width:"100%", boxSizing:"border-box" }} placeholder="..." />
+                        <input type="text" value={data[field.key] || ""} onChange={e => update(field.key, e.target.value)} style={fieldStyle} placeholder={(field as any).placeholder || "..."} />
                       </div>
                     );
                   })}
@@ -1128,10 +1605,6 @@ function IntakeForm({ client }) {
         );
       })}
 
-      <div style={{ marginTop: 20, display: "flex", gap: 10, alignItems: "center" }}>
-        <Btn onClick={save} disabled={saving}>{saving ? "שומר..." : "💾 שמור הכל"}</Btn>
-        {saved && <span style={{ fontSize: 13, color: "var(--green-soft)" }}>✅ נשמר בהצלחה</span>}
-      </div>
     </div>
   );
 }
