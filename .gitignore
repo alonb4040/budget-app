@@ -5,3 +5,12 @@ build/
 .env.*.local
 ~$*
 *.tmp
+
+# Personal / work files
+.claude/
+to do/
+לביצוע/
+קבצי עבודה/
+מדריך_הפרויקט_v2.html
+mazan_summary.docx
+test-results/

@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 320px;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background: #fafaf8;
+      color: #1b2c1f;
+      direction: rtl;
+    }
+    .header {
+      background: #2d6a4f;
+      color: white;
+      padding: 14px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .header .logo { font-size: 18px; font-weight: 700; }
+    .header .sub { font-size: 12px; opacity: 0.8; }
+    .body { padding: 16px; }
+    .section-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: #8aa492;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+      letter-spacing: 0.5px;
+    }
+    .provider-card {
+      background: white;
+      border: 1.5px solid #e2ebe4;
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .provider-icon {
+      width: 36px; height: 36px;
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 12px; color: white;
+      flex-shrink: 0;
+    }
+    .provider-info { flex: 1; }
+    .provider-name { font-weight: 600; font-size: 14px; }
+    .provider-status { font-size: 11px; color: #8aa492; margin-top: 2px; }
+    .provider-status.syncing { color: #2d6a4f; }
+    .provider-status.done { color: #52b788; font-weight: 600; }
+    .provider-status.error { color: #c0392b; }
+    .sync-btn {
+      background: #2d6a4f;
+      color: white;
+      border: none;
+      border-radius: 7px;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      white-space: nowrap;
+    }
+    .sync-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .sync-btn.secondary {
+      background: #d8f3dc;
+      color: #2d6a4f;
+    }
+    /* הוראות שלב-אחר-שלב */
+    .instructions-box {
+      background: #f0f7ff;
+      border: 1px solid #bcd4f0;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-top: 8px;
+      font-size: 12px;
+      line-height: 1.7;
+      color: #2c4a6e;
+      display: none;
+    }
+    .instructions-box.hint {
+      background: #f4fbf6;
+      border-color: #c8e6d0;
+      color: #3a6b4a;
+    }
+    .result-box {
+      background: #f0faf2;
+      border: 1px solid #d8f3dc;
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-top: 12px;
+      font-size: 13px;
+    }
+    .result-box .num { font-weight: 700; color: #2d6a4f; font-size: 22px; }
+    .result-box .dup { color: #8aa492; font-size: 12px; margin-top: 4px; }
+    .result-box .month-tag { color: #4a8c6a; font-size: 11px; margin-top: 4px; }
+    .spinner {
+      display: inline-block;
+      width: 12px; height: 12px;
+      border: 2px solid #d8f3dc;
+      border-top-color: #2d6a4f;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .footer {
+      padding: 10px 16px;
+      font-size: 11px;
+      color: #8aa492;
+      border-top: 1px solid #e2ebe4;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .logout-btn {
+      background: none;
+      border: none;
+      color: #c0392b;
+      font-size: 11px;
+      cursor: pointer;
+      font-family: inherit;
+      padding: 0;
+    }
+    #login-section { padding: 16px; }
+    #login-section input {
+      width: 100%;
+      border: 1.5px solid #e2ebe4;
+      border-radius: 8px;
+      padding: 9px 12px;
+      margin-bottom: 8px;
+      font-family: inherit;
+      font-size: 13px;
+      direction: rtl;
+      outline: none;
+    }
+    #login-section input:focus { border-color: #2d6a4f; }
+    #login-section button {
+      width: 100%;
+      background: #2d6a4f;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    #login-error { color: #c0392b; font-size: 12px; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <div class="logo">מאזן</div>
+      <div class="sub">סנכרון כרטיסי אשראי</div>
+    </div>
+  </div>
+
+  <!-- Login -->
+  <div id="login-section" style="display:none">
+    <div style="font-size:13px; color:#4a6352; margin-bottom:12px;">
+      התחבר לחשבון המאזן שלך כדי לסנכרן תנועות
+    </div>
+    <input type="text" id="login-username" placeholder="שם משתמש" />
+    <input type="password" id="login-password" placeholder="סיסמה" />
+    <button id="login-btn">כניסה</button>
+    <div id="login-error"></div>
+  </div>
+
+  <!-- Main -->
+  <div id="main-section" style="display:none">
+    <div class="body">
+      <div class="section-title">ספקים</div>
+
+      <!-- מקס -->
+      <div class="provider-card">
+        <div class="provider-icon" style="background:#00c8aa">MAX</div>
+        <div class="provider-info">
+          <div class="provider-name">מקס</div>
+          <div class="provider-status" id="status-max">בודק...</div>
+        </div>
+        <button class="sync-btn" id="btn-max">טוען...</button>
+      </div>
+
+      <!-- הוראות -->
+      <div class="instructions-box" id="instructions-max"></div>
+
+      <!-- ישראכרט -->
+      <div class="provider-card">
+        <div class="provider-icon" style="background:#003087">ישראכרט</div>
+        <div class="provider-info">
+          <div class="provider-name">ישראכרט</div>
+          <div class="provider-status" id="status-isracard">בקרוב</div>
+        </div>
+        <button class="sync-btn secondary" disabled>בקרוב</button>
+      </div>
+
+      <!-- תוצאה -->
+      <div id="result-box" class="result-box" style="display:none">
+        <div class="num" id="result-added">0</div>
+        <div>תנועות חדשות נוספו</div>
+        <div class="dup" id="result-dups"></div>
+        <div class="month-tag" id="result-month"></div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <span id="user-info"></span>
+      <button class="logout-btn" id="btn-logout">התנתק</button>
+    </div>
+  </div>
+
+  <script src="src/popup.js"></script>
+</body>
+</html>

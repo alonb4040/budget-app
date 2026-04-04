@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "מאזן — סנכרון כרטיסי אשראי",
+  "version": "1.0.0",
+  "description": "סנכרן תנועות מכרטיסי האשראי שלך ישירות למאזן",
+  "permissions": [
+    "storage",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://www.max.co.il/*",
+    "https://www.isracard.co.il/*",
+    "https://www.cal-online.co.il/*",
+    "https://*.max.co.il/*",
+    "http://localhost:9877/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "src/background.js"
+  }
+}

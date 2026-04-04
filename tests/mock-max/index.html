@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<!-- Mock of Max (max.co.il) billing page for automated testing.
+     Class reference:
+       .deal-table      - outer container for the billing section (has "יתרת תשלום" line)
+       .table-wrapper   - inner wrapper that holds all transaction rows
+       .row-stripes     - individual transaction row (mimics Max's Angular component output)
+     RTL marks: U+200F (RLM) used before ₪ sign to test the extraction logic's cleaning code.
+-->
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>פירוט חיובים - מרץ 2026</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      direction: rtl;
+      background: #f4f4f4;
+      color: #222;
+      margin: 0;
+      padding: 20px;
+    }
+    h1 { color: #003366; }
+    .page-header {
+      background: #003366;
+      color: white;
+      padding: 12px 20px;
+      font-size: 1.2em;
+      margin-bottom: 20px;
+    }
+    .month-selector {
+      margin-bottom: 16px;
+    }
+    .month-selector label {
+      font-weight: bold;
+      margin-left: 8px;
+    }
+    .month-selector select {
+      padding: 6px 10px;
+      font-size: 1em;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    .deal-table {
+      background: white;
+      border-radius: 8px;
+      padding: 16px 20px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+      max-width: 700px;
+    }
+    .billing-summary {
+      font-size: 1.1em;
+      font-weight: bold;
+      color: #003366;
+      padding: 10px 0;
+      border-bottom: 2px solid #e0e0e0;
+      margin-bottom: 14px;
+    }
+    .table-header {
+      display: grid;
+      grid-template-columns: 1fr 2fr 2fr 1fr;
+      background: #e8eef5;
+      padding: 8px 12px;
+      font-weight: bold;
+      border-radius: 4px;
+      margin-bottom: 4px;
+      font-size: 0.9em;
+      color: #555;
+    }
+    .table-wrapper {
+      /* Wraps all .row-stripes rows */
+    }
+    .row-stripes {
+      display: grid;
+      grid-template-columns: 1fr 2fr 2fr 1fr;
+      padding: 10px 12px;
+      border-bottom: 1px solid #f0f0f0;
+      font-size: 0.95em;
+      white-space: pre-line;
+    }
+    .row-stripes:nth-child(odd) {
+      background: #f9fbfd;
+    }
+    .row-stripes:hover {
+      background: #edf3fb;
+    }
+    .amount {
+      color: #cc0000;
+      font-weight: 600;
+      text-align: left;
+    }
+  </style>
+</head>
+<body>
+
+<div class="page-header">מקס – כרטיסי אשראי</div>
+
+<!-- Month selector: used by extraction strategy 1 to identify billingMonthKey -->
+<div class="month-selector">
+  <label for="monthSelect">חודש חיוב:</label>
+  <select id="monthSelect">
+    <option value="2026-01">ינואר 2026</option>
+    <option value="2026-02">פברואר 2026</option>
+    <option value="2026-03" selected>מרץ 2026</option>
+  </select>
+</div>
+
+<!--
+  .deal-table: outer billing container
+  Contains the "יתרת תשלום" total line + all rows inside .table-wrapper > .row-stripes
+-->
+<div class="deal-table">
+
+  <!-- Total balance line — extracted by the parser looking for "יתרת" -->
+  <div class="billing-summary">יתרת תשלום: &#x200F;&#x20AA;2,535.90</div>
+
+  <div class="table-header">
+    <span>תאריך עסקה</span>
+    <span>שם בית העסק</span>
+    <span>קטגוריה</span>
+    <span>סכום</span>
+  </div>
+
+  <!--
+    .table-wrapper: direct parent of all .row-stripes
+    The extraction function uses: document.querySelectorAll('.table-wrapper')
+    then for each wrapper: wrapper.querySelectorAll('.row-stripes')
+    Each .row-stripes innerText is split by '\n'; structure expected:
+      lines[0] = date (DD.MM.YY)
+      lines[1] = merchant name
+      lines[2] = category
+      last line starting with ₪ or RLM+₪ = amount
+  -->
+  <div class="table-wrapper">
+
+    <!-- Transaction 1: רמי לוי שיווק -->
+    <div class="row-stripes">01.03.26
+רמי לוי שיווק
+מזון וצריכה
+&#x200F;&#x20AA;450.90</div>
+
+    <!-- Transaction 2: פרטנר תקשורת -->
+    <div class="row-stripes">03.03.26
+פרטנר תקשורת
+שירותי תקשורת
+&#x200F;&#x20AA;89.00</div>
+
+    <!-- Transaction 3: סונול דלק -->
+    <div class="row-stripes">05.03.26
+סונול דלק
+תחבורה
+&#x200F;&#x20AA;230.00</div>
+
+    <!-- Transaction 4: נטפליקס -->
+    <div class="row-stripes">07.03.26
+נטפליקס
+בידור
+&#x200F;&#x20AA;53.00</div>
+
+    <!-- Transaction 5: ATM כספומט -->
+    <div class="row-stripes">10.03.26
+ATM כספומט
+משיכת מזומן
+&#x200F;&#x20AA;500.00</div>
+
+  </div><!-- /.table-wrapper -->
+
+  <!--
+    Total of all 5 transactions above:
+    450.90 + 89.00 + 230.00 + 53.00 + 500.00 = 1,322.90
+    Note: "יתרת תשלום" (2,535.90) includes other charges not listed here
+  -->
+
+</div><!-- /.deal-table -->
+
+</body>
+</html>
