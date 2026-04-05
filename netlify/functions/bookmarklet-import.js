@@ -84,20 +84,25 @@ exports.handler = async (event) => {
   // --- פיענוח הגוף ---
   let payload;
   try {
-    // הבוקמרקלט שולח form POST — content-type: application/x-www-form-urlencoded
     const body = event.body || "";
     const isBase64 = event.isBase64Encoded;
     const decoded = isBase64 ? Buffer.from(body, "base64").toString("utf-8") : body;
+    const contentType = (event.headers["content-type"] || "").toLowerCase();
 
-    const params = new URLSearchParams(decoded);
-    const dataStr = params.get("data");
-    const clientIdStr = params.get("client_id");
-
-    if (!dataStr) throw new Error("חסר שדה data");
-    if (!clientIdStr) throw new Error("חסר שדה client_id — נא להתחבר לאפליקציה תחילה");
-
-    payload = JSON.parse(dataStr);
-    payload.client_id = parseInt(clientIdStr, 10);
+    if (contentType.includes("application/json")) {
+      // הבוקמרקלט שולח JSON
+      payload = JSON.parse(decoded);
+      payload.client_id = parseInt(String(payload.client_id), 10);
+    } else {
+      // fallback: form POST — application/x-www-form-urlencoded
+      const params = new URLSearchParams(decoded);
+      const dataStr = params.get("data");
+      const clientIdStr = params.get("client_id");
+      if (!dataStr) throw new Error("חסר שדה data");
+      if (!clientIdStr) throw new Error("חסר שדה client_id — נא להתחבר לאפליקציה תחילה");
+      payload = JSON.parse(dataStr);
+      payload.client_id = parseInt(clientIdStr, 10);
+    }
 
     if (!Number.isInteger(payload.client_id) || payload.client_id <= 0) {
       throw new Error("client_id לא תקין");
@@ -164,16 +169,16 @@ exports.handler = async (event) => {
 
   const duplicates = transactions.length - toInsert.length;
 
+  const corsHeaders = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type",
+  };
+
   if (toInsert.length === 0) {
     return {
       statusCode: 200,
-      headers: { "Content-Type": "text/html; charset=utf-8" },
-      body: htmlPage(
-        "כפילויות",
-        `<div class="icon">ℹ️</div>
-         <h1>כל התנועות כבר קיימות</h1>
-         <p>כל ${transactions.length} התנועות שנשלחו כבר נמצאות בחשבון שלך.<br>לא נוספו תנועות חדשות.</p>`
-      ),
+      headers: { ...corsHeaders, "Content-Type": "application/json; charset=utf-8" },
+      body: JSON.stringify({ added: 0, duplicates: transactions.length }),
     };
   }
 
@@ -186,8 +191,8 @@ exports.handler = async (event) => {
     console.error("[bookmarklet-import] Insert error:", insertErr.message);
     return {
       statusCode: 500,
-      headers: { "Content-Type": "text/html; charset=utf-8" },
-      body: htmlPage("שגיאת שמירה", `<div class="icon">❌</div><h1>שגיאה בשמירת התנועות</h1><p>${insertErr.message}</p>`, true),
+      headers: { ...corsHeaders, "Content-Type": "application/json; charset=utf-8" },
+      body: JSON.stringify({ error: insertErr.message }),
     };
   }
 
@@ -195,12 +200,7 @@ exports.handler = async (event) => {
 
   return {
     statusCode: 200,
-    headers: { "Content-Type": "text/html; charset=utf-8" },
-    body: htmlPage(
-      "נשמר בהצלחה",
-      `<div class="icon">✅</div>
-       <h1>${toInsert.length} תנועות נוספו למאזן</h1>
-       <p>${duplicates > 0 ? `${duplicates} תנועות כפולות דולגו.<br>` : ""}חלון זה ייסגר אוטומטית...</p>`
-    ),
+    headers: { ...corsHeaders, "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify({ added: toInsert.length, duplicates }),
   };
 };
