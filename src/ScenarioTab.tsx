@@ -464,14 +464,25 @@ function ScenarioTableView({ scenarios, activeScenarioId, clientId, onDelete, on
         ) : (
           <>
             <div style={{ fontSize: 13, color: "var(--text-dim)", marginLeft: 4, whiteSpace: "nowrap" }}>תסריט:</div>
-            {scenarios.map(sc => (
-              <button key={sc.id} onClick={() => setSelectedId(sc.id)} style={{ padding: "7px 18px", borderRadius: 20, fontSize: 14, fontWeight: selectedId === sc.id ? 700 : 500, cursor: "pointer", fontFamily: "inherit", transition: "all 0.15s", position: "relative", border: `2px solid ${selectedId === sc.id ? "var(--green-mid)" : "var(--border)"}`, background: selectedId === sc.id ? "var(--green-mid)" : "var(--surface2)", color: selectedId === sc.id ? "#fff" : "var(--text-mid)" }}>
-                {sc.name}
-                {activeScenarioId === sc.id && (
-                  <span style={{ position: "absolute", top: -4, right: -4, width: 10, height: 10, borderRadius: "50%", background: "var(--green-soft)", border: "2px solid var(--surface)" }} />
-                )}
-              </button>
-            ))}
+            {scenarios.map(sc => {
+              const isSelected = selectedId === sc.id;
+              const isActive   = activeScenarioId === sc.id;
+              return (
+                <button key={sc.id} onClick={() => setSelectedId(sc.id)} style={{
+                  padding: "7px 18px", borderRadius: 20, fontSize: 14,
+                  fontWeight: isSelected ? 700 : 500, cursor: "pointer", fontFamily: "inherit",
+                  transition: "all 0.15s", position: "relative",
+                  border: `2px solid ${isActive ? "var(--green-mid)" : isSelected ? "#6b7280" : "var(--border)"}`,
+                  background: isActive ? "var(--green-mid)" : isSelected ? "#6b7280" : "var(--surface2)",
+                  color: isSelected ? "#fff" : "var(--text-mid)",
+                }}>
+                  {sc.name}
+                  {isActive && (
+                    <span style={{ position: "absolute", top: -4, right: -4, width: 10, height: 10, borderRadius: "50%", background: "var(--green-soft)", border: "2px solid var(--surface)" }} />
+                  )}
+                </button>
+              );
+            })}
             <button onClick={() => setDeleteMode(true)}
               style={{ marginRight: "auto", padding: "6px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer", fontFamily: "inherit", border: "1px solid rgba(192,57,43,0.3)", background: "var(--red-light)", color: "var(--red)" }}>
               🗑 מחק תסריטים
