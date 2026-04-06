@@ -296,10 +296,7 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
               התסריטים יובאו בהצלחה.<br/>
               כדי שהנתונים יופיעו בבקרת התיק הכלכלי יש לבחור תסריט פעיל.
             </div>
-            <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
-              <Btn onClick={() => { setShowActivateModal(false); setView("activate"); }}>בחר תסריט עכשיו</Btn>
-              <Btn variant="ghost" onClick={() => setShowActivateModal(false)}>אחר כך</Btn>
-            </div>
+            <Btn onClick={() => { setShowActivateModal(false); setView("activate"); }}>בחר תסריט עכשיו</Btn>
           </div>
         </div>
       )}
