@@ -6,7 +6,7 @@ const { createClient } = require("@supabase/supabase-js");
 const SUPABASE_URL        = process.env.REACT_APP_SUPABASE_URL;
 const SUPABASE_SERVICE_KEY= process.env.SUPABASE_SERVICE_ROLE_KEY;
 const WA_TOKEN            = process.env.WHATSAPP_TOKEN;
-const WA_VERIFY_TOKEN     = process.env.WHATSAPP_VERIFY_TOKEN;
+const WA_VERIFY_TOKEN     = process.env.WHATSAPP_VERIFY_TOKEN || "mazan-secret-2025";
 const WA_PHONE_NUMBER_ID  = process.env.WHATSAPP_PHONE_NUMBER_ID;
 
 async function sendWhatsApp(to, text) {
