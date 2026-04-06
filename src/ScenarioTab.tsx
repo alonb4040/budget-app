@@ -307,8 +307,11 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
             </div>
           )}
           {scenarios.length > 0 && (
-            <Btn size="sm" variant={activeScenarioValid ? "secondary" : "primary"} onClick={() => setView("activate")}>
-              {activeScenarioValid ? "שנה תסריט פעיל" : "בחר תסריט פעיל"}
+            <Btn size="sm"
+              variant={activeScenarioValid ? "secondary" : "primary"}
+              style={!activeScenarioValid ? { background: "var(--red)", boxShadow: "0 4px 16px rgba(229,57,53,0.3)", animation: "pulse 2s infinite" } : undefined}
+              onClick={() => setView("activate")}>
+              {activeScenarioValid ? "שנה תסריט פעיל" : "⚠️ יש לבחור תסריט פעיל!"}
             </Btn>
           )}
         </div>
