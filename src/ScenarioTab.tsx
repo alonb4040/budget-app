@@ -148,6 +148,7 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
   const [activeTo, setActiveTo]           = useState("");
   // Dynamic category list — global + personal for this client
   const [knownCategories, setKnownCategories] = useState<string[]>([]);
+  const [showActivateReminder, setShowActivateReminder] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const showMsg = (m: string) => { setMsg(m); setTimeout(() => setMsg(""), 4000); };
@@ -240,9 +241,9 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
         if (items.length > 0) await supabase.from("scenario_items").insert(items);
       }
 
-      showMsg("✅ " + scenarioNames.length + " תסריטים יובאו בהצלחה — חשוב: יש לבחור תסריט פעיל כדי שיופיע בבקרת התיק");
       await loadCategories();
       await loadData();
+      setShowActivateReminder(true);
     } catch (err: any) {
       showMsg("❌ שגיאה בקריאת הקובץ: " + err.message);
     }
@@ -276,21 +277,38 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
 
   if (loading) return <div style={{ color: "var(--text-dim)", padding: 32 }}>טוען...</div>;
 
+  // תסריט פעיל תקף = קיים ומצביע לתסריט ברשימה
+  const activeScenarioValid = activeScenario && scenarios.some(s => s.id === activeScenario.scenario_id);
+
   if (view === "list") return (
     <div>
       {msg && <MsgBar msg={msg} />}
 
+      {/* באנר תזכורת לאחר העלאה */}
+      {showActivateReminder && (
+        <div style={{ marginBottom: 16, background: "rgba(251,191,36,0.12)", border: "2px solid rgba(251,191,36,0.5)", borderRadius: 12, padding: "14px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 15, color: "var(--gold)", marginBottom: 4 }}>⚠️ חשוב — יש לבחור תסריט פעיל</div>
+            <div style={{ fontSize: 13, color: "var(--text-dim)" }}>התסריטים יובאו בהצלחה. כדי שהנתונים יופיעו בבקרת התיק הכלכלי יש לבחור תסריט פעיל.</div>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+            <Btn size="sm" onClick={() => { setShowActivateReminder(false); setView("activate"); }}>בחר תסריט עכשיו</Btn>
+            <button onClick={() => setShowActivateReminder(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--text-dim)" }}>✕</button>
+          </div>
+        </div>
+      )}
+
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          {activeScenario && scenarios.length > 0 && (
+          {activeScenarioValid && (
             <div style={{ fontSize: 13, color: "var(--text-dim)" }}>
-              פעיל: <strong style={{ color: "var(--green-deep)" }}>{activeScenario.scenarios?.name}</strong>
-              <span style={{ marginRight: 6 }}>מ-{activeScenario.active_from}</span>
+              פעיל: <strong style={{ color: "var(--green-deep)" }}>{activeScenario!.scenarios?.name}</strong>
+              <span style={{ marginRight: 6 }}>מ-{activeScenario!.active_from}</span>
             </div>
           )}
           {scenarios.length > 0 && (
-            <Btn size="sm" variant={activeScenario ? "secondary" : "primary"} onClick={() => setView("activate")}>
-              {activeScenario ? "שנה תסריט פעיל" : "בחר תסריט פעיל"}
+            <Btn size="sm" variant={activeScenarioValid ? "secondary" : "primary"} onClick={() => setView("activate")}>
+              {activeScenarioValid ? "שנה תסריט פעיל" : "בחר תסריט פעיל"}
             </Btn>
           )}
         </div>
