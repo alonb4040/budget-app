@@ -65,8 +65,8 @@ module.exports = async function handler(req, res) {
   // אימות Webhook — Meta שולחת GET בעת ההגדרה
   if (req.method === "GET") {
     const { "hub.mode": mode, "hub.verify_token": token, "hub.challenge": challenge } = req.query;
-    if (mode === "subscribe" && token === WA_VERIFY_TOKEN) return res.status(200).send(challenge);
-    return res.status(403).send(`Forbidden: mode=${mode}, token=${token}, expected=${WA_VERIFY_TOKEN}`);
+    if (mode === "subscribe" && token?.trim() === WA_VERIFY_TOKEN?.trim()) return res.status(200).send(challenge);
+    return res.status(403).send(`Forbidden: mode=${mode}, token=${JSON.stringify(token)}, expected=${JSON.stringify(WA_VERIFY_TOKEN)}`);
   }
 
   if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
