@@ -1663,7 +1663,8 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
 // ── Portfolio Tab ─────────────────────────────────────────────────────────────
 function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, onDataChange, onMonthCreated, rememberedMappings, onRememberingAdded, cycleStartDay, importedTxs, manualTxs, onManualTxAdded, onManualTxDeleted, onUpdatePortfolioTxCat, onDeletePortfolioSub, onCycleStartDayChange, categories, categoryRows = [], clientCats, onCategoryAdded, ignoredCats = IGNORED_CATEGORIES, incomeCats = new Set<string>(), categoryRules = [] as any[], hiddenCats = [] as string[], onHiddenCatsChange = undefined as any, scenarioCats = null as any }) {
   const [tab, setTab] = useState(() => sessionStorage.getItem('mazan_portfolioTab') || "control");
-  const switchPortfolioTab = (id) => { sessionStorage.setItem('mazan_portfolioTab', id); setTab(id); };
+  const [controlKey, setControlKey] = useState(0);
+  const switchPortfolioTab = (id) => { sessionStorage.setItem('mazan_portfolioTab', id); setTab(id); if (id === "control") setControlKey(k => k + 1); };
   // Lift upload state here so re-renders don't reset it
   const [pStep, setPStep]                 = useState("list");
   const [activeEntry, setActiveEntry]     = useState(null);
@@ -1739,6 +1740,7 @@ function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, on
       </div>
       {tab === "control" && (
         <PortfolioControlTab
+          key={`control-${clientId}-${controlKey}`}
           clientId={clientId}
           portfolioMonths={portfolioMonths}
           portfolioSubs={portfolioSubs}
