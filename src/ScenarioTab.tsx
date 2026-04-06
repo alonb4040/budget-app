@@ -332,6 +332,7 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
           activeScenarioId={activeScenario?.scenario_id}
           clientId={client.id}
           onDelete={deleteScenario}
+          onActivated={loadData}
           onDeleteMultiple={async (ids: string[]) => {
             if (!window.confirm(`למחוק ${ids.length} תסריטים?`)) return;
             for (const id of ids) {
@@ -403,14 +404,18 @@ interface ScenarioTableViewProps {
   clientId: string;
   onDelete: (sc: ScenarioRow) => Promise<void>;
   onDeleteMultiple: (ids: string[]) => Promise<void>;
+  onActivated: () => Promise<void>;
 }
 
-function ScenarioTableView({ scenarios, activeScenarioId, clientId, onDelete, onDeleteMultiple }: ScenarioTableViewProps) {
+function ScenarioTableView({ scenarios, activeScenarioId, clientId, onDelete, onDeleteMultiple, onActivated }: ScenarioTableViewProps) {
   const [selectedId, setSelectedId] = useState<string | undefined>(activeScenarioId || scenarios[0]?.id);
   const [items, setItems] = useState<ScenarioItemRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [deleteMode, setDeleteMode] = useState(false);
   const [checked, setChecked] = useState<Record<string, boolean>>({});
+  const [activateModal, setActivateModal] = useState<ScenarioRow | null>(null);
+  const [activeFrom, setActiveFrom] = useState(new Date().toISOString().slice(0, 10));
+  const [activating, setActivating] = useState(false);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -431,8 +436,48 @@ function ScenarioTableView({ scenarios, activeScenarioId, clientId, onDelete, on
   const totalOut = [...fixed, ...variable].reduce((s, i) => s + Number(i.amount || 0), 0);
   const balance  = totalIn - totalOut;
 
+  const handleActivate = async () => {
+    if (!activateModal) return;
+    setActivating(true);
+    await supabase.from("active_scenario").insert([{
+      client_id: clientId,
+      scenario_id: activateModal.id,
+      active_from: activeFrom,
+      active_until: null,
+      activated_at: new Date().toISOString(),
+    }]);
+    setActivating(false);
+    setActivateModal(null);
+    await onActivated();
+  };
+
   return (
     <div>
+      {/* מודל הפעלת תסריט */}
+      {activateModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
+          onClick={() => setActivateModal(null)}>
+          <div style={{ background: "var(--surface)", borderRadius: 16, padding: 32, minWidth: 340, maxWidth: 420, boxShadow: "0 8px 40px rgba(0,0,0,0.3)" }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8 }}>הפעל תסריט</div>
+            <div style={{ fontSize: 14, color: "var(--text-dim)", marginBottom: 20 }}>
+              האם להפוך את <strong style={{ color: "var(--text)" }}>{activateModal.name}</strong> לתסריט הפעיל?
+            </div>
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 6, fontWeight: 600 }}>מתאריך</div>
+              <input type="date" value={activeFrom} onChange={e => setActiveFrom(e.target.value)}
+                style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontFamily: "inherit", fontSize: 14, boxSizing: "border-box" }} />
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <Btn onClick={handleActivate} disabled={activating || !activeFrom}>
+                {activating ? "מפעיל..." : "✅ הפעל"}
+              </Btn>
+              <Btn variant="ghost" onClick={() => setActivateModal(null)}>ביטול</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
         {deleteMode ? (
           <>
@@ -468,7 +513,7 @@ function ScenarioTableView({ scenarios, activeScenarioId, clientId, onDelete, on
               const isSelected = selectedId === sc.id;
               const isActive   = activeScenarioId === sc.id;
               return (
-                <button key={sc.id} onClick={() => setSelectedId(sc.id)} style={{
+                <button key={sc.id} onClick={() => { setSelectedId(sc.id); setActivateModal(sc); }} style={{
                   padding: "7px 18px", borderRadius: 20, fontSize: 14,
                   fontWeight: isSelected ? 700 : 500, cursor: "pointer", fontFamily: "inherit",
                   transition: "all 0.15s", position: "relative",
