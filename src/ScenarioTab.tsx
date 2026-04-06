@@ -149,6 +149,7 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
   // Dynamic category list — global + personal for this client
   const [knownCategories, setKnownCategories] = useState<string[]>([]);
   const [showActivateReminder, setShowActivateReminder] = useState(false);
+  const [showActivateModal, setShowActivateModal] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const showMsg = (m: string) => { setMsg(m); setTimeout(() => setMsg(""), 4000); };
@@ -244,6 +245,7 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
       await loadCategories();
       await loadData();
       setShowActivateReminder(true);
+      setShowActivateModal(true);
     } catch (err: any) {
       showMsg("❌ שגיאה בקריאת הקובץ: " + err.message);
     }
@@ -283,6 +285,24 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
   if (view === "list") return (
     <div>
       {msg && <MsgBar msg={msg} />}
+
+      {/* מודל חובה לבחור תסריט */}
+      {showActivateModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "var(--surface)", borderRadius: 16, padding: 32, minWidth: 360, maxWidth: 440, boxShadow: "0 8px 40px rgba(0,0,0,0.35)", textAlign: "center" }}>
+            <div style={{ fontSize: 40, marginBottom: 12 }}>⚠️</div>
+            <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 10 }}>חובה לבחור תסריט פעיל</div>
+            <div style={{ fontSize: 14, color: "var(--text-dim)", marginBottom: 24, lineHeight: 1.6 }}>
+              התסריטים יובאו בהצלחה.<br/>
+              כדי שהנתונים יופיעו בבקרת התיק הכלכלי יש לבחור תסריט פעיל.
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+              <Btn onClick={() => { setShowActivateModal(false); setView("activate"); }}>בחר תסריט עכשיו</Btn>
+              <Btn variant="ghost" onClick={() => setShowActivateModal(false)}>אחר כך</Btn>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* באנר תזכורת לאחר העלאה */}
       {showActivateReminder && (
