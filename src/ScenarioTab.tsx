@@ -288,7 +288,9 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
               <span style={{ marginRight: 6 }}>מ-{activeScenario.active_from}</span>
             </div>
           )}
-          <Btn size="sm" variant="secondary" onClick={() => setView("activate")}>שנה תסריט פעיל</Btn>
+          <Btn size="sm" variant={activeScenario ? "secondary" : "primary"} onClick={() => setView("activate")}>
+            {activeScenario ? "שנה תסריט פעיל" : "בחר תסריט פעיל"}
+          </Btn>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <Btn size="sm" onClick={() => fileRef.current?.click()}>⬆️ ייבא מ-Excel</Btn>
