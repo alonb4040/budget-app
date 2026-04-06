@@ -515,7 +515,11 @@ function ScenarioTableView({ scenarios, activeScenarioId, clientId, onDelete, on
               const isSelected = selectedId === sc.id;
               const isActive   = activeScenarioId === sc.id;
               return (
-                <button key={sc.id} onClick={() => { setSelectedId(sc.id); setActivateModal(sc); }} style={{
+                <button key={sc.id} onClick={() => {
+                  setSelectedId(sc.id);
+                  if (isActive) { alert(`התסריט "${sc.name}" כבר פעיל`); }
+                  else { setActivateModal(sc); }
+                }} style={{
                   padding: "7px 18px", borderRadius: 20, fontSize: 14,
                   fontWeight: isSelected ? 700 : 500, cursor: "pointer", fontFamily: "inherit",
                   transition: "all 0.15s", position: "relative",
