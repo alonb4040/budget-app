@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { supabase } from "./supabase";
 import { Card, Btn, Input, C } from "./ui";
 import type { Client } from "./types";
@@ -57,47 +57,6 @@ interface UnmappedItem {
   mappedTo: string | null;
 }
 
-// ── כל הסעיפים הקיימים באפליקציה ──────────────────────────────────────────
-const KNOWN_CATEGORIES: string[] = [
-  // הכנסות
-  "הכנסה בן/ת זוג נטו","קצבת ילדים","שכירות","הכנסה מההורים","תן ביס/סיבוס","אחר-הכנסה",
-  // דיור
-  "שכר דירה","משכנתה","חשמל","ארנונה","גז","מים וביוב","ועד בית","מיסי יישוב","מוקד אבטחה","עוזרת בית","גינון",
-  // תקשורת
-  "טלפון נייד","טלפון קווי","תשתית אינטרנט","ספק אינטרנט","כבלים","עיתונים",
-  // חינוך
-  "מעון","צהרון","בי\"ס - תשלומים קבועים","חוגים","שיעורי עזר","פסיכולוג/הוראה מתקנת","אוניברסיטה","ספרים וצעצועים","דמי כיס","שמרטף",
-  // ביטוחים
-  "קופ\"ח ביטוח משלים","ביטוח רפואי פרטי","ביטוח חיים","ביטוח דירה","ביטוח משכנתה","ביטוח רכב מקיף וחובה",
-  // רכב
-  "דלק","טיפולים ורישוי","חניה (כולל כביש 6)","תחבורה ציבורית",
-  // הלוואות
-  "החזרי הלוואות תלוש","החזרי הלוואות עו\"ש","חובות נוספים","ריבית חובה בבנק","עמלות בנק וכרטיסי אשראי",
-  // בריאות
-  "תרופות כרוניות","טיפולי שיניים",
-  // קניות
-  "סופר (אוכל)","פארם","אוכל בחוץ (כולל משלוחים)","ארוחות צהריים (עבודה)","חיות מחמד","טיטולים ומוצרים לתינוק","סיגריות","מוצרים לבית",
-  // טיפוח
-  "קוסמטיקה טיפולים","קוסמטיקה מוצרים","מספרה","ביגוד והנעלה",
-  // פנאי
-  "בילויים","מכון כושר","נסיעות וחופשות","הוצאות חג","מנויים (subscriptions)","מתנות לאירועים","ימי הולדת שלנו",
-  // חיסכון
-  "הפקדות עצמאי","חסכונות",
-  // שונות
-  "תרומות ומעשרות","מנוי מפעל הפיס","תמי4/נספרסו","מזונות","מזומן ללא מעקב","הוצאות לא מתוכננות","אחר-קבוע","אחר-משתנה",
-  // להתעלם
-  "להתעלם",
-];
-
-// ── הגדרת סוג סעיף לפי שם ─────────────────────────────────────────────────
-function guessItemType(name: string): ItemType {
-  const income = ["הכנסה","קצבת","שכירות","תן ביס","שכר","ליווי","SQL","תיכון","אמא","מירי","מתנות והכנסות"];
-  const fixed  = ["טלפון","אינטרנט","כבלים","חשמל","ארנונה","גז","מים","שכר דירה","משכנתה","ועד","מיסי","ביטוח","הלוואות","החזרי","חסכונות","הפקדות","מעון","צהרון","בי\"ס","חוגים"];
-  if (income.some(k => name.includes(k))) return "income";
-  if (fixed.some(k  => name.includes(k))) return "expense_fixed";
-  return "expense_variable";
-}
-
 // ── פיענוח Excel תסריט ─────────────────────────────────────────────────────
 function parseScenarioExcel(arrayBuffer: ArrayBuffer): ParseResult {
   const XLSX = window.XLSX;
@@ -133,12 +92,23 @@ function parseScenarioExcel(arrayBuffer: ArrayBuffer): ParseResult {
     if (!name || name.startsWith('סה"כ') || name.startsWith('שורה תחתונה') || name.startsWith('כל הזכויות')) continue;
     const NORMALIZE: Record<string, string> = {
       'וועד בית': 'ועד בית',
-      'תשתית אנטרנט': 'תשתית אינטרנט',
+      'תשתית אינטרנט': 'ספק אינטרנט',
+      'תשתית אנטרנט': 'ספק אינטרנט',
       'בי"ס- תשלומים קבועים': 'בי"ס - תשלומים קבועים',
-      'subscriptions - מנוי': 'מנויים (subscriptions)',
+      'subscriptions - מנוי': 'מנויים',
+      'מנויים (subscriptions)': 'מנויים',
       'הוצאות חג ': 'הוצאות חג',
       'ארוחות צהריים ( עבודה)': 'ארוחות צהריים (עבודה)',
-      'ביטוח לאומי': 'אחר-קבוע',
+      'ביטוח לאומי': 'הוצאות לא מתוכננות',
+      'שכירות': 'הכנסה משכירות',
+      'אחר-הכנסה': 'הכנסות מזדמנות',
+      'אחר-קבוע': 'הוצאות לא מתוכננות',
+      'אחר-משתנה': 'הוצאות לא מתוכננות',
+      'הפקדות עצמאי': 'חסכונות',
+      'מנוי מפעל הפיס': 'מנויים',
+      'תמי4/נספרסו': 'מנויים',
+      'קוסמטיקה טיפולים': 'קוסמטיקה',
+      'קוסמטיקה מוצרים': 'קוסמטיקה',
     };
     if (NORMALIZE[name]) name = NORMALIZE[name];
 
@@ -159,24 +129,40 @@ function parseScenarioExcel(arrayBuffer: ArrayBuffer): ParseResult {
   return { scenarioNames, results };
 }
 
+// ── budget_type → item_type mapping ──────────────────────────────────────────
+function budgetTypeToItemType(budget_type: string): ItemType {
+  if (budget_type === "הכנסה") return "income";
+  if (budget_type === "קבוע")  return "expense_fixed";
+  return "expense_variable";
+}
+
 // ── רכיב ראשי ────────────────────────────────────────────────────────────────
 export default function ScenarioTab({ client }: ScenarioTabProps) {
   const [scenarios, setScenarios]         = useState<ScenarioRow[]>([]);
   const [activeScenario, setActiveScenario] = useState<ActiveScenario | null>(null);
   const [loading, setLoading]             = useState(true);
   const [view, setView]                   = useState<"list" | "upload" | "activate">("list");
-  const [uploadResult, setUploadResult]   = useState<UploadResult | null>(null);
-  const [unmapped, setUnmapped]           = useState<UnmappedItem[]>([]);
-  const [checked, setChecked]             = useState<Record<string | number, boolean>>({});
   const [msg, setMsg]                     = useState("");
   const [selectedScenario, setSelectedScenario] = useState<ScenarioRow | null>(null);
   const [activeFrom, setActiveFrom]       = useState("");
   const [activeTo, setActiveTo]           = useState("");
+  // Dynamic category list — global + personal for this client
+  const [knownCategories, setKnownCategories] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const showMsg = (m: string) => { setMsg(m); setTimeout(() => setMsg(""), 4000); };
 
-  useEffect(() => { loadData(); }, [client.id]);
+  const loadCategories = useCallback(async () => {
+    const { data } = await supabase
+      .from("categories")
+      .select("name")
+      .eq("is_active", true)
+      .or(`client_id.is.null,client_id.eq.${client.id}`)
+      .order("sort_order", { ascending: true });
+    setKnownCategories((data || []).map((r: any) => r.name));
+  }, [client.id]);
+
+  useEffect(() => { loadData(); loadCategories(); }, [client.id]); // eslint-disable-line
 
   const loadData = async () => {
     setLoading(true);
@@ -189,74 +175,78 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
     setLoading(false);
   };
 
-  // ── העלאת קובץ ─────────────────────────────────────────────────────────────
+  // ── העלאת קובץ — ייבוא ישיר ללא שלב מיפוי ────────────────────────────────
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
       const buf = await file.arrayBuffer();
       const { scenarioNames, results } = parseScenarioExcel(buf);
-      setUploadResult({ scenarioNames, results, fileName: file.name });
-      setUnmapped([]);
-      setView("upload");
+      showMsg("שומר...");
+
+      // get max sort_order once
+      const { data: maxOrdRow } = await supabase
+        .from("categories").select("sort_order").is("client_id", null)
+        .order("sort_order", { ascending: false }).limit(1).maybeSingle();
+      let nextOrder: number = ((maxOrdRow as any)?.sort_order || 1000) + 10;
+
+      // ensure every category in the Excel exists in DB (global or personal)
+      const knownSet = new Set(knownCategories);
+      const seenNames = new Map<string, ItemType>();
+      Object.values(results).forEach(scenarioItems => {
+        Object.values(scenarioItems).forEach(({ displayName, type }) => {
+          if (displayName && !seenNames.has(displayName)) seenNames.set(displayName, type);
+        });
+      });
+      for (const [name, type] of seenNames.entries()) {
+        if (!knownSet.has(name)) {
+          const budgetType = type === "income" ? "הכנסה" : type === "expense_fixed" ? "קבוע" : "משתנה";
+          await supabase.from("categories").insert([{
+            name,
+            section: "⭐ הקטגוריות שלי",
+            budget_type: budgetType,
+            client_id: Number(client.id),
+            is_active: true,
+            is_ignored: false,
+            sort_order: nextOrder,
+            keywords: [],
+            max_hints: [],
+          }]);
+          nextOrder += 10;
+          knownSet.add(name); // avoid duplicate inserts within same upload
+        }
+      }
+
+      // insert all scenarios + items
+      for (const sName of scenarioNames) {
+        const { data: sc, error } = await supabase
+          .from("scenarios").insert([{ client_id: client.id, name: sName }])
+          .select().single();
+        if (error) { showMsg("❌ שגיאה: " + error.message); return; }
+
+        const items: any[] = [];
+        let order = 0;
+        Object.entries(results[sName]).forEach(([, { amount, type, displayName }]) => {
+          if (!displayName) return;
+          items.push({
+            scenario_id: (sc as any).id,
+            client_id: client.id,
+            category_name: displayName,
+            amount,
+            item_type: type,
+            sort_order: order++,
+          });
+        });
+        if (items.length > 0) await supabase.from("scenario_items").insert(items);
+      }
+
+      showMsg("✅ " + scenarioNames.length + " תסריטים יובאו בהצלחה — חשוב: יש לבחור תסריט פעיל כדי שיופיע בבקרת התיק");
+      await loadCategories();
+      await loadData();
     } catch (err: any) {
       showMsg("❌ שגיאה בקריאת הקובץ: " + err.message);
     }
     e.target.value = "";
-  };
-
-  // ── שמירת תסריטים לאחר מיפוי ──────────────────────────────────────────────
-  const saveScenarios = async (unmappedOverride?: UnmappedItem[]) => {
-    if (!uploadResult) return;
-    const { scenarioNames, results } = uploadResult;
-    const finalUnmapped = unmappedOverride || unmapped;
-
-    const mapping: Record<string, string | null> = {};
-    for (const u of finalUnmapped) {
-      if (u.mappedTo === "__new__") {
-        await supabase.from("client_categories").upsert(
-          [{ client_id: client.id, name: u.name, item_type: u.type || "expense_variable" }],
-          { onConflict: "client_id,name" }
-        );
-        mapping[u.name] = u.name;
-      } else {
-        mapping[u.name] = u.mappedTo || null;
-      }
-    }
-
-    for (const sName of scenarioNames) {
-      const { data: sc, error } = await supabase
-        .from("scenarios")
-        .insert([{ client_id: client.id, name: sName }])
-        .select().single();
-      if (error) { showMsg("❌ שגיאה: " + error.message); return; }
-
-      const items: any[] = [];
-      let order = 0;
-      Object.entries(results[sName]).forEach(([key, { amount, type, displayName }]) => {
-        const name = displayName || key;
-        if (!name) return;
-        items.push({
-          scenario_id: (sc as any).id,
-          client_id: client.id,
-          category_name: name,
-          amount,
-          item_type: type,
-          sort_order: order++,
-        });
-      });
-
-      if (items.length > 0) {
-        await supabase.from("scenario_items").insert(items);
-      }
-    }
-
-    showMsg("✅ " + scenarioNames.length + " תסריטים יובאו בהצלחה");
-    setView("list");
-    setUploadResult(null);
-    setUnmapped([]);
-    setChecked({});
-    await loadData();
   };
 
   // ── הפעלת תסריט ────────────────────────────────────────────────────────────
@@ -331,93 +321,6 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
     </div>
   );
 
-  if (view === "upload") {
-    const allChecked = unmapped.length > 0 && unmapped.every((_, i) => checked[i]);
-    const toggleAll = () => {
-      if (allChecked) {
-        setChecked({});
-      } else {
-        const all: Record<number, boolean> = {};
-        unmapped.forEach((_, i) => { all[i] = true; });
-        setChecked(all);
-      }
-    };
-
-    return (
-      <div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
-          <Btn variant="ghost" size="sm" onClick={() => { setView("list"); setUploadResult(null); setUnmapped([]); setChecked({}); }}>← חזור</Btn>
-          <div style={{ fontWeight: 700, fontSize: 16 }}>ייבוא תסריטים</div>
-        </div>
-
-        <Card style={{ marginBottom: 16 }}>
-          <div style={{ fontWeight: 600, marginBottom: 10 }}>תסריטים שנמצאו בקובץ</div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {uploadResult?.scenarioNames.map(n => (
-              <span key={n} style={{ background: "var(--green-mint)", color: "var(--green-deep)", borderRadius: 20, padding: "4px 14px", fontSize: 13, fontWeight: 600 }}>{n}</span>
-            ))}
-          </div>
-        </Card>
-
-        {unmapped.length > 0 ? (
-          <Card style={{ marginBottom: 16 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-              <div>
-                <div style={{ fontWeight: 600, fontSize: 15 }}>סעיפים שלא זוהו אוטומטית</div>
-                <div style={{ fontSize: 13, color: "var(--text-dim)", marginTop: 3 }}>שייך לסעיף קיים, הוסף כחדש, או דלג</div>
-              </div>
-              <button
-                onClick={toggleAll}
-                style={{ padding: "7px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: allChecked ? "var(--green-mid)" : "var(--surface2)", color: allChecked ? "#fff" : "var(--text-mid)", border: `1px solid ${allChecked ? "var(--green-mid)" : "var(--border)"}` }}
-              >
-                {allChecked ? "✓ בטל הכל" : "☐ אשר הכל כחדש"}
-              </button>
-            </div>
-
-            {unmapped.map((u, i) => (
-              <div key={u.name} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, padding: "10px 14px", background: checked[i] ? "var(--green-pale)" : "var(--surface2)", borderRadius: 10, border: `1px solid ${checked[i] ? "var(--green-mint)" : "transparent"}`, transition: "all 0.15s" }}>
-                <div
-                  onClick={() => setChecked(p => ({ ...p, [i]: !p[i] }))}
-                  style={{ width: 22, height: 22, borderRadius: 6, border: `2px solid ${checked[i] ? "var(--green-mid)" : "var(--border)"}`, background: checked[i] ? "var(--green-mid)" : "var(--surface)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, transition: "all 0.15s" }}
-                >
-                  {checked[i] && <span style={{ color: "#fff", fontSize: 13, fontWeight: 700 }}>✓</span>}
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, fontSize: 14 }}>{u.name}</div>
-                  <div style={{ fontSize: 12, color: checked[i] ? "var(--green-mid)" : "var(--text-dim)" }}>
-                    {checked[i] ? "יוסף כסעיף חדש" : "לא נמצא בסעיפי המערכת"}
-                  </div>
-                </div>
-                {!checked[i] && (
-                  <select
-                    value={u.mappedTo || ""}
-                    onChange={e => {
-                      const val = e.target.value;
-                      setUnmapped(prev => prev.map((x, j) => j === i ? { ...x, mappedTo: val || null } : x));
-                    }}
-                    style={{ background: "var(--surface)", border: "1.5px solid var(--border)", borderRadius: 8, padding: "7px 12px", fontSize: 13, color: "var(--text)", fontFamily: "inherit", minWidth: 200 }}
-                  >
-                    <option value="">— דלג על סעיף זה —</option>
-                    {KNOWN_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                )}
-              </div>
-            ))}
-          </Card>
-        ) : (
-          <Card style={{ marginBottom: 16, background: "var(--green-pale)", border: "1px solid var(--green-mint)" }}>
-            <div style={{ color: "var(--green-deep)", fontSize: 14 }}>✅ כל הסעיפים זוהו אוטומטית</div>
-          </Card>
-        )}
-
-        <Btn onClick={() => {
-          const updated = unmapped.map((u, i) => checked[i] ? { ...u, mappedTo: "__new__" } : u);
-          setUnmapped(updated);
-          saveScenarios(updated);
-        }}>💾 שמור תסריטים</Btn>
-      </div>
-    );
-  }
 
   if (view === "activate") return (
     <div>

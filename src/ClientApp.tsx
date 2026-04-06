@@ -32,7 +32,7 @@ async function sendCompletionEmail(clientName) {
 // ── Main component ────────────────────────────────────────────────────────────
 export default function ClientApp({ session, onLogout }) {
   // ── קטגוריות דינמיות ────────────────────────────────────────────────────────
-  const { sections: categories, clientCats, reload: reloadCategories } = useCategories(session.id);
+  const { sections: categories, rows: categoryRows, clientCats, ignoredCats, incomeCats, fixedCats, rules: categoryRules, reload: reloadCategories } = useCategories(session.id);
 
   const [screen, setScreen]               = useState("dashboard"); // dashboard | month | upload | review | summary
   const [showConnectCard, setShowConnectCard] = useState(false);
@@ -66,6 +66,9 @@ export default function ClientApp({ session, onLogout }) {
   const [questionnaireSpouses, setQuestionnaireSpouses] = useState(null);
   const [docNotes, setDocNotes]           = useState<Record<string,string>>({});
   const [customDocs, setCustomDocs]       = useState<{id:string;label:string;icon?:string}[]>([]);
+  const [hiddenCats, setHiddenCats]       = useState<string[]>([]);
+  // קטגוריות מהתסריט הפעיל — null = אין תסריט פעיל (הצג הכל)
+  const [scenarioCats, setScenarioCats]   = useState<string[] | null>(null);
 
   // active month context
   const [activeMonth, setActiveMonth]     = useState(null); // month_entry row
@@ -94,20 +97,55 @@ export default function ClientApp({ session, onLogout }) {
 
   useEffect(() => { loadUserData(); }, []);
 
+  // real-time: כשתנועה חדשה נוספת מהבוקמרקלט — טען אותה מיידית
+  useEffect(() => {
+    const channel = supabase
+      .channel("imported_txs_realtime")
+      .on("postgres_changes", {
+        event: "INSERT",
+        schema: "public",
+        table: "imported_transactions",
+        filter: `client_id=eq.${session.id}`,
+      }, (payload) => {
+        setImportedTxs(prev => [payload.new as any, ...prev]);
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [session.id]);
+
+  const loadAllImportedTxs = async (clientId: string) => {
+    const PAGE = 1000;
+    let all: any[] = [];
+    let from = 0;
+    while (true) {
+      const { data, error } = await supabase
+        .from("imported_transactions")
+        .select("*")
+        .eq("client_id", clientId)
+        .order("created_at", { ascending: false })
+        .range(from, from + PAGE - 1);
+      if (error || !data || data.length === 0) break;
+      all = [...all, ...data];
+      if (data.length < PAGE) break;
+      from += PAGE;
+    }
+    return all;
+  };
+
   const loadUserData = async () => {
     setLoadingData(true);
     // Fire-and-forget: update last seen timestamp for admin visibility
     supabase.from("clients").update({ last_seen_at: new Date().toISOString() }).eq("id", session.id);
     try {
-      const [{ data: entries }, { data: subs }, { data: maps }, { data: clientData }, { data: pays }, { data: pMonths }, { data: pSubs }, { data: iTxs }, { data: mTxs }, { data: cDocs }] = await Promise.all([
+      const [{ data: entries }, { data: subs }, { data: maps }, { data: clientData }, { data: pays }, { data: pMonths }, { data: pSubs }, iTxs, { data: mTxs }, { data: cDocs }] = await Promise.all([
         supabase.from("month_entries").select("*").eq("client_id", session.id).order("month_key", { ascending: false }),
         supabase.from("submissions").select("*").eq("client_id", session.id).order("created_at", { ascending: true }),
         supabase.from("remembered_mappings").select("*").eq("client_id", session.id),
-        supabase.from("clients").select("portfolio_open,portfolio_opened_at,email,phone,cycle_start_day,plan,submitted_at,required_docs,questionnaire_spouses,doc_notes,custom_docs").eq("id", session.id).maybeSingle(),
+        supabase.from("clients").select("portfolio_open,portfolio_opened_at,email,phone,cycle_start_day,plan,submitted_at,required_docs,questionnaire_spouses,doc_notes,custom_docs,hidden_cats").eq("id", session.id).maybeSingle(),
         supabase.from("payslips").select("*").eq("client_id", session.id).order("created_at", { ascending: false }),
         supabase.from("portfolio_months").select("*").eq("client_id", session.id).order("month_key", { ascending: false }),
         supabase.from("portfolio_submissions").select("*").eq("client_id", session.id).order("created_at", { ascending: true }),
-        supabase.from("imported_transactions").select("*").eq("client_id", session.id).order("created_at", { ascending: false }).limit(200),
+        loadAllImportedTxs(session.id),
         supabase.from("manual_transactions").select("*").eq("client_id", session.id).order("created_at", { ascending: false }),
         supabase.from("client_documents").select("*").eq("client_id", session.id)
       ]);
@@ -126,13 +164,40 @@ export default function ClientApp({ session, onLogout }) {
       setQuestionnaireSpouses(clientData?.questionnaire_spouses ?? null);
       setDocNotes(clientData?.doc_notes ?? {});
       setCustomDocs(clientData?.custom_docs ?? []);
+      setHiddenCats(clientData?.hidden_cats ?? []);
+
+      // טען קטגוריות תסריט פעיל (אם קיים)
+      if (clientData?.portfolio_open) {
+        const today = new Date().toISOString().slice(0, 10);
+        const { data: activeScen } = await supabase
+          .from("active_scenario")
+          .select("scenario_id")
+          .eq("client_id", session.id)
+          .lte("active_from", today)
+          .or(`active_until.is.null,active_until.gte.${today}`)
+          .order("active_from", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (activeScen?.scenario_id) {
+          const { data: items } = await supabase
+            .from("scenario_items")
+            .select("category_name")
+            .eq("scenario_id", activeScen.scenario_id);
+          setScenarioCats((items || []).map((r: any) => r.category_name));
+        } else {
+          setScenarioCats(null); // יש תיק פתוח אבל אין תסריט → הצג הכל
+        }
+      } else {
+        setScenarioCats(null); // תיק לא פתוח → הצג הכל
+      }
+
       setClientDocs(cDocs || []);
       setPortfolioMonths(pMonths || []);
       setPortfolioSubs(pSubs || []);
       const mappingObj = {};
       (maps || []).forEach(m => { mappingObj[m.business_name] = m.category; });
       setRememberedMappings(mappingObj);
-      setImportedTxs(iTxs || []);
+      setImportedTxs(iTxs);
       setManualTxs(mTxs || []);
       setImportedLoaded(true);
     } catch(err) {
@@ -209,7 +274,7 @@ export default function ClientApp({ session, onLogout }) {
       }
       try {
         const buf = await file.arrayBuffer();
-        const parsed = parseExcelData(buf, file.name, rememberedMappings);
+        const parsed = parseExcelData(buf, file.name, rememberedMappings, categoryRules);
         allTx = allTx.concat(parsed);
         results.push({ name: file.name, count: parsed.length });
       } catch(e: any) {
@@ -267,6 +332,11 @@ export default function ClientApp({ session, onLogout }) {
     showToast("החודש נפתח מחדש לעריכה");
   };
 
+  const saveHiddenCats = async (cats: string[]) => {
+    setHiddenCats(cats);
+    await supabase.from("clients").update({ hidden_cats: cats }).eq("id", session.id);
+  };
+
   const savePortfolioTxCat = async (submissionId, txIndex, newCat) => {
     const sub = portfolioSubs.find(s => s.id === submissionId);
     if (!sub) return;
@@ -307,7 +377,7 @@ export default function ClientApp({ session, onLogout }) {
 
   const chartData = [...finalizedMonths].reverse().slice(0,6).map(entry => {
     const subs = submissions.filter(s => s.month_key === entry.month_key);
-    const total = subs.flatMap(s => s.transactions || []).filter(t => !IGNORED_CATEGORIES.has(t.cat)).reduce((sum, t) => sum + t.amount, 0);
+    const total = subs.flatMap(s => s.transactions || []).filter(t => !ignoredCats.has(t.cat)).reduce((sum, t) => sum + t.amount, 0);
     return { name: entry.label || "", הוצאות: Math.round(total) };
   });
 
@@ -465,7 +535,7 @@ export default function ClientApp({ session, onLogout }) {
                   const last = monthEntries[0];
                   if (!last) return "—";
                   const subs = submissions.filter(s => s.month_key === last.month_key);
-                  const total = subs.flatMap(s => s.transactions||[]).filter(t => !IGNORED_CATEGORIES.has(t.cat)).reduce((sum,t) => sum+t.amount, 0);
+                  const total = subs.flatMap(s => s.transactions||[]).filter(t => !ignoredCats.has(t.cat)).reduce((sum,t) => sum+t.amount, 0);
                   return "₪" + Math.round(total).toLocaleString();
                 })()} color={"var(--red)"} />
               </div>
@@ -497,8 +567,8 @@ export default function ClientApp({ session, onLogout }) {
               ) : monthEntries.map(entry => {
                 const subs = submissions.filter(s => s.month_key === entry.month_key);
                 const allTx = subs.flatMap(s => s.transactions || []);
-                const total = allTx.filter(t => !IGNORED_CATEGORIES.has(t.cat)).reduce((sum, t) => sum + t.amount, 0);
-                const top3 = (Object.entries(allTx.reduce((acc: Record<string,number>,t)=>{if(!IGNORED_CATEGORIES.has(t.cat)){acc[t.cat]=(acc[t.cat]||0)+t.amount;}return acc;},{} as Record<string,number>)) as [string,number][]).sort((a,b)=>b[1]-a[1]).slice(0,3);
+                const total = allTx.filter(t => !ignoredCats.has(t.cat)).reduce((sum, t) => sum + t.amount, 0);
+                const top3 = (Object.entries(allTx.reduce((acc: Record<string,number>,t)=>{if(!ignoredCats.has(t.cat)){acc[t.cat]=(acc[t.cat]||0)+t.amount;}return acc;},{} as Record<string,number>)) as [string,number][]).sort((a,b)=>b[1]-a[1]).slice(0,3);
                 return (
                   <Card key={entry.id || entry.month_key} style={{ marginBottom:12, border:`1px solid ${entry.is_finalized?"rgba(46,204,138,0.25)":"var(--border)"}` }}>
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:10 }}>
@@ -549,8 +619,15 @@ export default function ClientApp({ session, onLogout }) {
               onDeletePortfolioSub={deletePortfolioSub}
               onCycleStartDayChange={setCycleStartDay}
               categories={categories}
+              categoryRows={categoryRows}
               clientCats={clientCats}
               onCategoryAdded={reloadCategories}
+              hiddenCats={hiddenCats}
+              onHiddenCatsChange={saveHiddenCats}
+              scenarioCats={scenarioCats}
+              ignoredCats={ignoredCats}
+              incomeCats={incomeCats}
+              categoryRules={categoryRules}
             />
           )}
 
@@ -568,6 +645,9 @@ export default function ClientApp({ session, onLogout }) {
               manualTxs={manualTxs}
               rememberedMappings={rememberedMappings}
               cycleStartDay={cycleStartDay}
+              ignoredCats={ignoredCats}
+              incomeCats={incomeCats}
+              categoryRules={categoryRules}
             />
           )}
 
@@ -580,6 +660,10 @@ export default function ClientApp({ session, onLogout }) {
               manualTxs={manualTxs}
               rememberedMappings={rememberedMappings}
               cycleStartDay={cycleStartDay}
+              ignoredCats={ignoredCats}
+              incomeCats={incomeCats}
+              fixedCats={fixedCats}
+              categoryRules={categoryRules}
             />
           )}
         </div>
@@ -591,9 +675,14 @@ export default function ClientApp({ session, onLogout }) {
           entry={activeMonth}
           subs={monthSubs}
           categories={categories}
+          categoryRows={categoryRows}
           clientCats={clientCats}
           clientId={session.id}
           onCategoryAdded={reloadCategories}
+          hiddenCats={hiddenCats}
+          onHiddenCatsChange={saveHiddenCats}
+          scenarioCats={scenarioCats}
+          ignoredCats={ignoredCats}
           onAddSource={() => openUpload(activeMonth.month_key, activeMonth.label)}
           onFinalize={finalizeMonth}
           onReopen={() => reopenMonth(activeMonth.month_key)}
@@ -763,9 +852,12 @@ export default function ClientApp({ session, onLogout }) {
                   catSearch={catSearch}
                   setCatSearch={setCatSearch}
                   categories={categories}
+                  rows={categoryRows}
                   clientCats={clientCats}
                   clientId={session.id}
                   onCategoryAdded={reloadCategories}
+                  hiddenCats={hiddenCats}
+                  onHiddenCatsChange={saveHiddenCats}
                   onSelect={(cat) => {
                     const txName = tx.name;
                     setTransactions(prev => prev.map(t =>
@@ -1441,9 +1533,9 @@ function OnboardingProgress({ subsCount, payslipsCount, total }) {
 }
 
 // ── Month Detail Screen ───────────────────────────────────────────────────────
-function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onBack, onDeleteSub, onUpdateSub, categories, clientCats, clientId, onCategoryAdded }) {
+function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onBack, onDeleteSub, onUpdateSub, categories, categoryRows = [], clientCats, clientId, onCategoryAdded, ignoredCats = IGNORED_CATEGORIES, hiddenCats = [], onHiddenCatsChange = undefined as any, scenarioCats = null as any }) {
   const allTx = subs.flatMap(s => s.transactions || []);
-  const total = allTx.filter(t => !IGNORED_CATEGORIES.has(t.cat)).reduce((sum, t) => sum + t.amount, 0);
+  const total = allTx.filter(t => !ignoredCats.has(t.cat)).reduce((sum, t) => sum + t.amount, 0);
   const catMap: Record<string, number> = {};
   allTx.forEach(t => { catMap[t.cat] = (catMap[t.cat] || 0) + t.amount; });
   const catSummary = Object.entries(catMap).sort((a,b) => b[1]-a[1]);
@@ -1544,9 +1636,13 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
                     catSearch={catSearch}
                     setCatSearch={setCatSearch}
                     categories={categories}
+                    rows={categoryRows}
                     clientCats={clientCats}
                     clientId={clientId}
                     onCategoryAdded={onCategoryAdded}
+                    hiddenCats={hiddenCats}
+                    onHiddenCatsChange={onHiddenCatsChange}
+                    scenarioCats={scenarioCats}
                     onSelect={(cat) => { setEditTx(p => p.map((t,j) => j===i?{...t,cat,edited:true}:t)); setEditCatOpen(null); setCatSearch(""); }}
                   />
                 </div>
@@ -1565,7 +1661,7 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
 
 
 // ── Portfolio Tab ─────────────────────────────────────────────────────────────
-function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, onDataChange, onMonthCreated, rememberedMappings, onRememberingAdded, cycleStartDay, importedTxs, manualTxs, onManualTxAdded, onManualTxDeleted, onUpdatePortfolioTxCat, onDeletePortfolioSub, onCycleStartDayChange, categories, clientCats, onCategoryAdded }) {
+function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, onDataChange, onMonthCreated, rememberedMappings, onRememberingAdded, cycleStartDay, importedTxs, manualTxs, onManualTxAdded, onManualTxDeleted, onUpdatePortfolioTxCat, onDeletePortfolioSub, onCycleStartDayChange, categories, categoryRows = [], clientCats, onCategoryAdded, ignoredCats = IGNORED_CATEGORIES, incomeCats = new Set<string>(), categoryRules = [] as any[], hiddenCats = [] as string[], onHiddenCatsChange = undefined as any, scenarioCats = null as any }) {
   const [tab, setTab] = useState(() => sessionStorage.getItem('mazan_portfolioTab') || "control");
   const switchPortfolioTab = (id) => { sessionStorage.setItem('mazan_portfolioTab', id); setTab(id); };
   // Lift upload state here so re-renders don't reset it
@@ -1606,8 +1702,14 @@ function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, on
           onDeletePortfolioSub={onDeletePortfolioSub}
           onNavigateToUpload={() => switchPortfolioTab("upload")}
           categories={categories}
+          categoryRows={categoryRows}
           clientCats={clientCats}
           onCategoryAdded={onCategoryAdded}
+          hiddenCats={hiddenCats}
+          onHiddenCatsChange={onHiddenCatsChange}
+          scenarioCats={scenarioCats}
+          ignoredCats={ignoredCats}
+          categoryRules={categoryRules}
         />
       )}
 
@@ -1625,8 +1727,14 @@ function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, on
           entrySubs={entrySubs} setEntrySubs={setEntrySubs}
           onMonthCreated={onMonthCreated}
           categories={categories}
+          categoryRows={categoryRows}
           clientCats={clientCats}
           onCategoryAdded={onCategoryAdded}
+          hiddenCats={hiddenCats}
+          onHiddenCatsChange={onHiddenCatsChange}
+          scenarioCats={scenarioCats}
+          ignoredCats={ignoredCats}
+          categoryRules={categoryRules}
         />
       </div>
       {tab === "control" && (
@@ -1639,6 +1747,8 @@ function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, on
           manualTxs={manualTxs || []}
           rememberedMappings={rememberedMappings || {}}
           onCycleStartDayChange={onCycleStartDayChange}
+          ignoredCats={ignoredCats}
+          categoryRules={categoryRules}
         />
       )}
       {tab === "savings" && (
@@ -1662,13 +1772,16 @@ function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, on
         manualTxs={manualTxs || []}
         rememberedMappings={rememberedMappings || {}}
         cycleStartDay={cycleStartDay || 1}
+        ignoredCats={ignoredCats}
+        incomeCats={incomeCats}
+        categoryRules={categoryRules}
       />
     </div>
   );
 }
 
 // ── Portfolio Upload Tab ──────────────────────────────────────────────────────
-function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataChange, onMonthCreated, rememberedMappings, onRememberingAdded, step, setStep, activeEntry, setActiveEntry, entrySubs, setEntrySubs, categories, clientCats, onCategoryAdded }) {
+function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataChange, onMonthCreated, rememberedMappings, onRememberingAdded, step, setStep, activeEntry, setActiveEntry, entrySubs, setEntrySubs, categories, categoryRows = [], clientCats, onCategoryAdded, ignoredCats = IGNORED_CATEGORIES, categoryRules = [] as any[], hiddenCats = [] as string[], onHiddenCatsChange = undefined as any, scenarioCats = null as any }) {
   const [showPicker, setShowPicker]   = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState([]);
   const [sourceLabel, setSourceLabel] = useState("");
@@ -1751,7 +1864,7 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
       }
       try {
         const buf = await file.arrayBuffer();
-        const parsed = parseExcelData(buf, file.name, rememberedMappings);
+        const parsed = parseExcelData(buf, file.name, rememberedMappings, categoryRules);
         allTx = allTx.concat(parsed);
         results.push({ name: file.name, count: parsed.length });
       } catch(e: any) {
@@ -1842,7 +1955,7 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
       ) : portfolioMonths.map(entry => {
         const subs = portfolioSubs.filter(s => s.month_key === entry.month_key);
         const allTx = subs.flatMap(s => s.transactions || []);
-        const total = allTx.filter(t => !IGNORED_CATEGORIES.has(t.cat)).reduce((sum,t) => sum+t.amount, 0);
+        const total = allTx.filter(t => !ignoredCats.has(t.cat)).reduce((sum,t) => sum+t.amount, 0);
         return (
           <Card key={entry.month_key} style={{ marginBottom:10, border:`1px solid ${entry.is_finalized?"rgba(46,204,138,0.25)":"var(--border)"}` }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
@@ -1872,7 +1985,7 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
   if (step === "month") {
     if (!activeEntry) return <div style={{color:"var(--text-dim)",padding:32,textAlign:"center"}}><Spinner /></div>;
     const allTx = entrySubs.flatMap(s => s.transactions || []);
-    const total = allTx.filter(t => !IGNORED_CATEGORIES.has(t.cat)).reduce((sum,t) => sum+t.amount, 0);
+    const total = allTx.filter(t => !ignoredCats.has(t.cat)).reduce((sum,t) => sum+t.amount, 0);
     const catMap: Record<string, number> = {};
     allTx.forEach(t => { catMap[t.cat] = (catMap[t.cat]||0)+t.amount; });
 
@@ -2093,9 +2206,12 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
               catSearch={catSearch}
               setCatSearch={setCatSearch}
               categories={categories}
+              rows={categoryRows}
               clientCats={clientCats}
               clientId={clientId}
               onCategoryAdded={onCategoryAdded}
+              hiddenCats={hiddenCats}
+              onHiddenCatsChange={onHiddenCatsChange}
               onSelect={(cat) => {
                 const txName = tx.name;
                 setTransactions(p => p.map(t =>
@@ -2140,7 +2256,7 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
 // ── assignBillingMonth ────────────────────────────────────────────────────────
 // date: "DD/MM/YYYY" or "YYYY-MM-DD" → "YYYY-MM" based on cycleStartDay
 
-function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleStartDay, importedTxs, manualTxs, rememberedMappings, onCycleStartDayChange }) {
+function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleStartDay, importedTxs, manualTxs, rememberedMappings, onCycleStartDayChange, ignoredCats = IGNORED_CATEGORIES, categoryRules = [] as any[] }) {
   const NOW_YEAR  = new Date().getFullYear();
   const NOW_MONTH = new Date().getMonth() + 1; // 1–12
   const NOW_DAY   = new Date().getDate();
@@ -2177,23 +2293,23 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
       const mk = sub.month_key;
       if (!mk) return;
       (sub.transactions || []).forEach(tx => {
-        if (IGNORED_CATEGORIES.has(tx.cat)) return;
-        result.push({ mk, cat: tx.cat || "אחר-משתנה", amount: Number(tx.amount || 0), name: tx.name || "", date: tx.date || "", source: sub.source_label || "קובץ" });
+        if (ignoredCats.has(tx.cat)) return;
+        result.push({ mk, cat: tx.cat || "הוצאות לא מתוכננות", amount: Number(tx.amount || 0), name: tx.name || "", date: tx.date || "", source: sub.source_label || "קובץ" });
       });
     });
     (importedTxs || []).forEach(tx => {
       if ((tx.amount || 0) <= 0) return;
       const mk = tx.billing_month || assignBillingMonth(tx.date, cycleStartDay || 1);
       if (!mk) return;
-      const { cat } = classifyTx(tx.name, tx.max_category, rememberedMappings || {});
-      if (IGNORED_CATEGORIES.has(cat)) return;
+      const cat = tx.cat || classifyTx(tx.name, tx.max_category, rememberedMappings || {}, categoryRules).cat;
+      if (ignoredCats.has(cat)) return;
       result.push({ mk, cat, amount: Number(tx.amount || 0), name: tx.name || "", date: tx.date || "", source: "מקס" });
     });
     (manualTxs || []).forEach(tx => {
       if ((tx.amount || 0) <= 0) return;
       const mk = tx.billing_month;
       if (!mk) return;
-      if (IGNORED_CATEGORIES.has(tx.cat)) return;
+      if (ignoredCats.has(tx.cat)) return;
       result.push({ mk, cat: tx.cat, amount: Number(tx.amount || 0), name: tx.name || "", date: tx.date || "", source: tx.payment_method ? `ידני — ${tx.payment_method}` : "ידני" });
     });
     return result;
@@ -2254,8 +2370,8 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
       const mk = sub.month_key;
       if (!mk || +mk.split('-')[0] !== currentYear) return;
       (sub.transactions || []).forEach(tx => {
-        if (IGNORED_CATEGORIES.has(tx.cat)) return;
-        add(mk, tx.cat || "אחר-משתנה", tx.amount || 0);
+        if (ignoredCats.has(tx.cat)) return;
+        add(mk, tx.cat || "הוצאות לא מתוכננות", tx.amount || 0);
       });
     });
     // From imported transactions (classify on the fly)
@@ -2263,8 +2379,8 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
       if ((tx.amount || 0) <= 0) return;
       const mk = tx.billing_month || assignBillingMonth(tx.date, cycleStartDay || 1);
       if (!mk || +mk.split('-')[0] !== currentYear) return;
-      const { cat } = classifyTx(tx.name, tx.max_category, rememberedMappings || {});
-      if (IGNORED_CATEGORIES.has(cat)) return;
+      const cat = tx.cat || classifyTx(tx.name, tx.max_category, rememberedMappings || {}, categoryRules).cat;
+      if (ignoredCats.has(cat)) return;
       add(mk, cat, tx.amount);
     });
     // From manual transactions
@@ -2272,7 +2388,7 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
       if ((tx.amount || 0) <= 0) return;
       const mk = tx.billing_month;
       if (!mk || +mk.split('-')[0] !== currentYear) return;
-      if (IGNORED_CATEGORIES.has(tx.cat)) return;
+      if (ignoredCats.has(tx.cat)) return;
       add(mk, tx.cat, tx.amount);
     });
     return map;
@@ -2332,6 +2448,23 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
     return <div style={{ textAlign: "center", padding: 40, color: "var(--text-dim)" }}>טוען...</div>;
 
   const noScenarioForYear = scenarioItems.length === 0;
+
+  // ── קטגוריות עם הוצאות שאינן בתסריט ────────────────────────────────────
+  const scenarioCatSet = new Set(scenarioItems.map(x => x.category_name));
+  const missingCats: { cat: string; total: number }[] = (() => {
+    const allCatsInTxs = new Set<string>();
+    Object.values(txMap).forEach(monthData => {
+      Object.keys(monthData as Record<string, number>).forEach(cat => allCatsInTxs.add(cat));
+    });
+    const result: { cat: string; total: number }[] = [];
+    allCatsInTxs.forEach(cat => {
+      if (!scenarioCatSet.has(cat)) {
+        const total = getSum(cat);
+        if (total > 0) result.push({ cat, total });
+      }
+    });
+    return result.sort((a, b) => b.total - a.total);
+  })();
 
   const income   = scenarioItems.filter(x => x.item_type === "income");
   const fixed    = scenarioItems.filter(x => x.item_type === "expense_fixed");
@@ -2460,6 +2593,45 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
 
   return (
     <>
+    {/* ── פאנל: קטגוריות לא מתוכננות ── */}
+    {missingCats.length > 0 && (
+      <div style={{
+        position: "fixed", left: 16, top: "50%", transform: "translateY(-50%)",
+        width: 220, zIndex: 500,
+        background: "var(--surface)", border: "1px solid var(--red)55",
+        borderRadius: 12, boxShadow: "0 4px 20px rgba(0,0,0,0.25)",
+        overflow: "hidden",
+      }}>
+        <div style={{
+          background: "rgba(247,92,92,0.12)", padding: "10px 14px",
+          borderBottom: "1px solid var(--red)33",
+          display: "flex", alignItems: "center", gap: 8,
+        }}>
+          <span style={{ fontSize: 15 }}>⚠️</span>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--red)" }}>קטגוריות לא בתסריט</div>
+            <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 1 }}>יש הוצאות ללא תכנון</div>
+          </div>
+        </div>
+        <div style={{ maxHeight: 280, overflowY: "auto", padding: "8px 0" }}>
+          {missingCats.map(({ cat, total }) => (
+            <div key={cat} style={{
+              display: "flex", justifyContent: "space-between", alignItems: "center",
+              padding: "6px 14px", borderBottom: "1px solid var(--border)44", fontSize: 12,
+            }}>
+              <span style={{ color: "var(--text)", flex: 1, marginLeft: 8 }}>{cat}</span>
+              <span style={{ fontWeight: 700, color: "var(--red)", whiteSpace: "nowrap" }}>
+                ₪{Math.round(total).toLocaleString()}
+              </span>
+            </div>
+          ))}
+        </div>
+        <div style={{ padding: "8px 14px", fontSize: 10, color: "var(--text-dim)", borderTop: "1px solid var(--border)44", textAlign: "center" }}>
+          עבור למאזן מתוכנן להוסיף
+        </div>
+      </div>
+    )}
+
     <div>
       {/* ── יום תחילת המחזור החודשי ── */}
       <Card style={{ marginBottom:16, padding:"12px 18px", background:"var(--surface2)", border:"1px solid var(--border)" }}>
@@ -2517,8 +2689,12 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
               {numActive > 0 && <span style={{ color: "var(--text-dim)", marginRight: 8 }}>· {numActive} חודשים עם נתונים</span>}
             </div>
           ) : (
-            <div style={{ padding: "5px 12px", background: "var(--surface2)", borderRadius: 8, border: "1px solid var(--border)", fontSize: 12, color: "var(--text-dim)" }}>
-              אין תסריט פעיל לשנה זו
+            <div style={{ padding: "5px 12px", background: "rgba(251,191,36,0.1)", borderRadius: 8, border: "1px solid rgba(251,191,36,0.4)", fontSize: 12, color: "var(--gold)", display: "flex", alignItems: "center", gap: 8 }}>
+              ⚠️ לא נבחר תסריט לשנה זו
+              <button onClick={() => { /* navigate to scenario tab */ const el = document.querySelector('[data-tab="scenarios"]') as HTMLElement; el?.click(); }}
+                style={{ padding: "2px 10px", borderRadius: 6, border: "1px solid rgba(251,191,36,0.5)", background: "rgba(251,191,36,0.15)", color: "var(--gold)", fontSize: 11, cursor: "pointer", fontFamily: "inherit", fontWeight: 700 }}>
+                בחר תסריט
+              </button>
             </div>
           )}
           {(cycleStartDay || 1) > 1 && (
@@ -2540,7 +2716,7 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
       )}
 
       {/* Table */}
-      <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 280px)", borderRadius: 12, border: "1px solid var(--border)" }}>
+      <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid var(--border)" }}>
         <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12, direction: "rtl" }}>
           <thead>
             <tr>
@@ -2730,7 +2906,7 @@ function RememberModal({ pendingRemember, onAlways, onThisSession, onJustHere })
 // ════════════════════════════════════════════════════════════════
 // normalizeAllTxs — ממזג תנועות משני מקורות לפורמט אחיד
 // ════════════════════════════════════════════════════════════════
-function normalizeAllTxs(portfolioSubs, importedTxs, rememberedMappings, cycleStartDay, manualTxs = []) {
+function normalizeAllTxs(portfolioSubs, importedTxs, rememberedMappings, cycleStartDay, manualTxs = [], categoryRules: any[] = []) {
   const result = [];
   portfolioSubs.forEach(sub => {
     (sub.transactions || []).forEach((tx, idx) => {
@@ -2739,7 +2915,7 @@ function normalizeAllTxs(portfolioSubs, importedTxs, rememberedMappings, cycleSt
         _uid: `sub-${sub.id}-${idx}`,
         date: tx.date || "",
         name: tx.name || "",
-        cat: tx.cat || classifyTx(tx.name || "", tx.max_category || "", rememberedMappings).cat,
+        cat: tx.cat || classifyTx(tx.name || "", tx.max_category || "", rememberedMappings, categoryRules).cat,
         amount: Number(tx.amount || 0),
         billing_month: billing,
         source: "file",
@@ -2757,7 +2933,7 @@ function normalizeAllTxs(portfolioSubs, importedTxs, rememberedMappings, cycleSt
       _uid: `imp-${tx.id}`,
       date: tx.date || "",
       name: tx.name || "",
-      cat: classifyImported(tx, rememberedMappings),
+      cat: classifyImported(tx, rememberedMappings, categoryRules),
       amount: Number(tx.amount || 0),
       billing_month: tx.billing_month || assignBillingMonth(tx.date, cycleStartDay),
       source: "ext",
@@ -2779,7 +2955,7 @@ function normalizeAllTxs(portfolioSubs, importedTxs, rememberedMappings, cycleSt
       billing_month: tx.billing_month,
       source: "manual",
       source_label: tx.payment_method ? `ידני — ${tx.payment_method}` : "ידני",
-      conf: "high",
+      conf: tx.conf || "high",
       edited: false,
       type: tx.type,
       _submissionId: null,
@@ -2796,12 +2972,12 @@ function normalizeAllTxs(portfolioSubs, importedTxs, rememberedMappings, cycleSt
 function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, rememberedMappings, onDataChange,
   onManualTxAdded, onManualTxDeleted,
   cycleStartDay, onCycleStartDayChange, onUpdatePortfolioTxCat, onDeletePortfolioSub, onNavigateToUpload,
-  categories, clientCats, onCategoryAdded }) {
+  categories, categoryRows = [], clientCats, onCategoryAdded, ignoredCats = IGNORED_CATEGORIES, categoryRules = [] as any[], hiddenCats = [] as string[], onHiddenCatsChange = undefined as any, scenarioCats = null as any }) {
   // ── Derived transaction list (useMemo keeps it in sync with props automatically) ──
   const [localEdits, setLocalEdits] = useState<Map<string, string>>(new Map());
   const [deletedUids, setDeletedUids] = useState<Set<string>>(new Set());
   const allTxs = useMemo(() => {
-    const fresh = normalizeAllTxs(portfolioSubs, importedTxs, rememberedMappings, cycleStartDay, manualTxs);
+    const fresh = normalizeAllTxs(portfolioSubs, importedTxs, rememberedMappings, cycleStartDay, manualTxs, categoryRules);
     return fresh
       .filter(t => !deletedUids.has(t._uid))
       .map(t => localEdits.has(t._uid) ? { ...t, cat: localEdits.get(t._uid)!, edited: true } : t);
@@ -3021,7 +3197,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
   });
   const cycleKeys = Object.keys(byCycle).sort().reverse();
   const providerLabels = [...new Set(allTxs.map(t => t.source_label).filter(Boolean))];
-  const totalAmount = filteredTxs.filter(t => !IGNORED_CATEGORIES.has(t.cat)).reduce((s,t) => s + Number(t.amount||0), 0);
+  const totalAmount = filteredTxs.filter(t => !ignoredCats.has(t.cat)).reduce((s,t) => s + Number(t.amount||0), 0);
 
   // ── ייצוא Excel ──────────────────────────────────────────────────────────────
   const exportToExcel = () => {
@@ -3032,7 +3208,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
     cycleKeys.forEach(key => {
       const label = getCycleLabel(key, cycleStartDay);
       const cycleTxs = byCycle[key] || [];
-      const cycleTotal = cycleTxs.filter(t => !IGNORED_CATEGORIES.has(t.cat)).reduce((s,t) => s + Number(t.amount||0), 0);
+      const cycleTotal = cycleTxs.filter(t => !ignoredCats.has(t.cat)).reduce((s,t) => s + Number(t.amount||0), 0);
       detailRows.push({ "חודש": label, "שם בית עסק": "", "מקור": "", "קטגוריה": "", "סכום": "", "סה\"כ חודש": Math.round(cycleTotal) });
       cycleTxs.forEach(t => {
         detailRows.push({ "חודש": label, "שם בית עסק": t.name, "מקור": t.source_label, "קטגוריה": t.cat || "לא מסווג", "סכום": Number(t.amount), "סה\"כ חודש": "" });
@@ -3041,7 +3217,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
       detailRows.push({});
     });
     const summaryRows = [];
-    const allCats = [...new Set(filteredTxs.map(t => t.cat).filter(c => c && !IGNORED_CATEGORIES.has(c)))].sort();
+    const allCats = [...new Set(filteredTxs.map(t => t.cat).filter(c => c && !ignoredCats.has(c)))].sort();
     allCats.forEach(cat => {
       const row = { "קטגוריה": cat };
       cycleKeys.forEach(k => {
@@ -3052,7 +3228,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
     });
     const totalRow = { "קטגוריה": "סה\"כ" };
     cycleKeys.forEach(k => {
-      const sum = (byCycle[k]||[]).filter(t => !IGNORED_CATEGORIES.has(t.cat)).reduce((s,t) => s + Number(t.amount||0), 0);
+      const sum = (byCycle[k]||[]).filter(t => !ignoredCats.has(t.cat)).reduce((s,t) => s + Number(t.amount||0), 0);
       totalRow[getCycleLabel(k, cycleStartDay)] = Math.round(sum);
     });
     summaryRows.push(totalRow);
@@ -3061,8 +3237,38 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
     XLSX.writeFile(wb, `מאזן_כל_התנועות.xlsx`);
   };
 
+  // תנועות מזומן שממתינות לסיווג (conf !== 'high' ומקור ידני)
+  const pendingClassification = allTxs.filter(t =>
+    t.source === "manual" && t.conf && t.conf !== "high"
+  );
+
   return (
     <div>
+      {/* באנר תנועות ממתינות לסיווג */}
+      {pendingClassification.length > 0 && (
+        <div style={{
+          background: "rgba(247,92,92,0.1)", border: "1.5px solid var(--red)",
+          borderRadius: 10, padding: "12px 16px", marginBottom: 16,
+          display: "flex", alignItems: "center", gap: 12,
+        }}>
+          <span style={{ fontSize: 20 }}>🔴</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, color: "var(--red)", fontSize: 14 }}>
+              {pendingClassification.length} תנועות מזומן ממתינות לסיווג
+            </div>
+            <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 2 }}>
+              נרשמו דרך וואטסאפ ולא סווגו אוטומטית — יש לסווג אותן לפני סגירת החודש
+            </div>
+          </div>
+          <button
+            onClick={() => setFilterSource("manual")}
+            style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--red)", background: "transparent", color: "var(--red)", fontSize: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}
+          >
+            הצג →
+          </button>
+        </div>
+      )}
+
       {/* Confirm Delete Modal */}
       {confirmDelete && (
         <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.45)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center" }}
@@ -3239,8 +3445,8 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
           if (va > vb) return dir === "asc" ? 1 : -1;
           return 0;
         });
-        const activeTxs = sortedCycleTxs.filter(t => !IGNORED_CATEGORIES.has(t.cat));
-        const ignoredTxs = sortedCycleTxs.filter(t => IGNORED_CATEGORIES.has(t.cat));
+        const activeTxs = sortedCycleTxs.filter(t => !ignoredCats.has(t.cat));
+        const ignoredTxs = sortedCycleTxs.filter(t => ignoredCats.has(t.cat));
         const cycleTotal = activeTxs.reduce((s,t) => s + Number(t.amount||0), 0);
         const catMap: Record<string, number> = {};
         activeTxs.forEach(t => { catMap[t.cat] = (catMap[t.cat]||0) + Number(t.amount||0); });
@@ -3252,10 +3458,12 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
         const submissionIds = [...new Set(cycleTxs.filter(t => t.source === "file").map(t => t._submissionId))];
         const hasExtTxs = cycleTxs.some(t => t.source === "ext");
 
-        const renderTxRow = (tx, isIgnored) => (
+        const renderTxRow = (tx, isIgnored) => {
+          const needsClassification = tx.source === "manual" && tx.conf && tx.conf !== "high";
+          return (
           <Card key={tx._uid} style={{ marginBottom:6, padding:"10px 14px",
-            background: isIgnored ? "rgba(180,180,180,0.08)" : undefined,
-            borderRight: isIgnored ? "3px solid var(--text-dim)" : undefined }}>
+            background: needsClassification ? "rgba(247,92,92,0.06)" : isIgnored ? "rgba(180,180,180,0.08)" : undefined,
+            borderRight: needsClassification ? "3px solid var(--red)" : isIgnored ? "3px solid var(--text-dim)" : undefined }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
               <div style={{ flex:1 }}>
                 <div style={{ fontWeight:600, fontSize:14,
@@ -3298,10 +3506,16 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
             </div>
             {activeTxUid === tx._uid && (
               <CategoryPicker current={tx.cat} catSearch={catSearch} setCatSearch={setCatSearch}
-                categories={categories} clientCats={clientCats} clientId={clientId} onCategoryAdded={onCategoryAdded}
+                categories={categories} rows={categoryRows} clientCats={clientCats} clientId={clientId} onCategoryAdded={onCategoryAdded}
+                hiddenCats={hiddenCats} onHiddenCatsChange={onHiddenCatsChange} scenarioCats={scenarioCats}
                 onSelect={async (cat) => {
                   if (tx.source === "ext") {
-                    // update all ext txs with same business name (optimistic)
+                    // update ALL imported txs with same business name so they all persist
+                    await supabase.from("imported_transactions")
+                      .update({ cat })
+                      .eq("client_id", clientId)
+                      .eq("name", tx.name);
+                    // optimistically update all ext txs with same business name in UI
                     setLocalEdits(prev => {
                       const next = new Map(prev);
                       allTxs.filter(t => t.source === "ext" && t.name === tx.name).forEach(t => next.set(t._uid, cat));
@@ -3310,7 +3524,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                     setPendingRemember({ name: tx.name, cat });
                   } else if (tx.source === "manual") {
                     const oldCat = tx.cat;
-                    await supabase.from("manual_transactions").update({ cat }).eq("id", tx._dbId);
+                    await supabase.from("manual_transactions").update({ cat, conf: "high" }).eq("id", tx._dbId);
                     await supabase.from("client_change_log").insert([{ client_id: clientId, event_type: "remap_business", details: { business_name: tx.name, from_cat: oldCat, to_cat: cat } }]);
                     setLocalEdits(prev => { const next = new Map(prev); next.set(tx._uid, cat); return next; });
                   } else {
@@ -3322,7 +3536,8 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
               />
             )}
           </Card>
-        );
+          );
+        };
 
         return (
           <div key={key} style={{ marginBottom:16 }}>
@@ -3394,12 +3609,38 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                     );
                   })}
                 </div>
-                {activeTxs.map(tx => renderTxRow(tx, false))}
+                {(() => {
+                  // קיבוץ לפי source_label
+                  const groups: { label: string; source: string; txs: typeof activeTxs }[] = [];
+                  activeTxs.forEach(tx => {
+                    const lbl = tx.source_label || (tx.source === "ext" ? "מקס" : tx.source === "manual" ? "ידני" : "קובץ");
+                    const existing = groups.find(g => g.label === lbl);
+                    if (existing) existing.txs.push(tx);
+                    else groups.push({ label: lbl, source: tx.source, txs: [tx] });
+                  });
+                  return groups.map(g => (
+                    <div key={g.label}>
+                      <div style={{ display:"flex", alignItems:"center", gap:8, margin:"10px 0 6px", padding:"4px 8px", borderRadius:8,
+                        background: g.source === "ext" ? "rgba(79,142,247,0.07)" : g.source === "manual" ? "rgba(251,191,36,0.07)" : "rgba(46,204,138,0.07)" }}>
+                        <span style={{ fontSize:13, fontWeight:700,
+                          color: g.source === "ext" ? "var(--green-mid)" : g.source === "manual" ? "var(--gold)" : "var(--green-deep)" }}>
+                          {g.source === "ext" ? "💳" : g.source === "manual" ? "✏️" : "📁"} {g.label}
+                        </span>
+                        <span style={{ fontSize:11, color:"var(--text-dim)" }}>{g.txs.length} תנועות</span>
+                        <span style={{ fontSize:12, fontWeight:600, marginRight:"auto",
+                          color: g.source === "ext" ? "var(--green-mid)" : g.source === "manual" ? "var(--gold)" : "var(--green-deep)" }}>
+                          ₪{Math.round(g.txs.reduce((s,t) => s + (t.type==="income"?-1:1)*Number(t.amount||0), 0)).toLocaleString()}
+                        </span>
+                      </div>
+                      {g.txs.map(tx => renderTxRow(tx, false))}
+                    </div>
+                  ));
+                })()}
                 {/* Hidden transactions */}
                 {ignoredTxs.length > 0 && (
                   <>
                     <div style={{ marginTop:8, marginBottom:4, display:"flex", alignItems:"center", gap:8 }}>
-                      <span style={{ fontSize:11, color:"var(--text-dim)" }} title={`קטגוריות מוסתרות: ${[...IGNORED_CATEGORIES].join(", ")}`}>
+                      <span style={{ fontSize:11, color:"var(--text-dim)" }} title={`קטגוריות מוסתרות: ${[...ignoredCats].join(", ")}`}>
                         🚫 {ignoredTxs.length} תנועות מוסתרות (קטגוריות מסוננות)
                       </span>
                       <button onClick={() => setIgnoredOpen(p => ({ ...p, [key]: !p[key] }))}
@@ -3590,7 +3831,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
             {!isOpen && idx < cycleKeys.length - 1 && (
               <div style={{ textAlign:"center", padding:"4px 0 10px", fontSize:12, color:"var(--text-dim)", borderBottom:"1px dashed var(--border)", marginBottom:8 }}>
                 סה"כ עד כאן: ₪{Math.round(
-                  cycleKeys.slice(0, idx+1).flatMap(k => (byCycle[k]||[]).filter(t => !IGNORED_CATEGORIES.has(t.cat)))
+                  cycleKeys.slice(0, idx+1).flatMap(k => (byCycle[k]||[]).filter(t => !ignoredCats.has(t.cat)))
                     .reduce((s,t) => s + Number(t.amount||0), 0)
                 ).toLocaleString()}
               </div>
@@ -3603,8 +3844,9 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
 }
 
 // ── Classify imported transaction — uses same logic as file upload ─────────────
-function classifyImported(tx, rememberedMappings) {
-  const result = classifyTx(tx.name, tx.max_category || "", rememberedMappings);
+function classifyImported(tx, rememberedMappings, categoryRules = []) {
+  if (tx.cat) return tx.cat; // user manually set — respect it
+  const result = classifyTx(tx.name, tx.max_category || "", rememberedMappings, categoryRules);
   return result.cat;
 }
 
