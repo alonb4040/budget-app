@@ -282,15 +282,17 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          {activeScenario && (
+          {activeScenario && scenarios.length > 0 && (
             <div style={{ fontSize: 13, color: "var(--text-dim)" }}>
               פעיל: <strong style={{ color: "var(--green-deep)" }}>{activeScenario.scenarios?.name}</strong>
               <span style={{ marginRight: 6 }}>מ-{activeScenario.active_from}</span>
             </div>
           )}
-          <Btn size="sm" variant={activeScenario ? "secondary" : "primary"} onClick={() => setView("activate")}>
-            {activeScenario ? "שנה תסריט פעיל" : "בחר תסריט פעיל"}
-          </Btn>
+          {scenarios.length > 0 && (
+            <Btn size="sm" variant={activeScenario ? "secondary" : "primary"} onClick={() => setView("activate")}>
+              {activeScenario ? "שנה תסריט פעיל" : "בחר תסריט פעיל"}
+            </Btn>
+          )}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <Btn size="sm" onClick={() => fileRef.current?.click()}>⬆️ ייבא מ-Excel</Btn>
