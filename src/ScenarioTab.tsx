@@ -169,7 +169,7 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
     setLoading(true);
     const [{ data: sc }, { data: ac }] = await Promise.all([
       supabase.from("scenarios").select("*").eq("client_id", client.id).order("uploaded_at", { ascending: false }),
-      supabase.from("active_scenario").select("*, scenarios(name)").eq("client_id", client.id).maybeSingle(),
+      supabase.from("active_scenario").select("*, scenarios(name)").eq("client_id", client.id).order("activated_at", { ascending: false }).limit(1).maybeSingle(),
     ]);
     setScenarios((sc || []) as ScenarioRow[]);
     setActiveScenario((ac as ActiveScenario | null) || null);
@@ -439,6 +439,8 @@ function ScenarioTableView({ scenarios, activeScenarioId, clientId, onDelete, on
   const handleActivate = async () => {
     if (!activateModal) return;
     setActivating(true);
+    // מחק רשומות ישנות ואז הכנס חדשה
+    await supabase.from("active_scenario").delete().eq("client_id", clientId);
     await supabase.from("active_scenario").insert([{
       client_id: clientId,
       scenario_id: activateModal.id,
