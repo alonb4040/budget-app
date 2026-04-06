@@ -472,9 +472,9 @@ function ScenarioTableView({ scenarios, activeScenarioId, clientId, onDelete, on
                   padding: "7px 18px", borderRadius: 20, fontSize: 14,
                   fontWeight: isSelected ? 700 : 500, cursor: "pointer", fontFamily: "inherit",
                   transition: "all 0.15s", position: "relative",
-                  border: `2px solid ${isActive ? "var(--green-mid)" : isSelected ? "#6b7280" : "var(--border)"}`,
-                  background: isActive ? "var(--green-mid)" : isSelected ? "#6b7280" : "var(--surface2)",
-                  color: isSelected ? "#fff" : "var(--text-mid)",
+                  border: `2px solid ${isActive ? "var(--green-mid)" : isSelected && activeScenarioId ? "#6b7280" : "var(--border)"}`,
+                  background: isActive ? "var(--green-mid)" : isSelected && activeScenarioId ? "#6b7280" : "var(--surface2)",
+                  color: (isActive || (isSelected && activeScenarioId)) ? "#fff" : "var(--text-mid)",
                 }}>
                   {sc.name}
                   {isActive && (
