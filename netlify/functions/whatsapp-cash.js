@@ -1,14 +1,7 @@
-// netlify/functions/whatsapp-cash-meta.js
+// netlify/functions/whatsapp-cash.js
 //
-// מקבל webhook מ-Meta Cloud API (WhatsApp Business),
-// מפרסר הוצאת מזומן, מסווג לפי קטגוריות הלקוח ושומר ב-manual_transactions.
-//
-// משתני סביבה נדרשים (בנטליפי):
-//   REACT_APP_SUPABASE_URL
-//   SUPABASE_SERVICE_ROLE_KEY
-//   WHATSAPP_TOKEN          — access token מ-Meta Developer Console
-//   WHATSAPP_VERIFY_TOKEN   — מחרוזת סודית שאתה בוחר (לאימות webhook)
-//   WHATSAPP_PHONE_NUMBER_ID — Phone Number ID מ-Meta Developer Console
+// מקבל webhook מ-Twilio WhatsApp, מפרסר הוצאת מזומן,
+// מסווג לפי הקטגוריות של הלקוח ושומר ב-manual_transactions.
 //
 // פורמט הודעה נתמך:
 //   "קפה 18"                        → שם: קפה, סכום: 18
@@ -19,36 +12,22 @@
 
 const { createClient } = require("@supabase/supabase-js");
 
-const SUPABASE_URL        = process.env.REACT_APP_SUPABASE_URL;
-const SUPABASE_SERVICE_KEY= process.env.SUPABASE_SERVICE_ROLE_KEY;
-const WA_TOKEN            = process.env.WHATSAPP_TOKEN;
-const WA_VERIFY_TOKEN     = process.env.WHATSAPP_VERIFY_TOKEN;
-const WA_PHONE_NUMBER_ID  = process.env.WHATSAPP_PHONE_NUMBER_ID;
+const SUPABASE_URL      = process.env.REACT_APP_SUPABASE_URL;
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// ── שליחת הודעה חזרה ללקוח דרך Meta API ─────────────────────────────────────
-async function sendWhatsApp(to, text) {
-  await fetch(
-    `https://graph.facebook.com/v19.0/${WA_PHONE_NUMBER_ID}/messages`,
-    {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${WA_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        messaging_product: "whatsapp",
-        to,
-        type: "text",
-        text: { body: text },
-      }),
-    }
-  );
+// ── TwiML response helper ────────────────────────────────────────────────────
+function twiml(msg) {
+  return {
+    statusCode: 200,
+    headers: { "Content-Type": "text/xml" },
+    body: `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${msg}</Message></Response>`,
+  };
 }
 
 // ── נרמול מספר טלפון ─────────────────────────────────────────────────────────
-// Meta שולח "972501234567" (ללא +) — נמיר ל-"0501234567" לחיפוש ב-DB
+// Twilio שולח "whatsapp:+972501234567" — נמיר ל-"0501234567"
 function normalizePhone(raw) {
-  const digits = (raw || "").replace(/\D/g, "");
+  const digits = raw.replace(/\D/g, ""); // רק ספרות
   if (digits.startsWith("972")) return "0" + digits.slice(3);
   return digits;
 }
@@ -59,6 +38,7 @@ function parseMessage(text) {
   const t = (text || "").trim();
   if (!t) return null;
 
+  // הוצא הערה אחרי מילת "הערה"
   let note = null;
   let body = t;
   const noteMatch = t.match(/הערה[:\s]+(.+)$/iu);
@@ -67,6 +47,7 @@ function parseMessage(text) {
     body = t.slice(0, noteMatch.index).trim();
   }
 
+  // מצא את הסכום — המספר הראשון (כולל עשרוני)
   const numMatch = body.match(/(\d+(?:\.\d+)?)/);
   if (!numMatch) return null;
 
@@ -75,13 +56,16 @@ function parseMessage(text) {
 
   const before = body.slice(0, numMatch.index).trim();
   const after  = body.slice(numMatch.index + numMatch[0].length).trim();
-  const name   = before || after;
+
+  // שם = מה שלפני הסכום, אם ריק — מה שאחריו
+  const name = before || after;
   if (!name) return null;
 
   return { name, amount, note };
 }
 
 // ── חישוב billing_month לפי יום איפוס ───────────────────────────────────────
+// זהה ללוגיקת assignBillingMonth ב-data.ts
 function assignBillingMonth(dateStr, cycleStartDay) {
   if (!dateStr) return null;
   const d   = new Date(dateStr);
@@ -96,7 +80,7 @@ function assignBillingMonth(dateStr, cycleStartDay) {
   return `${year}-${String(month).padStart(2, "0")}`;
 }
 
-// ── סיווג תנועה ──────────────────────────────────────────────────────────────
+// ── סיווג תנועה (מקביל ל-classifyTx ב-data.ts) ──────────────────────────────
 function classifyTx(name, rememberedMappings, rules) {
   if (rememberedMappings[name]) return { cat: rememberedMappings[name], conf: "high" };
   const nl = (name || "").toLowerCase();
@@ -130,44 +114,24 @@ const HELP_MSG = `💡 *איך לרשום הוצאת מזומן:*
 
 // ── Handler ───────────────────────────────────────────────────────────────────
 exports.handler = async (event) => {
-
-  // ── אימות Webhook (GET) — Meta שולחת בעת ההגדרה הראשונה ────────────────────
-  if (event.httpMethod === "GET") {
-    const p = event.queryStringParameters || {};
-    if (p["hub.mode"] === "subscribe" && p["hub.verify_token"] === WA_VERIFY_TOKEN) {
-      return { statusCode: 200, body: p["hub.challenge"] };
-    }
-    return { statusCode: 403, body: "Forbidden" };
-  }
-
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method Not Allowed" };
   }
 
-  // ── פרסור ה-payload של Meta ──────────────────────────────────────────────────
-  let payload;
-  try { payload = JSON.parse(event.body || "{}"); } catch { return { statusCode: 200, body: "OK" }; }
-
-  const message = payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-
-  // התעלם מ-status updates ומהודעות שאינן טקסט
-  if (!message || message.type !== "text") {
-    return { statusCode: 200, body: "OK" };
-  }
-
-  const fromRaw = message.from;          // "972501234567"
-  const body    = (message.text?.body || "").trim();
-
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+
+  // פרסור body מ-Twilio (application/x-www-form-urlencoded)
+  const params = Object.fromEntries(new URLSearchParams(event.body));
+  const rawFrom = params.From || "";   // "whatsapp:+972501234567"
+  const body    = (params.Body || "").trim();
 
   // עזרה
   if (/^(עזרה|help|הוראות)$/i.test(body)) {
-    await sendWhatsApp(fromRaw, HELP_MSG);
-    return { statusCode: 200, body: "OK" };
+    return twiml(HELP_MSG);
   }
 
   // זיהוי לקוח לפי מספר טלפון
-  const phone = normalizePhone(fromRaw);
+  const phone = normalizePhone(rawFrom);
   const { data: client } = await supabase
     .from("clients")
     .select("id, name, cycle_start_day")
@@ -175,15 +139,13 @@ exports.handler = async (event) => {
     .maybeSingle();
 
   if (!client) {
-    await sendWhatsApp(fromRaw, "❌ המספר שלך לא מזוהה במערכת. פנה ליועץ שלך להוספה.");
-    return { statusCode: 200, body: "OK" };
+    return twiml("❌ המספר שלך לא מזוהה במערכת. פנה ליועץ שלך להוספה.");
   }
 
   // פרסור ההודעה
   const parsed = parseMessage(body);
   if (!parsed) {
-    await sendWhatsApp(fromRaw, `❌ לא הבנתי. נסה לכתוב: *שם + סכום* (לדוגמה: קפה 18)\nלהוראות מלאות כתוב: עזרה`);
-    return { statusCode: 200, body: "OK" };
+    return twiml(`❌ לא הבנתי. נסה לכתוב: *שם + סכום* (לדוגמה: קפה 18)\nלהוראות מלאות כתוב: עזרה`);
   }
 
   const { name, amount, note } = parsed;
@@ -200,27 +162,26 @@ exports.handler = async (event) => {
   const { cat, conf } = classifyTx(name, rememberedMappings, rules || []);
 
   // חישוב תאריך ו-billing_month
-  const today        = new Date().toISOString().slice(0, 10);
+  const today = new Date().toISOString().slice(0, 10);
   const billingMonth = assignBillingMonth(today, client.cycle_start_day || 1);
 
   // שמירה ב-manual_transactions
   const { error } = await supabase.from("manual_transactions").insert([{
-    client_id:      client.id,
-    date:           today,
+    client_id:     client.id,
+    date:          today,
     name,
     amount,
     cat,
     conf,
-    note:           note || null,
-    type:           "expense",
+    note:          note || null,
+    type:          "expense",
     payment_method: "מזומן",
-    billing_month:  billingMonth,
+    billing_month: billingMonth,
   }]);
 
   if (error) {
     console.error("DB error:", error);
-    await sendWhatsApp(fromRaw, "❌ שגיאה בשמירה, נסה שוב.");
-    return { statusCode: 200, body: "OK" };
+    return twiml("❌ שגיאה בשמירה, נסה שוב.");
   }
 
   // תשובה ללקוח
@@ -230,6 +191,5 @@ exports.handler = async (event) => {
 
   const noteMsg = note ? `\n📝 הערה: ${note}` : "";
 
-  await sendWhatsApp(fromRaw, confMsg + noteMsg);
-  return { statusCode: 200, body: "OK" };
+  return twiml(confMsg + noteMsg);
 };

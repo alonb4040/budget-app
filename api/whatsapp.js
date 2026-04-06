@@ -43,7 +43,7 @@ function parseMessage(text) {
 function assignBillingMonth(dateStr, cycleStartDay) {
   const d = new Date(dateStr), day = d.getDate(), sd = cycleStartDay || 1;
   let year = d.getFullYear(), month = d.getMonth() + 1;
-  if (day < sd) { month -= 1; if (month === 0) { month = 12; year -= 1; } }
+  if (day >= sd) { month += 1; if (month > 12) { month = 1; year += 1; } }
   return `${year}-${String(month).padStart(2, "0")}`;
 }
 
