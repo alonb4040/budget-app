@@ -302,7 +302,7 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
       )}
 
       {/* באנר תזכורת לאחר העלאה */}
-      {showActivateReminder && (
+      {showActivateReminder && !activeScenarioValid && (
         <div style={{ marginBottom: 16, background: "rgba(251,191,36,0.12)", border: "2px solid rgba(251,191,36,0.5)", borderRadius: 12, padding: "14px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
           <div>
             <div style={{ fontWeight: 700, fontSize: 15, color: "var(--gold)", marginBottom: 4 }}>⚠️ חשוב — יש לבחור תסריט פעיל</div>
