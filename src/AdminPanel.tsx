@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import ScenarioTab from "./ScenarioTab";
 import { supabase } from "./supabase";
 import { Card, Btn, Input, C } from "./ui";
@@ -96,21 +96,21 @@ function WelcomeEmailCard({ name, last_name, username, password, email, clientId
 
   return (
     <div style={{ background: "var(--surface2)", borderRadius: 12, padding: 16, border: "1px solid var(--border)" }}>
-      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>📧 שלח הוראות כניסה במייל</div>
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 10 }}>📧 שלח הוראות כניסה במייל</div>
       {!email ? (
-        <div style={{ fontSize: 13, color: "var(--text-dim)" }}>לא הוזנה כתובת מייל — הוסף בפרטי הלקוח ושלח משם</div>
+        <div style={{ fontSize: 15, color: "var(--text-dim)" }}>לא הוזנה כתובת מייל — הוסף בפרטי הלקוח ושלח משם</div>
       ) : notConfigured ? (
-        <div style={{ fontSize: 12, color: "var(--gold)" }}>⚠️ חסר <code>REACT_APP_EMAILJS_WELCOME_TEMPLATE_ID</code> ב-.env</div>
+        <div style={{ fontSize: 14, color: "var(--gold)" }}>⚠️ חסר <code>REACT_APP_EMAILJS_WELCOME_TEMPLATE_ID</code> ב-.env</div>
       ) : (
         <>
-          <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 14 }}>
+          <div style={{ fontSize: 15, color: "var(--text-dim)", marginBottom: 14 }}>
             ישלח אל: <strong style={{ color: "var(--text)" }}>{email}</strong>
           </div>
           <Btn onClick={sendEmail} disabled={status === "sending" || status === "sent"}>
             {status === "idle" ? "📧 שלח מייל" : status === "sending" ? "שולח..." : status === "sent" ? "✅ נשלח!" : "❌ שגיאה — נסה שוב"}
           </Btn>
           {status === "error" && (
-            <div style={{ fontSize: 12, color: "var(--red)", marginTop: 8 }}>שגיאה — בדוק שהתבנית ב-EmailJS מוגדרת נכון</div>
+            <div style={{ fontSize: 14, color: "var(--red)", marginTop: 8 }}>שגיאה — בדוק שהתבנית ב-EmailJS מוגדרת נכון</div>
           )}
         </>
       )}
@@ -125,7 +125,8 @@ export default function AdminPanel({ onLogout }) {
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<"created"|"last_active"|"name">("created");
   const [sortAsc, setSortAsc] = useState(false);
-  const [view, setView] = useState("list"); // list | new | detail
+  const [view, setView] = useState("list"); // list | new | detail | categories
+  const [visitedAdminViews, setVisitedAdminViews] = useState<Set<string>>(() => new Set(["list"]));
   const [selected, setSelected] = useState(null);
   const [form, setForm] = useState({ name: "", last_name: "", username: "", password: "", email: "", phone: "" });
   const [justCreated, setJustCreated] = useState<{id:number;name:string;last_name:string;username:string;password:string;email:string}|null>(null);
@@ -239,20 +240,20 @@ export default function AdminPanel({ onLogout }) {
             <svg width="20" height="20" viewBox="0 0 32 32" fill="none"><path d="M6 24 L12 16 L18 20 L26 10" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M22 10 H26 V14" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
           </div>
           <div>
-            <div style={{ fontFamily:"'Fraunces', serif", fontWeight:600, fontSize:18, color:"var(--green-deep)", lineHeight:1 }}>מאזן</div>
-            <div style={{ fontSize:12, color:"var(--text-dim)", marginTop:2 }}>פאנל ניהול — אלון</div>
+            <div style={{ fontFamily:"'Frank Ruhl Libre', serif", fontWeight:600, fontSize: 20, color:"var(--green-deep)", lineHeight:1 }}>מאזן</div>
+            <div style={{ fontSize: 14, color:"var(--text-dim)", marginTop:2 }}>פאנל ניהול — אלון</div>
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           {view !== "list" && <Btn variant="ghost" size="sm" onClick={() => { setView("list"); setMsg(""); setSelected(null); setJustCreated(null); }}>← חזור</Btn>}
-          {view === "list" && <Btn variant="ghost" size="sm" onClick={() => setView("categories")}>🏷️ קטגוריות</Btn>}
+          {view === "list" && <Btn variant="ghost" size="sm" onClick={() => { setView("categories"); setVisitedAdminViews(prev => { const next = new Set(prev); next.add("categories"); return next; }); }}>🏷️ קטגוריות</Btn>}
           <Btn variant="ghost" size="sm" onClick={onLogout}>יציאה</Btn>
         </div>
       </div>
 
       <div style={{ maxWidth: 960, margin: "0 auto", padding: "28px 20px" }}>
         {msg && (
-          <div style={{ background: msg.startsWith("✅") ? "rgba(46,204,138,0.1)" : "rgba(247,92,92,0.1)", border: `1px solid ${msg.startsWith("✅") ? "rgba(46,204,138,0.3)" : "rgba(247,92,92,0.3)"}`, borderRadius: 10, padding: "10px 16px", marginBottom: 16, fontSize: 13, color: msg.startsWith("✅") ? "var(--green-soft)" : "var(--red)" }}>
+          <div style={{ background: msg.startsWith("✅") ? "rgba(46,204,138,0.1)" : "rgba(247,92,92,0.1)", border: `1px solid ${msg.startsWith("✅") ? "rgba(46,204,138,0.3)" : "rgba(247,92,92,0.3)"}`, borderRadius: 10, padding: "10px 16px", marginBottom: 16, fontSize: 15, color: msg.startsWith("✅") ? "var(--green-soft)" : "var(--red)" }}>
             {msg}
           </div>
         )}
@@ -285,7 +286,7 @@ export default function AdminPanel({ onLogout }) {
           return (
             <>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                <div style={{ fontSize: 18, fontWeight: 700 }}>
+                <div style={{ fontSize: 20, fontWeight: 700 }}>
                   לקוחות ({clientFilter === "all" && !search.trim() ? clients.length : `${filteredClients.length} מתוך ${clients.length}`})
                 </div>
                 <Btn size="sm" onClick={() => { setView("new"); setMsg(""); setJustCreated(null); }}>+ לקוח חדש</Btn>
@@ -296,17 +297,17 @@ export default function AdminPanel({ onLogout }) {
                 <input
                   value={search} onChange={e => setSearch(e.target.value)}
                   placeholder="🔍 חיפוש לפי שם או שם משתמש..."
-                  style={{ width: "100%", padding: "10px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: 14, fontFamily: "inherit", boxSizing: "border-box", marginBottom: 12, direction: "rtl" }}
+                  style={{ width: "100%", padding: "10px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: 16, fontFamily: "inherit", boxSizing: "border-box", marginBottom: 12, direction: "rtl" }}
                 />
               )}
 
               {/* Sort */}
               {!loading && clients.length > 0 && (
                 <div style={{ display: "flex", gap: 6, marginBottom: 12, alignItems: "center" }}>
-                  <span style={{ fontSize: 12, color: "var(--text-dim)" }}>מיון:</span>
+                  <span style={{ fontSize: 14, color: "var(--text-dim)" }}>מיון:</span>
                   {([["created","הצטרפות"],["last_active","פעילות אחרונה"],["name","שם"]] as const).map(([val, label]) => (
                     <button key={val} onClick={() => { if (sortBy === val) setSortAsc(p => !p); else { setSortBy(val); setSortAsc(false); } }} style={{
-                      padding: "4px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 12,
+                      padding: "4px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 14,
                       background: sortBy === val ? "var(--green-mid)" : "var(--surface2)",
                       color: sortBy === val ? "white" : "var(--text-dim)", fontWeight: sortBy === val ? 700 : 400,
                     }}>
@@ -326,8 +327,8 @@ export default function AdminPanel({ onLogout }) {
                       border: `1px solid ${clientFilter === k.id ? "var(--green-mid)" : "var(--border)"}`,
                       display: "flex", flexDirection: "column", alignItems: "center", gap: 3, minWidth: 76,
                     }}>
-                      <span style={{ fontSize: 22, fontWeight: 800, color: k.color }}>{k.count}</span>
-                      <span style={{ fontSize: 11, color: clientFilter === k.id ? "var(--green-mid)" : "var(--text-dim)" }}>{k.label}</span>
+                      <span style={{ fontSize: 24, fontWeight: 800, color: k.color }}>{k.count}</span>
+                      <span style={{ fontSize: 13, color: clientFilter === k.id ? "var(--green-mid)" : "var(--text-dim)" }}>{k.label}</span>
                     </button>
                   ))}
                 </div>
@@ -356,14 +357,14 @@ export default function AdminPanel({ onLogout }) {
         {/* NEW CLIENT */}
         {view === "new" && !justCreated && (
           <Card style={{ maxWidth: 440 }}>
-            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 20 }}>➕ לקוח חדש</div>
+            <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 20 }}>➕ לקוח חדש</div>
             <Input label="שם פרטי" value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} placeholder="ישראל" />
             <Input label="שם משפחה" value={form.last_name} onChange={e => setForm(p => ({ ...p, last_name: e.target.value }))} placeholder="ישראלי" />
             <Input label="שם משתמש" value={form.username} onChange={e => setForm(p => ({ ...p, username: e.target.value.replace(/\s/g, "").toLowerCase() }))} placeholder="israel123" />
             <Input label="סיסמה" value={form.password} onChange={e => setForm(p => ({ ...p, password: e.target.value }))} placeholder="לפחות 6 תווים" />
             <Input label="מייל (לשליחת הוראות כניסה)" type="email" value={form.email} onChange={e => setForm(p => ({ ...p, email: e.target.value }))} placeholder="israel@gmail.com" />
             <Input label="טלפון" type="tel" value={form.phone} onChange={e => setForm(p => ({ ...p, phone: e.target.value }))} placeholder="050-0000000" />
-            {msg && <div style={{ color: "var(--red)", fontSize: 12, marginBottom: 12 }}>{msg}</div>}
+            {msg && <div style={{ color: "var(--red)", fontSize: 14, marginBottom: 12 }}>{msg}</div>}
             <div style={{ display: "flex", gap: 10 }}>
               <Btn onClick={createClient} disabled={!form.name || !form.username || form.password.length < 4}>צור לקוח</Btn>
               <Btn variant="ghost" onClick={() => setView("list")}>ביטול</Btn>
@@ -376,8 +377,8 @@ export default function AdminPanel({ onLogout }) {
           <div style={{ maxWidth: 480 }}>
             <Card style={{ textAlign: "center", padding: "24px 24px 20px", marginBottom: 16 }}>
               <div style={{ fontSize: 44, marginBottom: 10 }}>✅</div>
-              <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 4 }}>הלקוח נוצר בהצלחה!</div>
-              <div style={{ fontSize: 13, color: "var(--text-dim)" }}>{justCreated.name} · @{justCreated.username}</div>
+              <div style={{ fontWeight: 700, fontSize: 19, marginBottom: 4 }}>הלקוח נוצר בהצלחה!</div>
+              <div style={{ fontSize: 15, color: "var(--text-dim)" }}>{justCreated.name} · @{justCreated.username}</div>
             </Card>
             <WelcomeEmailCard name={justCreated.name} last_name={justCreated.last_name} username={justCreated.username} password={justCreated.password} email={justCreated.email} clientId={justCreated.id} onSent={loadClients} />
             <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
@@ -392,8 +393,12 @@ export default function AdminPanel({ onLogout }) {
           <ClientDetail client={selected} onRefresh={async () => { await loadClients(); const fresh = clients.find(c => c.id === selected.id) || selected; await openClient(fresh); }} />
         )}
 
-        {/* CATEGORY MANAGER */}
-        {view === "categories" && <CategoryManager />}
+        {/* CATEGORY MANAGER (lazy mount) */}
+        {visitedAdminViews.has("categories") && (
+          <div style={{ display: view === "categories" ? "block" : "none" }}>
+            <CategoryManager />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -416,9 +421,9 @@ function ClientRow({ client, subCount, onOpen, onDelete }) {
       <div style={{ flex: 1 }}>
         <div style={{ fontWeight: 700, display:"flex", alignItems:"center", gap:8 }}>
           {client.name}
-          {showInactiveWarning && <span style={{ fontSize:11, color:"var(--red)", background:"rgba(192,57,43,0.1)", borderRadius:20, padding:"2px 8px", fontWeight:600 }}>⚠️ לא פעיל {daysSinceActivity >= 999 ? `${daysSinceWelcome}+` : daysSinceActivity} ימים</span>}
+          {showInactiveWarning && <span style={{ fontSize: 13, color:"var(--red)", background:"rgba(192,57,43,0.1)", borderRadius:20, padding:"2px 8px", fontWeight:600 }}>⚠️ לא פעיל {daysSinceActivity >= 999 ? `${daysSinceWelcome}+` : daysSinceActivity} ימים</span>}
         </div>
-        <div style={{ fontSize: 12, color: "var(--text-dim)", display:"flex", flexWrap:"wrap", gap:"0 12px" }}>
+        <div style={{ fontSize: 14, color: "var(--text-dim)", display:"flex", flexWrap:"wrap", gap:"0 12px" }}>
           {client.last_active && <span style={{ color: "var(--text-mid)" }}>פעיל {formatRelativeTime(client.last_active)}</span>}
           {client.welcome_sent_at
             ? <span style={{ color: "var(--green-soft)" }}>✉️ מייל נשלח {new Date(client.welcome_sent_at).toLocaleDateString("he-IL")}</span>
@@ -434,7 +439,7 @@ function ClientRow({ client, subCount, onOpen, onDelete }) {
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
         <span style={{
-          padding: "5px 14px", borderRadius: 20, fontSize: 12, fontWeight: 700,
+          padding: "5px 14px", borderRadius: 20, fontSize: 14, fontWeight: 700,
           background: isBlocked ? "rgba(192,57,43,0.12)" : "rgba(46,125,82,0.12)",
           color: isBlocked ? "var(--red)" : "var(--green-mid)",
         }}>
@@ -495,7 +500,7 @@ function AllFilesSection({ clientId }) {
   ];
 
   if (loading) return null;
-  if (!items.length) return <div style={{ fontSize:13, color:"var(--text-dim)", marginBottom:16 }}>אין קבצים שהועלו עדיין</div>;
+  if (!items.length) return <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:16 }}>אין קבצים שהועלו עדיין</div>;
 
   const toggleItem = (key) => setSelected(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
   const toggleAll = () => setSelected(selected.size === items.length ? new Set() : new Set(items.map(i => i.key)));
@@ -516,7 +521,7 @@ function AllFilesSection({ clientId }) {
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
         <div style={{ fontWeight: 700 }}>📁 קבצים שהועלו</div>
         <div style={{ display:"flex", gap:8 }}>
-          <button onClick={toggleAll} style={{ background:"none", border:"1px solid var(--border)", borderRadius:7, padding:"5px 12px", fontSize:12, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}>
+          <button onClick={toggleAll} style={{ background:"none", border:"1px solid var(--border)", borderRadius:7, padding:"5px 12px", fontSize: 14, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}>
             {selected.size === items.length ? "בטל הכל" : "בחר הכל"}
           </button>
           {selected.size > 0 && (
@@ -530,8 +535,8 @@ function AllFilesSection({ clientId }) {
         <div key={item.key} onClick={() => toggleItem(item.key)} style={{ display:"flex", alignItems:"center", gap:12, padding:"10px 14px", marginBottom:6, background: selected.has(item.key) ? "rgba(46,183,124,0.06)" : "var(--surface2)", border:`1px solid ${selected.has(item.key) ? "rgba(46,183,124,0.3)" : "var(--border)"}`, borderRadius:10, cursor:"pointer" }}>
           <input type="checkbox" checked={selected.has(item.key)} onChange={() => {}} style={{ accentColor:"var(--green-mid)", width:16, height:16, flexShrink:0 }} />
           <div style={{ flex:1 }}>
-            <div style={{ fontSize:13, fontWeight:600 }}>{item.label}</div>
-            <div style={{ fontSize:11, color:"var(--text-dim)" }}>{item.sub}</div>
+            <div style={{ fontSize: 15, fontWeight:600 }}>{item.label}</div>
+            <div style={{ fontSize: 13, color:"var(--text-dim)" }}>{item.sub}</div>
           </div>
           <Btn size="sm" variant="secondary" onClick={e => { e.stopPropagation(); downloadStorageFile(item.path, item.filename); }}>⬇ הורד</Btn>
         </div>
@@ -550,9 +555,9 @@ function PayslipsSection({ clientId }) {
   if (!payslips.length) return null;
   return (
     <div style={{ marginBottom: 16 }}>
-      <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 13, color:"var(--text-mid)" }}>💼 תלושים ישנים (ללא קובץ)</div>
+      <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 15, color:"var(--text-mid)" }}>💼 תלושים ישנים (ללא קובץ)</div>
       {payslips.map(p => (
-        <div key={p.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 14px", background:"var(--surface2)", borderRadius:8, marginBottom:4, fontSize:12 }}>
+        <div key={p.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 14px", background:"var(--surface2)", borderRadius:8, marginBottom:4, fontSize: 14 }}>
           <span>{monthKeyToLabel(p.month_key) || p.label}</span>
           <span style={{ color:"var(--text-dim)" }}>📎 {p.filename} (אין קובץ)</span>
         </div>
@@ -594,18 +599,18 @@ function QuestionnaireViewer({ clientId, spousesCount }) {
         return (
           <div key={idx} style={{ marginBottom: 32 }}>
             {visibleSpouses.length > 1 && (
-              <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
                 {idx === 1 ? "👤 בן/בת זוג ראשון/ה" : "👥 בן/בת זוג שני/ה"}
-                {done && <span style={{ background: "rgba(46,204,138,0.15)", color: "#22c55e", borderRadius: 20, padding: "2px 10px", fontSize: 12, fontWeight: 700 }}>✓ הושלם</span>}
+                {done && <span style={{ background: "rgba(46,204,138,0.15)", color: "#22c55e", borderRadius: 20, padding: "2px 10px", fontSize: 14, fontWeight: 700 }}>✓ הושלם</span>}
               </div>
             )}
             {!row ? (
-              <div style={{ color: "var(--text-dim)", fontSize: 13, marginBottom: 8 }}>טרם מולאו תשובות</div>
+              <div style={{ color: "var(--text-dim)", fontSize: 15, marginBottom: 8 }}>טרם מולאו תשובות</div>
             ) : (
               QUESTIONNAIRE_QUESTIONS.map((q, i) => (
                 <Card key={i} style={{ marginBottom: 10, padding: "14px 18px" }}>
-                  <div style={{ fontSize: 12, color: "var(--text-mid)", fontWeight: 600, marginBottom: 6 }}>{i + 1}. {q}</div>
-                  <div style={{ fontSize: 13, color: answers[i] ? "var(--text)" : "var(--text-dim)", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+                  <div style={{ fontSize: 14, color: "var(--text-mid)", fontWeight: 600, marginBottom: 6 }}>{i + 1}. {q}</div>
+                  <div style={{ fontSize: 15, color: answers[i] ? "var(--text)" : "var(--text-dim)", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
                     {answers[i] || <em>לא נענה</em>}
                   </div>
                 </Card>
@@ -623,7 +628,36 @@ function ClientDetail({ client, onRefresh }) {
   const REQUIRED = 3;
   const done = client.submissions.length >= REQUIRED;
   const [activeTab, setActiveTab] = useState(client.startTab || "intake");
+  const [visitedAdminTabs, setVisitedAdminTabs] = useState<Set<string>>(() => new Set([client.startTab || "intake"]));
+  const switchAdminTab = (id) => {
+    setActiveTab(id);
+    setVisitedAdminTabs(prev => { const next = new Set(prev); next.add(id); return next; });
+  };
   const [portfolioTab, setPortfolioTab] = useState("control");
+  const [newCatCount, setNewCatCount] = useState(0);
+  const [logSeenAt, setLogSeenAt] = useState<string | null>(null);
+
+  // טען מספר קטגוריות שנוצרו על ידי הלקוח מאז הפעם האחרונה שנצפה הלוג
+  useEffect(() => {
+    const seenKey = `log_seen_${client.id}`;
+    const seen = localStorage.getItem(seenKey);
+    setLogSeenAt(seen);
+    // אם לא נצפה מעולם — הצג רק 30 יום אחורה (לא כל ההיסטוריה)
+    const defaultSince = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    supabase.from("client_change_log")
+      .select("id", { count: "exact" })
+      .eq("client_id", client.id)
+      .eq("event_type", "category_created")
+      .gte("created_at", seen || defaultSince)
+      .then(({ count }) => setNewCatCount(count || 0));
+  }, [client.id]);
+
+  const markLogSeen = () => {
+    const now = new Date().toISOString();
+    localStorage.setItem(`log_seen_${client.id}`, now);
+    setLogSeenAt(now);
+    setNewCatCount(0);
+  };
 
   const tabs = [
     { id: "intake", label: "📋 פגישה ראשונה" },
@@ -631,8 +665,8 @@ function ClientDetail({ client, onRefresh }) {
     { id: "data", label: "תיק מסמכים" },
     { id: "questionnaire", label: "📝 שאלון" },
     ...(client.portfolio_open ? [{ id: "portfolio", label: "📁 תיק כלכלי" }] : []),
-    { id: "scenario", label: "📊 תסריט תקציבי" },
-    { id: "log", label: "📋 לוג שינויים" },
+    ...(client.portfolio_open ? [{ id: "scenario", label: "📊 תסריט תקציבי" }] : []),
+    { id: "log", label: "📋 לוג שינויים", badge: newCatCount },
     { id: "personal", label: "פרטים אישיים" },
   ];
 
@@ -647,10 +681,10 @@ function ClientDetail({ client, onRefresh }) {
       {/* Client header */}
       <Card style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ width: 48, height: 48, borderRadius: 12, background: "var(--surface2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>👤</div>
+          <div style={{ width: 48, height: 48, borderRadius: 12, background: "var(--surface2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>👤</div>
           <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 700, fontSize: 16 }}>{client.name}</div>
-            <div style={{ fontSize: 12, color: "var(--text-dim)" }}>@{client.username} · {client.submissions.length} הגשות · {client.mappings.length} מיפויים</div>
+            <div style={{ fontWeight: 700, fontSize: 18 }}>{client.name}</div>
+            <div style={{ fontSize: 14, color: "var(--text-dim)" }}>@{client.username} · {client.submissions.length} הגשות · {client.mappings.length} מיפויים</div>
           </div>
           {done && !client.portfolio_open && (
             <Btn onClick={async () => {
@@ -661,11 +695,27 @@ function ClientDetail({ client, onRefresh }) {
         </div>
       </Card>
 
+      {/* Banner — new client-created categories */}
+      {newCatCount > 0 && activeTab !== "log" && (
+        <div style={{ marginBottom: 16, background: "rgba(251,191,36,0.12)", border: "2px solid rgba(251,191,36,0.5)", borderRadius: 12, padding: "12px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <span style={{ fontWeight: 700, color: "var(--gold)" }}>⚠️ הלקוח יצר {newCatCount} קטגוריות חדשות</span>
+            <span style={{ fontSize: 15, color: "var(--text-dim)", marginRight: 8 }}>— ראה בלוג שינויים</span>
+          </div>
+          <Btn size="sm" onClick={() => { switchAdminTab("log"); markLogSeen(); }}>עבור ללוג</Btn>
+        </div>
+      )}
+
       {/* Tab bar */}
       <div style={{ display: "flex", gap: 4, marginBottom: 20, borderBottom: "1px solid var(--border)", paddingBottom: 0 }}>
         {tabs.map(t => (
-          <button key={t.id} onClick={() => setActiveTab(t.id)} style={{ padding: "10px 18px", fontSize: 13, fontFamily: "inherit", fontWeight: activeTab === t.id ? 700 : 400, color: activeTab === t.id ? "var(--green-mid)" : "var(--text-dim)", background: "none", border: "none", borderBottom: `2px solid ${activeTab === t.id ? "var(--green-mid)" : "transparent"}`, cursor: "pointer", marginBottom: -1 }}>
+          <button key={t.id} onClick={() => { switchAdminTab(t.id); if (t.id === "log") markLogSeen(); }} style={{ padding: "10px 18px", fontSize: 15, fontFamily: "inherit", fontWeight: activeTab === t.id ? 700 : 400, color: activeTab === t.id ? "var(--green-mid)" : "var(--text-dim)", background: "none", border: "none", borderBottom: `2px solid ${activeTab === t.id ? "var(--green-mid)" : "transparent"}`, cursor: "pointer", marginBottom: -1, display: "flex", alignItems: "center", gap: 6 }}>
             {t.label}
+            {(t as any).badge > 0 && (
+              <span style={{ background: "var(--red)", color: "#fff", borderRadius: "50%", width: 18, height: 18, fontSize: 13, display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 700 }}>
+                {(t as any).badge}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -710,10 +760,10 @@ function ClientDetail({ client, onRefresh }) {
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
                   <div>
                     <div style={{ fontWeight: 600 }}>{s.label}{monthLabel && <span style={{ fontWeight: 400, color: "var(--text-mid)", marginRight: 8 }}>— {monthLabel}</span>}</div>
-                    <div style={{ fontSize: 11, color: "var(--text-dim)" }}>{new Date(s.created_at).toLocaleDateString("he-IL")} · {txs.length} עסקאות</div>
+                    <div style={{ fontSize: 13, color: "var(--text-dim)" }}>{new Date(s.created_at).toLocaleDateString("he-IL")} · {txs.length} עסקאות</div>
                   </div>
                   <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-                    <div style={{ fontWeight: 700, color: "var(--red)", fontSize: 16 }}>₪{Math.round(total).toLocaleString()}</div>
+                    <div style={{ fontWeight: 700, color: "var(--red)", fontSize: 18 }}>₪{Math.round(total).toLocaleString()}</div>
                     <Btn size="sm" variant="secondary" onClick={exportOne}>📥 Excel</Btn>
                   </div>
                 </div>
@@ -725,7 +775,7 @@ function ClientDetail({ client, onRefresh }) {
             <>
               <div style={{ fontWeight: 700, margin: "20px 0 12px" }}>🧠 מיפויים שנזכרו</div>
               <Card style={{ padding: 0, overflow: "hidden" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
                   <thead>
                     <tr style={{ background: "var(--surface2)" }}>
                       <th style={{ padding: "8px 14px", textAlign: "right", color: "var(--text-dim)" }}>בית עסק</th>
@@ -752,7 +802,7 @@ function ClientDetail({ client, onRefresh }) {
         <div>
           <div style={{ display: "flex", gap: 4, marginBottom: 20 }}>
             {portfolioTabs.map(t => (
-              <button key={t.id} onClick={() => setPortfolioTab(t.id)} style={{ padding: "8px 16px", fontSize: 12, fontFamily: "inherit", fontWeight: portfolioTab === t.id ? 700 : 400, color: portfolioTab === t.id ? "var(--text)" : "var(--text-dim)", background: portfolioTab === t.id ? "var(--surface2)" : "transparent", border: `1px solid ${portfolioTab === t.id ? "var(--border)" : "transparent"}`, borderRadius: 8, cursor: "pointer" }}>
+              <button key={t.id} onClick={() => setPortfolioTab(t.id)} style={{ padding: "8px 16px", fontSize: 14, fontFamily: "inherit", fontWeight: portfolioTab === t.id ? 700 : 400, color: portfolioTab === t.id ? "var(--text)" : "var(--text-dim)", background: portfolioTab === t.id ? "var(--surface2)" : "transparent", border: `1px solid ${portfolioTab === t.id ? "var(--border)" : "transparent"}`, borderRadius: 8, cursor: "pointer" }}>
                 {t.label}
               </button>
             ))}
@@ -761,14 +811,18 @@ function ClientDetail({ client, onRefresh }) {
         </div>
       )}
 
-      {/* SCENARIO TAB */}
-      {activeTab === "scenario" && (
-        <ScenarioTab client={client} />
+      {/* SCENARIO TAB (lazy mount) */}
+      {visitedAdminTabs.has("scenario") && (
+        <div style={{ display: activeTab === "scenario" ? "block" : "none" }}>
+          <ScenarioTab client={client} />
+        </div>
       )}
 
-      {/* LOG TAB */}
-      {activeTab === "log" && (
-        <ChangeLogTab clientId={client.id} clientName={client.name} clientLastName={client.last_name} />
+      {/* LOG TAB (lazy mount) */}
+      {visitedAdminTabs.has("log") && (
+        <div style={{ display: activeTab === "log" ? "block" : "none" }}>
+          <ChangeLogTab clientId={client.id} clientName={client.name} clientLastName={client.last_name} />
+        </div>
       )}
 
       {/* PERSONAL TAB */}
@@ -784,9 +838,9 @@ function ComingSoon({ label }) {
   return (
     <Card style={{ textAlign: "center", padding: "64px 32px" }}>
       <div style={{ fontSize: 48, marginBottom: 16 }}>🚧</div>
-      <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8 }}>{label}</div>
-      <div style={{ color: "var(--text-dim)", fontSize: 14, marginBottom: 6 }}>הסעיף הזה נמצא בפיתוח ובבנייה</div>
-      <div style={{ color: "var(--text-dim)", fontSize: 12 }}>בקרוב תוכל לנהל כאן את כל הנתונים הפיננסיים של הלקוח</div>
+      <div style={{ fontWeight: 700, fontSize: 20, marginBottom: 8 }}>{label}</div>
+      <div style={{ color: "var(--text-dim)", fontSize: 16, marginBottom: 6 }}>הסעיף הזה נמצא בפיתוח ובבנייה</div>
+      <div style={{ color: "var(--text-dim)", fontSize: 14 }}>בקרוב תוכל לנהל כאן את כל הנתונים הפיננסיים של הלקוח</div>
     </Card>
   );
 }
@@ -842,31 +896,31 @@ function PersonalTab({ client, onRefresh }) {
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
       {/* Details card */}
       <Card>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 16 }}>👤 פרטי לקוח</div>
+        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>👤 פרטי לקוח</div>
         <Input label="שם מלא" value={editName} onChange={e => setEditName(e.target.value)} />
         <Input label="מייל" type="email" value={editEmail} onChange={e => setEditEmail(e.target.value)} placeholder="example@gmail.com" />
         <Input label="טלפון" value={editPhone} onChange={e => setEditPhone(e.target.value)} placeholder="050-0000000" />
-        <div style={{ background: "var(--surface2)", borderRadius: 8, padding: "10px 12px", fontSize: 12, color: "var(--text-dim)", marginBottom: 14 }}>
+        <div style={{ background: "var(--surface2)", borderRadius: 8, padding: "10px 12px", fontSize: 14, color: "var(--text-dim)", marginBottom: 14 }}>
           <div style={{ marginBottom: 4 }}>שם משתמש לכניסה</div>
           <div style={{ color: "var(--text)", fontWeight: 600 }}>@{client.username}</div>
         </div>
-        {msg && <div style={{ fontSize: 12, color: msg.startsWith("✅") ? "var(--green-soft)" : "var(--red)", marginBottom: 12 }}>{msg}</div>}
+        {msg && <div style={{ fontSize: 14, color: msg.startsWith("✅") ? "var(--green-soft)" : "var(--red)", marginBottom: 12 }}>{msg}</div>}
         <Btn onClick={saveDetails} disabled={loading}>שמור שינויים</Btn>
       </Card>
 
       {/* Password card */}
       <Card>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 16 }}>🔐 שינוי סיסמה</div>
+        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>🔐 שינוי סיסמה</div>
         <Input label="סיסמה חדשה" type="password" value={newPass} onChange={e => setNewPass(e.target.value)} placeholder="לפחות 4 תווים" />
         <Input label="אימות סיסמה" type="password" value={confirmPass} onChange={e => setConfirmPass(e.target.value)} placeholder="הכנס שוב את הסיסמה" />
-        {msg && <div style={{ fontSize: 12, color: msg.startsWith("✅") ? "var(--green-soft)" : "var(--red)", marginBottom: 12 }}>{msg}</div>}
+        {msg && <div style={{ fontSize: 14, color: msg.startsWith("✅") ? "var(--green-soft)" : "var(--red)", marginBottom: 12 }}>{msg}</div>}
         <Btn onClick={changePassword} disabled={loading || !newPass || !confirmPass}>עדכן סיסמה</Btn>
       </Card>
 
       {/* Block card */}
       <Card>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 16 }}>🔒 ניהול גישה</div>
-        <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 14 }}>
+        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>🔒 ניהול גישה</div>
+        <div style={{ fontSize: 15, color: "var(--text-dim)", marginBottom: 14 }}>
           {isBlocked ? "הלקוח חסום — לא יכול להתחבר לאפליקציה." : "הלקוח פעיל — יכול להתחבר לאפליקציה."}
         </div>
         <Btn variant={isBlocked ? "secondary" : "danger"} onClick={toggleBlock} disabled={loading}>
@@ -876,13 +930,13 @@ function PersonalTab({ client, onRefresh }) {
 
       {/* Welcome email card */}
       <Card>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 16 }}>📧 שלח הוראות כניסה</div>
+        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>📧 שלח הוראות כניסה</div>
         <WelcomeEmailCard name={client.name} last_name={client.last_name || ""} username={client.username} email={client.email || ""} clientId={client.id} onSent={onRefresh} />
       </Card>
 
       {/* Info card */}
       <Card>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 16 }}>📋 מידע נוסף</div>
+        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>📋 מידע נוסף</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {[
             { label: "תאריך הצטרפות", value: new Date(client.created_at).toLocaleDateString("he-IL", { day: "numeric", month: "long", year: "numeric" }) },
@@ -890,7 +944,7 @@ function PersonalTab({ client, onRefresh }) {
             { label: "מיפויים שנזכרו", value: client.mappings.length },
             { label: "סטטוס תיק", value: client.portfolio_open ? "פעיל 📁" : "טרם נפתח" },
           ].map(item => (
-            <div key={item.label} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${"var(--border)"}22`, fontSize: 13 }}>
+            <div key={item.label} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${"var(--border)"}22`, fontSize: 15 }}>
               <span style={{ color: "var(--text-dim)" }}>{item.label}</span>
               <span style={{ fontWeight: 600 }}>{item.value}</span>
             </div>
@@ -951,9 +1005,9 @@ function ExportSection({ submissions, clientName }) {
   return (
     <Card style={{ marginBottom: 8 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
-        <div style={{ fontWeight: 700, fontSize: 14 }}>⬇️ ייצוא לאקסל</div>
+        <div style={{ fontWeight: 700, fontSize: 16 }}>⬇️ ייצוא לאקסל</div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={toggleAll} style={{ background: "none", border: "1px solid var(--border)", borderRadius: 7, padding: "5px 12px", fontSize: 12, color: "var(--text-dim)", cursor: "pointer", fontFamily: "inherit" }}>
+          <button onClick={toggleAll} style={{ background: "none", border: "1px solid var(--border)", borderRadius: 7, padding: "5px 12px", fontSize: 14, color: "var(--text-dim)", cursor: "pointer", fontFamily: "inherit" }}>
             {allSelected ? "בטל הכל" : "בחר הכל"}
           </button>
           <Btn size="sm" onClick={doExport} disabled={selected.length === 0}>
@@ -963,7 +1017,7 @@ function ExportSection({ submissions, clientName }) {
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {submissions.map(s => (
-          <div key={s.id} onClick={() => toggle(s.id)} style={{ padding: "7px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer", border: `1px solid ${selected.includes(s.id) ? "var(--green-mid)" : "var(--border)"}`, background: selected.includes(s.id) ? "rgba(79,142,247,0.12)" : "var(--surface2)", color: selected.includes(s.id) ? "var(--green-mid)" : "var(--text-dim)", fontWeight: selected.includes(s.id) ? 600 : 400 }}>
+          <div key={s.id} onClick={() => toggle(s.id)} style={{ padding: "7px 14px", borderRadius: 20, fontSize: 14, cursor: "pointer", border: `1px solid ${selected.includes(s.id) ? "var(--green-mid)" : "var(--border)"}`, background: selected.includes(s.id) ? "rgba(79,142,247,0.12)" : "var(--surface2)", color: selected.includes(s.id) ? "var(--green-mid)" : "var(--text-dim)", fontWeight: selected.includes(s.id) ? 600 : 400 }}>
             {selected.includes(s.id) ? "✓ " : ""}{s.label}
           </div>
         ))}
@@ -981,31 +1035,39 @@ function ChangeLogTab({ clientId, clientName, clientLastName }) {
   const [dateTo, setDateTo] = useState("");
 
   useEffect(() => {
+    setLoading(true);
     supabase.from("client_change_log")
       .select("*").eq("client_id", clientId)
       .order("created_at", { ascending: false })
       .limit(500)
-      .then(({ data }) => { setLogs(data || []); setLoading(false); });
+      .then(({ data, error }) => {
+        if (error) console.error("change_log load error:", error);
+        setLogs(data || []);
+        setLoading(false);
+      });
   }, [clientId]);
 
   const EVENT_LABELS = {
-    remap_business: "שינוי שיוך",
-    add_category:   "הוספת סעיף",
-    edit_budget:    "שינוי יעד",
-    reset_balance:  "איפוס יתרה",
-    manual_entry:   "הזנה ידנית",
+    remap_business:    "שינוי שיוך",
+    add_category:      "הוספת סעיף",
+    edit_budget:       "שינוי יעד",
+    reset_balance:     "איפוס יתרה",
+    manual_entry:      "הזנה ידנית",
+    category_created:  "קטגוריה חדשה (לקוח)",
   };
 
   const EVENT_COLORS = {
-    remap_business: "var(--green-mint)",
-    add_category:   "var(--gold-light)",
-    edit_budget:    "rgba(79,142,247,0.1)",
-    reset_balance:  "var(--red-light)",
-    manual_entry:   "var(--surface2)",
+    remap_business:    "var(--green-mint)",
+    add_category:      "var(--gold-light)",
+    edit_budget:       "rgba(79,142,247,0.1)",
+    reset_balance:     "var(--red-light)",
+    manual_entry:      "var(--surface2)",
+    category_created:  "rgba(251,191,36,0.15)",
   };
 
   const filtered = logs.filter(l => {
     if (filter !== "all" && l.event_type !== filter) return false;
+    if (!l.created_at) return true;
     if (dateFrom && new Date(l.created_at) < new Date(dateFrom)) return false;
     if (dateTo && new Date(l.created_at) > new Date(dateTo + "T23:59:59")) return false;
     return true;
@@ -1018,7 +1080,8 @@ function ChangeLogTab({ clientId, clientName, clientLastName }) {
       case "add_category":   return `סעיף חדש: ${d.category_name} | יעד: ₪${d.amount}`;
       case "edit_budget":    return `סעיף: ${d.category_name} | ₪${d.old_amount} → ₪${d.new_amount}`;
       case "reset_balance":  return `סעיף: ${d.category_name || "כלל"} | יתרה שאופסה: ₪${d.balance} | ${d.note || ""}`;
-      case "manual_entry":   return `סעיף: ${d.category_name} | ₪${d.amount} | ${d.description}`;
+      case "manual_entry":      return `סעיף: ${d.category_name} | ₪${d.amount} | ${d.description}`;
+      case "category_created":  return `קטגוריה: ${d.category_name} | סוג: ${d.budget_type || "משתנה"}`;
       default:               return JSON.stringify(d);
     }
   };
@@ -1044,6 +1107,8 @@ function ChangeLogTab({ clientId, clientName, clientLastName }) {
         return <span>סעיף: <strong>{d.category_name || "כלל"}</strong> | יתרה שאופסה: ₪{d.balance} | {d.note}</span>;
       case "manual_entry":
         return <span>סעיף: <strong>{d.category_name}</strong> | ₪{d.amount} | {d.description}</span>;
+      case "category_created":
+        return <span>קטגוריה חדשה: <strong>{d.category_name}</strong> | סוג: {d.budget_type || "משתנה"}</span>;
       default:
         return <span>{JSON.stringify(d)}</span>;
     }
@@ -1077,7 +1142,7 @@ function ChangeLogTab({ clientId, clientName, clientLastName }) {
       <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
         {[["all", "הכל"], ...Object.entries(EVENT_LABELS)].map(([k, v]) => (
           <button key={k} onClick={() => setFilter(k)}
-            style={{ padding: "5px 14px", borderRadius: 20, fontSize: 13, cursor: "pointer", fontFamily: "inherit",
+            style={{ padding: "5px 14px", borderRadius: 20, fontSize: 15, cursor: "pointer", fontFamily: "inherit",
               border: `1px solid ${filter === k ? "var(--green-mid)" : "var(--border)"}`,
               background: filter === k ? "var(--green-mint)" : "transparent",
               color: filter === k ? "var(--green-deep)" : "var(--text-mid)", fontWeight: filter === k ? 600 : 400 }}>
@@ -1088,21 +1153,21 @@ function ChangeLogTab({ clientId, clientName, clientLastName }) {
 
       {/* סינון תאריך + ייצוא */}
       <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
-        <label style={{ fontSize: 12, color: "var(--text-dim)" }}>מתאריך</label>
+        <label style={{ fontSize: 14, color: "var(--text-dim)" }}>מתאריך</label>
         <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-          style={{ fontSize: 13, padding: "4px 8px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontFamily: "inherit" }} />
-        <label style={{ fontSize: 12, color: "var(--text-dim)" }}>עד תאריך</label>
+          style={{ fontSize: 15, padding: "4px 8px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontFamily: "inherit" }} />
+        <label style={{ fontSize: 14, color: "var(--text-dim)" }}>עד תאריך</label>
         <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-          style={{ fontSize: 13, padding: "4px 8px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontFamily: "inherit" }} />
+          style={{ fontSize: 15, padding: "4px 8px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontFamily: "inherit" }} />
         {(dateFrom || dateTo) && (
           <button onClick={() => { setDateFrom(""); setDateTo(""); }}
-            style={{ fontSize: 12, padding: "4px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--text-dim)", cursor: "pointer", fontFamily: "inherit" }}>
+            style={{ fontSize: 14, padding: "4px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--text-dim)", cursor: "pointer", fontFamily: "inherit" }}>
             נקה
           </button>
         )}
         <div style={{ marginRight: "auto" }}>
           <button onClick={exportToExcel} disabled={filtered.length === 0}
-            style={{ fontSize: 13, padding: "5px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", cursor: filtered.length === 0 ? "default" : "pointer", fontFamily: "inherit", opacity: filtered.length === 0 ? 0.5 : 1 }}>
+            style={{ fontSize: 15, padding: "5px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", cursor: filtered.length === 0 ? "default" : "pointer", fontFamily: "inherit", opacity: filtered.length === 0 ? 0.5 : 1 }}>
             📥 ייצוא Excel ({filtered.length})
           </button>
         </div>
@@ -1114,12 +1179,12 @@ function ChangeLogTab({ clientId, clientName, clientLastName }) {
         <div key={log.id} style={{ marginBottom: 8, padding: "12px 16px", borderRadius: 12, background: EVENT_COLORS[log.event_type] || "var(--surface2)", border: "1px solid var(--border)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
             <div>
-              <span style={{ fontSize: 12, fontWeight: 700, color: "var(--green-deep)", marginLeft: 8 }}>
+              <span style={{ fontSize: 14, fontWeight: 700, color: "var(--green-deep)", marginLeft: 8 }}>
                 {EVENT_LABELS[log.event_type] || log.event_type}
               </span>
-              <span style={{ fontSize: 13, color: "var(--text)" }}>{renderDetails(log)}</span>
+              <span style={{ fontSize: 15, color: "var(--text)" }}>{renderDetails(log)}</span>
             </div>
-            <div style={{ fontSize: 11, color: "var(--text-dim)", whiteSpace: "nowrap" }}>
+            <div style={{ fontSize: 13, color: "var(--text-dim)", whiteSpace: "nowrap" }}>
               {new Date(log.created_at).toLocaleString("he-IL", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
             </div>
           </div>
@@ -1253,32 +1318,32 @@ function RequiredDocsTab({ client, onRefresh }) {
       {showSpouseModal && (
         <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.4)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center" }}>
           <div style={{ background:"var(--surface)", borderRadius:16, padding:32, maxWidth:360, width:"90%", textAlign:"center" }}>
-            <div style={{ fontWeight:700, fontSize:17, marginBottom:8 }}>📝 שאלון אישי</div>
-            <div style={{ fontSize:14, color:"var(--text-dim)", marginBottom:24 }}>כמה בני זוג ממלאים שאלון?</div>
+            <div style={{ fontWeight:700, fontSize: 19, marginBottom:8 }}>📝 שאלון אישי</div>
+            <div style={{ fontSize: 16, color:"var(--text-dim)", marginBottom:24 }}>כמה בני זוג ממלאים שאלון?</div>
             <div style={{ display:"flex", gap:12, justifyContent:"center" }}>
-              <button onClick={() => selectSpouses(1)} style={{ padding:"14px 28px", borderRadius:12, border:"2px solid var(--green-mid)", background:"transparent", color:"var(--green-mid)", fontWeight:700, fontSize:15, cursor:"pointer", fontFamily:"inherit" }}>
+              <button onClick={() => selectSpouses(1)} style={{ padding:"14px 28px", borderRadius:12, border:"2px solid var(--green-mid)", background:"transparent", color:"var(--green-mid)", fontWeight:700, fontSize: 17, cursor:"pointer", fontFamily:"inherit" }}>
                 👤 בן/בת זוג אחד/ת
               </button>
-              <button onClick={() => selectSpouses(2)} style={{ padding:"14px 28px", borderRadius:12, border:"2px solid var(--green-mid)", background:"var(--green-mid)", color:"white", fontWeight:700, fontSize:15, cursor:"pointer", fontFamily:"inherit" }}>
+              <button onClick={() => selectSpouses(2)} style={{ padding:"14px 28px", borderRadius:12, border:"2px solid var(--green-mid)", background:"var(--green-mid)", color:"white", fontWeight:700, fontSize: 17, cursor:"pointer", fontFamily:"inherit" }}>
                 👥 שני בני זוג
               </button>
             </div>
-            <button onClick={() => setShowSpouseModal(false)} style={{ marginTop:16, fontSize:13, color:"var(--text-dim)", background:"none", border:"none", cursor:"pointer" }}>ביטול</button>
+            <button onClick={() => setShowSpouseModal(false)} style={{ marginTop:16, fontSize: 15, color:"var(--text-dim)", background:"none", border:"none", cursor:"pointer" }}>ביטול</button>
           </div>
         </div>
       )}
 
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
         <div>
-          <div style={{ fontWeight:700, fontSize:15 }}>📌 מסמכים נדרשים — {client.name}</div>
-          <div style={{ fontSize:12, color:"var(--text-dim)", marginTop:4 }}>
+          <div style={{ fontWeight:700, fontSize: 17 }}>📌 מסמכים נדרשים — {client.name}</div>
+          <div style={{ fontSize: 14, color:"var(--text-dim)", marginTop:4 }}>
             {isNull ? "לא הוגדר — הלקוח לא רואה כלום" : cur.length === 0 ? "לא נבחרו — הלקוח לא רואה אף סעיף" : `נבחרו ${cur.length} סעיפים`}
             {spouses && <span style={{ marginRight:8, color:"var(--green-mid)" }}>· שאלון: {spouses === 1 ? "בן/בת זוג אחד/ת" : "שני בני זוג"}</span>}
           </div>
         </div>
         <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
-          {saved && <span style={{ fontSize:13, color:"var(--green-soft)" }}>✅ נשמר</span>}
-          {saveError && <span style={{ fontSize:13, color:"var(--red)" }}>⚠️ {saveError}</span>}
+          {saved && <span style={{ fontSize: 15, color:"var(--green-soft)" }}>✅ נשמר</span>}
+          {saveError && <span style={{ fontSize: 15, color:"var(--red)" }}>⚠️ {saveError}</span>}
           <Btn variant="secondary" size="sm" onClick={selectAll}>בחר הכל</Btn>
           <Btn variant="secondary" size="sm" onClick={clearAll}>נקה הכל</Btn>
           <Btn onClick={save} disabled={saving}>{saving ? "שומר..." : "💾 שמור"}</Btn>
@@ -1288,14 +1353,14 @@ function RequiredDocsTab({ client, onRefresh }) {
       {/* Progress bar */}
       {totalSelected > 0 && (
         <div style={{ marginBottom:16, background:"var(--surface2)", borderRadius:10, padding:"12px 16px" }}>
-          <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:6 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", fontSize: 14, marginBottom:6 }}>
             <span style={{ color:"var(--text-dim)" }}>התקדמות הגשת מסמכים</span>
             <span style={{ fontWeight:700, color: doneCount===totalSelected ? "var(--green-mid)" : "var(--text-mid)" }}>{doneCount}/{totalSelected}</span>
           </div>
           <div style={{ height:8, background:"var(--border)", borderRadius:4, overflow:"hidden" }}>
             <div style={{ height:"100%", width:`${totalSelected>0?(doneCount/totalSelected)*100:0}%`, background:"var(--green-mid)", borderRadius:4, transition:"width 0.3s" }} />
           </div>
-          {partialCount > 0 && <div style={{ fontSize:11, color:"var(--gold)", marginTop:4 }}>⏳ {partialCount} מסמכים בתהליך</div>}
+          {partialCount > 0 && <div style={{ fontSize: 13, color:"var(--gold)", marginTop:4 }}>⏳ {partialCount} מסמכים בתהליך</div>}
         </div>
       )}
 
@@ -1317,17 +1382,17 @@ function RequiredDocsTab({ client, onRefresh }) {
                   background: cur.includes(opt.id) ? "var(--green-mid)" : "transparent",
                   display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0,
                 }}>
-                  {cur.includes(opt.id) && <span style={{ color:"white", fontSize:13, fontWeight:700 }}>✓</span>}
+                  {cur.includes(opt.id) && <span style={{ color:"white", fontSize: 15, fontWeight:700 }}>✓</span>}
                 </div>
-                <span style={{ fontSize:18 }}>{(opt as any).icon}</span>
+                <span style={{ fontSize: 20 }}>{(opt as any).icon}</span>
                 <div style={{ flex:1 }}>
-                  <span style={{ fontSize:14, fontWeight: cur.includes(opt.id) ? 600 : 400 }}>{opt.label}</span>
+                  <span style={{ fontSize: 16, fontWeight: cur.includes(opt.id) ? 600 : 400 }}>{opt.label}</span>
                   {opt.id === "questionnaire" && cur.includes("questionnaire") && spouses && (
-                    <span style={{ fontSize:12, color:"var(--green-mid)", marginRight:8 }}>({spouses === 1 ? "בן/בת זוג אחד/ת" : "שני בני זוג"}) <button onClick={e=>{e.stopPropagation();setShowSpouseModal(true);}} style={{ fontSize:11, color:"var(--text-dim)", background:"none", border:"none", cursor:"pointer", textDecoration:"underline" }}>שנה</button></span>
+                    <span style={{ fontSize: 14, color:"var(--green-mid)", marginRight:8 }}>({spouses === 1 ? "בן/בת זוג אחד/ת" : "שני בני זוג"}) <button onClick={e=>{e.stopPropagation();setShowSpouseModal(true);}} style={{ fontSize: 13, color:"var(--text-dim)", background:"none", border:"none", cursor:"pointer", textDecoration:"underline" }}>שנה</button></span>
                   )}
                 </div>
                 {cur.includes(opt.id) && opt.id !== "questionnaire" && (
-                  <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20,
+                  <span style={{ fontSize: 13, fontWeight:600, padding:"2px 8px", borderRadius:20,
                     background: isDone ? "rgba(46,204,138,0.12)" : isPartial ? "rgba(255,193,7,0.15)" : "var(--surface2)",
                     color: isDone ? "var(--green-mid)" : isPartial ? "var(--gold)" : "var(--text-dim)" }}>
                     {isDone ? "✅ הוגש" : isPartial ? "⏳ חלקי" : "⬜ טרם הוגש"}
@@ -1341,7 +1406,7 @@ function RequiredDocsTab({ client, onRefresh }) {
                     value={docNotes[opt.id] || ""}
                     onChange={e => { setDocNotes(p => ({...p,[opt.id]:e.target.value})); setSaved(false); }}
                     placeholder="הוסף הנחיה ללקוח (אופציונלי) — למשל: 3 חודשים אחרונים מבנק מזרחי"
-                    style={{ width:"100%", boxSizing:"border-box", fontSize:12, padding:"6px 10px", borderRadius:6, border:"1px dashed var(--border)", background:"var(--surface2)", color:"var(--text)", fontFamily:"inherit", outline:"none" }}
+                    style={{ width:"100%", boxSizing:"border-box", fontSize: 14, padding:"6px 10px", borderRadius:6, border:"1px dashed var(--border)", background:"var(--surface2)", color:"var(--text)", fontFamily:"inherit", outline:"none" }}
                   />
                 </div>
               )}
@@ -1353,7 +1418,7 @@ function RequiredDocsTab({ client, onRefresh }) {
         {/* מסמך מותאם אישית */}
         <div style={{ padding:"12px 16px", borderTop:"1px dashed var(--border)" }}>
           {!showCustomInput ? (
-            <button onClick={()=>setShowCustomInput(true)} style={{ background:"none", border:"none", color:"var(--green-mid)", fontSize:13, cursor:"pointer", fontFamily:"inherit", fontWeight:600 }}>
+            <button onClick={()=>setShowCustomInput(true)} style={{ background:"none", border:"none", color:"var(--green-mid)", fontSize: 15, cursor:"pointer", fontFamily:"inherit", fontWeight:600 }}>
               + הוסף מסמך מותאם אישית
             </button>
           ) : (
@@ -1364,7 +1429,7 @@ function RequiredDocsTab({ client, onRefresh }) {
                 onKeyDown={e=>e.key==="Enter"&&addCustomDoc()}
                 placeholder="שם המסמך..."
                 autoFocus
-                style={{ flex:1, padding:"7px 10px", borderRadius:6, border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text)", fontSize:13, fontFamily:"inherit", outline:"none" }}
+                style={{ flex:1, padding:"7px 10px", borderRadius:6, border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text)", fontSize: 15, fontFamily:"inherit", outline:"none" }}
               />
               <Btn size="sm" onClick={addCustomDoc} disabled={!newCustom.trim()}>הוסף</Btn>
               <Btn size="sm" variant="ghost" onClick={()=>{setShowCustomInput(false);setNewCustom("");}}>ביטול</Btn>
@@ -1373,7 +1438,7 @@ function RequiredDocsTab({ client, onRefresh }) {
         </div>
       </Card>
 
-      <div style={{ marginTop:12, fontSize:12, color:"var(--text-dim)" }}>
+      <div style={{ marginTop:12, fontSize: 14, color:"var(--text-dim)" }}>
         הלקוח יראה <strong>רק</strong> את הסעיפים שסומנו. פירוט תנועות ותלושי שכר תמיד מוצגים.
       </div>
     </div>
@@ -1499,12 +1564,12 @@ function LoansTable({ loans, onChange }: { loans: {desc:string;amount:string;mon
   const addRow = () => onChange([...rows, { desc:"", amount:"", monthly:"" }]);
   const updateRow = (i, key, val) => { const next = rows.map((r,idx) => idx===i ? {...r,[key]:val} : r); onChange(next); };
   const removeRow = (i) => onChange(rows.filter((_,idx) => idx!==i));
-  const cellStyle: React.CSSProperties = { padding: "6px 8px", background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text)", fontSize: 13, fontFamily: "inherit", width: "100%" };
+  const cellStyle: React.CSSProperties = { padding: "6px 8px", background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text)", fontSize: 15, fontFamily: "inherit", width: "100%" };
   return (
     <div>
       <table style={{ width:"100%", borderCollapse:"separate", borderSpacing:"0 6px" }}>
         <thead>
-          <tr style={{ fontSize:12, color:"var(--text-dim)" }}>
+          <tr style={{ fontSize: 14, color:"var(--text-dim)" }}>
             <th style={{ textAlign:"right", paddingBottom:4, fontWeight:600 }}>סוג הלוואה</th>
             <th style={{ textAlign:"right", paddingBottom:4, fontWeight:600 }}>סכום כולל (₪)</th>
             <th style={{ textAlign:"right", paddingBottom:4, fontWeight:600 }}>תשלום חודשי (₪)</th>
@@ -1517,18 +1582,18 @@ function LoansTable({ loans, onChange }: { loans: {desc:string;amount:string;mon
               <td><input value={row.desc} onChange={e=>updateRow(i,"desc",e.target.value)} style={cellStyle} placeholder="בנק, גמ״ח, רכב..." /></td>
               <td><input type="number" value={row.amount} onChange={e=>updateRow(i,"amount",e.target.value)} style={cellStyle} placeholder="0" /></td>
               <td><input type="number" value={row.monthly} onChange={e=>updateRow(i,"monthly",e.target.value)} style={cellStyle} placeholder="0" /></td>
-              <td><button onClick={()=>removeRow(i)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize:16, padding:"0 4px" }}>✕</button></td>
+              <td><button onClick={()=>removeRow(i)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize: 18, padding:"0 4px" }}>✕</button></td>
             </tr>
           ))}
         </tbody>
       </table>
       {rows.length > 0 && (
-        <div style={{ display:"flex", gap:24, marginTop:8, fontSize:13, color:"var(--text-mid)", fontWeight:600 }}>
+        <div style={{ display:"flex", gap:24, marginTop:8, fontSize: 15, color:"var(--text-mid)", fontWeight:600 }}>
           <span>סה"כ חוב: <strong style={{color:"var(--text)"}}>{total_amount.toLocaleString("he-IL")} ₪</strong></span>
           <span>סה"כ חודשי: <strong style={{color:"var(--text)"}}>{total_monthly.toLocaleString("he-IL")} ₪</strong></span>
         </div>
       )}
-      <button onClick={addRow} style={{ marginTop:10, background:"none", border:"1px dashed var(--border)", borderRadius:8, padding:"6px 14px", fontSize:12, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}>+ הוסף הלוואה</button>
+      <button onClick={addRow} style={{ marginTop:10, background:"none", border:"1px dashed var(--border)", borderRadius:8, padding:"6px 14px", fontSize: 14, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}>+ הוסף הלוואה</button>
     </div>
   );
 }
@@ -1539,7 +1604,7 @@ function IntakeForm({ client }) {
   const [saved, setSaved]     = useState(false);
   const [loaded, setLoaded]   = useState(false);
   const [openSection, setOpenSection] = useState("why");
-  const autoSaveRef = useState<ReturnType<typeof setTimeout>|null>(null);
+  const autoSaveRef = useRef<ReturnType<typeof setTimeout>|null>(null);
 
   useEffect(() => {
     supabase.from("client_intake").select("data,meeting_date").eq("client_id", client.id).maybeSingle()
@@ -1552,11 +1617,12 @@ function IntakeForm({ client }) {
 
   const saveData = async (newData: Record<string,any>) => {
     setSaving(true);
-    await supabase.from("client_intake").upsert(
+    const { error } = await supabase.from("client_intake").upsert(
       [{ client_id: client.id, data: newData, updated_at: new Date().toISOString() }],
       { onConflict: "client_id" }
     );
     setSaving(false);
+    if (error) { alert("שגיאה בשמירה — " + error.message); return; }
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -1565,12 +1631,12 @@ function IntakeForm({ client }) {
     const newData = { ...data, [key]: val };
     setData(newData);
     setSaved(false);
-    if (autoSaveRef[0]) clearTimeout(autoSaveRef[0]);
-    autoSaveRef[0] = setTimeout(() => saveData(newData), 2000);
+    if (autoSaveRef.current) clearTimeout(autoSaveRef.current);
+    autoSaveRef.current = setTimeout(() => saveData(newData), 2000);
   };
 
   const save = () => {
-    if (autoSaveRef[0]) clearTimeout(autoSaveRef[0]);
+    if (autoSaveRef.current) clearTimeout(autoSaveRef.current);
     saveData(data);
   };
 
@@ -1592,23 +1658,23 @@ function IntakeForm({ client }) {
 
   if (!loaded) return <div style={{ color: "var(--text-dim)", padding: 32, textAlign: "center" }}>טוען...</div>;
 
-  const fieldStyle: React.CSSProperties = { width: "100%", boxSizing: "border-box", background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 8, padding: "9px 12px", color: "var(--text)", fontSize: 13, fontFamily: "inherit", outline: "none" };
+  const fieldStyle: React.CSSProperties = { width: "100%", boxSizing: "border-box", background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 8, padding: "9px 12px", color: "var(--text)", fontSize: 15, fontFamily: "inherit", outline: "none" };
 
   return (
     <div>
       {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <div style={{ fontWeight: 700, fontSize: 16 }}>📋 טופס פגישה ראשונה — {client.name}</div>
+        <div style={{ fontWeight: 700, fontSize: 18 }}>📋 טופס פגישה ראשונה — {client.name}</div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          {saving && <span style={{ fontSize: 12, color: "var(--text-dim)" }}>שומר...</span>}
-          {saved && !saving && <span style={{ fontSize: 12, color: "var(--green-soft)" }}>✅ נשמר</span>}
+          {saving && <span style={{ fontSize: 14, color: "var(--text-dim)" }}>שומר...</span>}
+          {saved && !saving && <span style={{ fontSize: 14, color: "var(--green-soft)" }}>✅ נשמר</span>}
           <Btn onClick={save} disabled={saving}>💾 שמור</Btn>
         </div>
       </div>
 
       {/* תאריך פגישה */}
       <div style={{ marginBottom: 16, display:"flex", alignItems:"center", gap:12 }}>
-        <span style={{ fontSize:13, color:"var(--text-dim)", fontWeight:600 }}>📅 תאריך פגישה:</span>
+        <span style={{ fontSize: 15, color:"var(--text-dim)", fontWeight:600 }}>📅 תאריך פגישה:</span>
         <input type="date" value={data.meeting_date||""} onChange={e=>update("meeting_date",e.target.value)}
           style={{ ...fieldStyle, width:"auto", padding:"6px 10px" }} />
       </div>
@@ -1616,10 +1682,10 @@ function IntakeForm({ client }) {
       {/* Summary bar */}
       {(totalIncome > 0 || overdraft > 0 || totalDebt > 0 || monthlyDeficit > 0) && (
         <div style={{ display:"flex", gap:12, flexWrap:"wrap", marginBottom:16, background:"var(--surface2)", borderRadius:10, padding:"12px 16px" }}>
-          {totalIncome > 0 && <div style={{ fontSize:13 }}>💰 הכנסה נטו: <strong style={{color:"var(--green-mid)"}}>{totalIncome.toLocaleString("he-IL")} ₪</strong></div>}
-          {overdraft > 0 && <div style={{ fontSize:13 }}>🔴 אוברדראפט: <strong style={{color:"var(--red)"}}>{overdraft.toLocaleString("he-IL")} ₪</strong></div>}
-          {totalDebt > 0 && <div style={{ fontSize:13 }}>💳 חוב כולל: <strong style={{color:"var(--red)"}}>{totalDebt.toLocaleString("he-IL")} ₪</strong></div>}
-          {monthlyDeficit > 0 && <div style={{ fontSize:13 }}>📉 גרעון חודשי: <strong style={{color:"var(--gold)"}}>{monthlyDeficit.toLocaleString("he-IL")} ₪</strong></div>}
+          {totalIncome > 0 && <div style={{ fontSize: 15 }}>💰 הכנסה נטו: <strong style={{color:"var(--green-mid)"}}>{totalIncome.toLocaleString("he-IL")} ₪</strong></div>}
+          {overdraft > 0 && <div style={{ fontSize: 15 }}>🔴 אוברדראפט: <strong style={{color:"var(--red)"}}>{overdraft.toLocaleString("he-IL")} ₪</strong></div>}
+          {totalDebt > 0 && <div style={{ fontSize: 15 }}>💳 חוב כולל: <strong style={{color:"var(--red)"}}>{totalDebt.toLocaleString("he-IL")} ₪</strong></div>}
+          {monthlyDeficit > 0 && <div style={{ fontSize: 15 }}>📉 גרעון חודשי: <strong style={{color:"var(--gold)"}}>{monthlyDeficit.toLocaleString("he-IL")} ₪</strong></div>}
         </div>
       )}
 
@@ -1636,17 +1702,17 @@ function IntakeForm({ client }) {
               border: `1px solid ${filled > 0 ? "rgba(46,204,138,0.25)" : "var(--border)"}`,
               cursor: "pointer", userSelect: "none",
             }}>
-              <span style={{ fontSize: 17 }}>{section.title.split(" ")[0]}</span>
-              <div style={{ flex: 1, fontWeight: 600, fontSize: 14 }}>{section.title.slice(section.title.indexOf(" ") + 1)}</div>
-              {filled > 0 && <span style={{ fontSize: 11, color: "var(--green-mid)", background: "rgba(46,204,138,0.12)", borderRadius: 20, padding: "2px 10px" }}>{filled}/{total}</span>}
-              <span style={{ color: "var(--text-dim)", fontSize: 13 }}>{isOpen ? "▲" : "▼"}</span>
+              <span style={{ fontSize: 19 }}>{section.title.split(" ")[0]}</span>
+              <div style={{ flex: 1, fontWeight: 600, fontSize: 16 }}>{section.title.slice(section.title.indexOf(" ") + 1)}</div>
+              {filled > 0 && <span style={{ fontSize: 13, color: "var(--green-mid)", background: "rgba(46,204,138,0.12)", borderRadius: 20, padding: "2px 10px" }}>{filled}/{total}</span>}
+              <span style={{ color: "var(--text-dim)", fontSize: 15 }}>{isOpen ? "▲" : "▼"}</span>
             </div>
             {isOpen && (
               <div style={{ border: "1px solid var(--border)", borderTop: "none", borderRadius: "0 0 10px 10px", padding: "16px 18px", background: "var(--surface)" }}>
                 <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
                   {section.fields.map((field, fi) => {
                     if (field.type === "header") return (
-                      <div key={field.key} style={{ fontWeight:700, fontSize:13, color:"var(--green-mid)", borderBottom:"2px solid var(--green-mid)", paddingBottom:6, marginTop: fi === 0 ? 0 : 18, marginBottom:10 }}>
+                      <div key={field.key} style={{ fontWeight:700, fontSize: 15, color:"var(--green-mid)", borderBottom:"2px solid var(--green-mid)", paddingBottom:6, marginTop: fi === 0 ? 0 : 18, marginBottom:10 }}>
                         {field.text}
                       </div>
                     );
@@ -1655,19 +1721,19 @@ function IntakeForm({ client }) {
                     );
                     if (field.type === "textarea") return (
                       <div key={field.key} style={{ marginBottom: 12 }}>
-                        <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 5, fontWeight: 500 }}>{field.label}</div>
+                        <div style={{ fontSize: 14, color: "var(--text-dim)", marginBottom: 5, fontWeight: 500 }}>{field.label}</div>
                         <textarea value={data[field.key] || ""} onChange={e => update(field.key, e.target.value)} rows={3} style={{ ...fieldStyle, resize: "vertical", lineHeight: 1.5 }} placeholder={(field as any).placeholder || "..."} />
                       </div>
                     );
                     if (field.type === "number") return (
                       <div key={field.key} style={{ marginBottom: 12 }}>
-                        <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 5, fontWeight: 500 }}>{field.label}</div>
+                        <div style={{ fontSize: 14, color: "var(--text-dim)", marginBottom: 5, fontWeight: 500 }}>{field.label}</div>
                         <input type="number" value={data[field.key] || ""} onChange={e => update(field.key, e.target.value)} style={fieldStyle} placeholder="0" />
                       </div>
                     );
                     return (
                       <div key={field.key} style={{ marginBottom: 12 }}>
-                        <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 5, fontWeight: 500 }}>{field.label}</div>
+                        <div style={{ fontSize: 14, color: "var(--text-dim)", marginBottom: 5, fontWeight: 500 }}>{field.label}</div>
                         <input type="text" value={data[field.key] || ""} onChange={e => update(field.key, e.target.value)} style={fieldStyle} placeholder={(field as any).placeholder || "..."} />
                       </div>
                     );

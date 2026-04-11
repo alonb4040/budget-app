@@ -45,15 +45,15 @@ export default class ErrorBoundary extends Component<Props, State> {
           boxShadow: "0 4px 24px rgba(192,57,43,0.08)",
         }}>
           <div style={{ fontSize: 48, marginBottom: 16 }}>⚠️</div>
-          <h2 style={{ fontSize: 20, fontWeight: 700, color: "var(--red, #c0392b)", marginBottom: 8 }}>
+          <h2 style={{ fontSize: 22, fontWeight: 700, color: "var(--red, #c0392b)", marginBottom: 8 }}>
             אירעה שגיאה בלתי צפויה
           </h2>
-          <p style={{ fontSize: 14, color: "var(--text-dim, #888)", marginBottom: 24 }}>
+          <p style={{ fontSize: 16, color: "var(--text-dim, #888)", marginBottom: 24 }}>
             משהו השתבש. ניתן לנסות לרענן את הדף.
           </p>
           {this.state.error && (
             <pre style={{
-              fontSize: 12,
+              fontSize: 14,
               color: "var(--text-dim, #888)",
               background: "var(--surface2, #f4f4f4)",
               borderRadius: 8,
@@ -74,7 +74,7 @@ export default class ErrorBoundary extends Component<Props, State> {
               border: "none",
               borderRadius: 10,
               padding: "12px 28px",
-              fontSize: 15,
+              fontSize: 17,
               fontWeight: 700,
               cursor: "pointer",
               fontFamily: "'Plus Jakarta Sans', sans-serif",

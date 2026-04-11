@@ -143,6 +143,60 @@ serve(async (req) => {
       return json({ ok: true, role: "client", username: client.username, name: client.name, id: client.id });
     }
 
+    // ── bookmarklet_import — no auth required. saves transactions from bookmarklet ──
+    if (action === "bookmarklet_import") {
+      const { client_id, transactions, source, card_last4 } = body as {
+        client_id: number;
+        transactions: Array<{ date: string; name: string; amount: number; cat?: string }>;
+        source?: string;
+        card_last4?: string;
+      };
+
+      if (!client_id || !Array.isArray(transactions) || transactions.length === 0) {
+        return json({ error: "נתונים חסרים" }, 400);
+      }
+
+      // Verify client exists
+      const { data: client, error: clientErr } = await supabaseAdmin
+        .from("clients").select("id").eq("id", client_id).maybeSingle();
+      if (clientErr || !client) return json({ error: "לקוח לא נמצא" }, 401);
+
+      // Filter duplicates by date+name+amount
+      const { data: existing } = await supabaseAdmin
+        .from("imported_transactions")
+        .select("date, name, amount")
+        .eq("client_id", client_id)
+        .eq("source_type", source || "max_bookmarklet");
+
+      const existingSet = new Set(
+        (existing || []).map((r: any) => `${r.date}|${r.name}|${r.amount}`)
+      );
+
+      const toInsert = transactions
+        .filter((t) => !existingSet.has(`${t.date}|${t.name}|${t.amount}`))
+        .map((t) => ({
+          client_id,
+          date: t.date,
+          name: t.name || "",
+          amount: parseFloat(String(t.amount)) || 0,
+          max_category: t.cat || "",
+          source_type: source || "max_bookmarklet",
+          provider: "max",
+          card_last4: card_last4 || null,
+          created_at: new Date().toISOString(),
+        }));
+
+      const duplicates = transactions.length - toInsert.length;
+
+      if (toInsert.length > 0) {
+        const { error: insertErr } = await supabaseAdmin
+          .from("imported_transactions").insert(toInsert);
+        if (insertErr) return json({ error: insertErr.message }, 500);
+      }
+
+      return json({ ok: true, added: toInsert.length, duplicates });
+    }
+
     // ── migrate_all — no auth required (internal one-time migration) ──
     if (action === "migrate_all") {
       const { data: pending } = await supabaseAdmin

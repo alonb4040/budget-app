@@ -12,6 +12,8 @@ export interface Transaction {
   originalCat: string;
   source: string;
   note?: string;
+  /** PDF bank only — "credit_transfer" = credit card payment (not a real expense) */
+  flow_type?: "expense" | "credit_transfer";
 }
 
 export interface Session {
@@ -94,6 +96,7 @@ export interface ImportedTransaction {
 declare global {
   interface Window {
     XLSX: typeof import("xlsx");
+    pdfjsLib: any; // pdfjs-dist loaded via CDN
     emailjs: {
       send: (
         serviceId: string,

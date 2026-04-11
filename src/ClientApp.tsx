@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { supabase } from "./supabase";
-import { CATEGORIES, IGNORED_CATEGORIES, parseExcelData, classifyTx, HEBREW_MONTHS, assignBillingMonth } from "./data";
+import { CATEGORIES, IGNORED_CATEGORIES, parseExcelData, parseBankPDF, classifyTx, HEBREW_MONTHS, assignBillingMonth } from "./data";
 import ConnectCardScreen from "./ConnectCardScreen";
 import { CategoryPicker } from "./components/CategoryPicker";
 import { useCategories } from "./hooks/useCategories";
@@ -46,15 +46,37 @@ export default function ClientApp({ session, onLogout }) {
   const [portfolioOpenedAt, setPortfolioOpenedAt] = useState(null);
   const [loadingData, setLoadingData]     = useState(true);
   const [activeTab, setActiveTab]         = useState(() => {
-    const saved = sessionStorage.getItem('mazan_activeTab') || "data";
-    return saved === "questionnaire" ? "data" : saved;
+    const saved = sessionStorage.getItem('mazan_activeTab');
+    if (saved && saved !== "questionnaire") return saved;
+    const portfolioWasOpen = sessionStorage.getItem('mazan_portfolioOpen') === "1";
+    return portfolioWasOpen ? "portfolio" : "data";
   });
-  const switchTab = (id) => { sessionStorage.setItem('mazan_activeTab', id); setActiveTab(id); };
+  // visitedTabs — tracks which tabs have been mounted at least once (lazy mount)
+  const [visitedTabs, setVisitedTabs] = useState<Set<string>>(() => {
+    const saved = sessionStorage.getItem('mazan_activeTab');
+    const initial = (saved && saved !== "questionnaire") ? saved
+      : sessionStorage.getItem('mazan_portfolioOpen') === "1" ? "portfolio" : "data";
+    return new Set([initial]);
+  });
+  const switchTab = (id) => {
+    sessionStorage.setItem('mazan_activeTab', id);
+    setActiveTab(id);
+    setVisitedTabs(prev => { const next = new Set(prev); next.add(id); return next; });
+  };
   const [dataSubTab, setDataSubTab]       = useState(() =>
     sessionStorage.getItem('mazan_activeTab') === "questionnaire" ? "questionnaire" : "documents"
   ); // documents | questionnaire
+  const [portfolioSubTab, setPortfolioSubTab] = useState(() => sessionStorage.getItem('mazan_portfolioTab') || "control");
+  const [visitedPortfolioSubTabs, setVisitedPortfolioSubTabs] = useState<Set<string>>(() =>
+    new Set([sessionStorage.getItem('mazan_portfolioTab') || "control"])
+  );
+  const switchPortfolioSubTab = (id: string) => {
+    sessionStorage.setItem('mazan_portfolioTab', id);
+    setPortfolioSubTab(id);
+    setVisitedPortfolioSubTabs(prev => { const next = new Set(prev); next.add(id); return next; });
+  };
   const [showWelcome, setShowWelcome]     = useState(false);
-  const [portfolioTab, setPortfolioTab]   = useState("control");
+  const [showUserMenu, setShowUserMenu]   = useState(false);
   const [importedTxs, setImportedTxs]     = useState([]);
   const [importedLoaded, setImportedLoaded] = useState(false);
   const [manualTxs, setManualTxs]         = useState([]);
@@ -82,6 +104,7 @@ export default function ClientApp({ session, onLogout }) {
   const [search, setSearch]               = useState("");
   const [catPanelOpen, setCatPanelOpen]   = useState(false);
   const [activeTxId, setActiveTxId]       = useState(null);
+  const [prevCatMap, setPrevCatMap]       = useState<Record<string,string>>({});
   const [catSearch, setCatSearch]         = useState("");
   const [pendingRemember, setPendingRemember] = useState(null);
   const [toast, setToast]                 = useState("");
@@ -92,10 +115,64 @@ export default function ClientApp({ session, onLogout }) {
   const [analyzing, setAnalyzing]                 = useState(false);
   const [analyzeResults, setAnalyzeResults]       = useState<{name:string,count:number,error?:string}[]>([]);
   const [dragOver, setDragOver]                   = useState(false);
+  const [selectedTxIds, setSelectedTxIds]         = useState<Set<any>>(new Set());
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { loadUserData(); }, []);
+
+  // פונקציה לרענון scenarioCats — משותפת לטעינה ראשונית ולreal-time
+  const reloadScenarioCats = async (portfolioOpen: boolean) => {
+    if (!portfolioOpen) { setScenarioCats(null); return; }
+    const today = new Date().toISOString().slice(0, 10);
+    const { data: activeScen } = await supabase
+      .from("active_scenario")
+      .select("scenario_id")
+      .eq("client_id", session.id)
+      .lte("active_from", today)
+      .or(`active_until.is.null,active_until.gte.${today}`)
+      .order("active_from", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (activeScen?.scenario_id) {
+      // ודא שהתסריט עדיין קיים — אם נמחק, נקה את רשומת active_scenario העזובה
+      const { data: scenario } = await supabase
+        .from("scenarios").select("id").eq("id", activeScen.scenario_id).maybeSingle();
+      if (!scenario) {
+        supabase.from("active_scenario").delete()
+          .eq("client_id", session.id).eq("scenario_id", activeScen.scenario_id);
+        setScenarioCats(null);
+        return;
+      }
+      const { data: items } = await supabase
+        .from("scenario_items").select("category_name").eq("scenario_id", activeScen.scenario_id);
+      const scenarioNames = (items || []).map((r: any) => r.category_name);
+      // כלול גם קטגוריות אישיות של הלקוח — תמיד חלק מהתצוגה
+      const { data: personalRows } = await supabase
+        .from("categories").select("name")
+        .eq("client_id", session.id).eq("is_active", true);
+      const personalNames = (personalRows || []).map((r: any) => r.name);
+      setScenarioCats([...new Set([...scenarioNames, ...personalNames])]);
+    } else {
+      setScenarioCats(null);
+    }
+  };
+
+  // real-time: כשתסריט פעיל משתנה — רענן scenarioCats מיידית
+  useEffect(() => {
+    const channel = supabase
+      .channel("active_scenario_realtime")
+      .on("postgres_changes", {
+        event: "*",
+        schema: "public",
+        table: "active_scenario",
+        filter: `client_id=eq.${session.id}`,
+      }, () => {
+        reloadScenarioCats(portfolioOpen);
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [session.id, portfolioOpen]); // eslint-disable-line
 
   // real-time: כשתנועה חדשה נוספת מהבוקמרקלט — טען אותה מיידית
   useEffect(() => {
@@ -132,81 +209,74 @@ export default function ClientApp({ session, onLogout }) {
     return all;
   };
 
+  // פונקציה פנימית שמרענת נתונים ומעדכנת state — אפשר לקרוא לה עם או בלי spinner
+  const fetchAndApplyData = async () => {
+    const [{ data: entries }, { data: subs }, { data: maps }, { data: clientData }, { data: pays }, { data: pMonths }, { data: pSubs }, iTxs, { data: mTxs }, { data: cDocs }] = await Promise.all([
+      supabase.from("month_entries").select("*").eq("client_id", session.id).order("month_key", { ascending: false }),
+      supabase.from("submissions").select("*").eq("client_id", session.id).order("created_at", { ascending: true }),
+      supabase.from("remembered_mappings").select("*").eq("client_id", session.id),
+      supabase.from("clients").select("portfolio_open,portfolio_opened_at,email,phone,cycle_start_day,plan,submitted_at,required_docs,questionnaire_spouses,doc_notes,custom_docs,hidden_cats").eq("id", session.id).maybeSingle(),
+      supabase.from("payslips").select("*").eq("client_id", session.id).order("created_at", { ascending: false }),
+      supabase.from("portfolio_months").select("*").eq("client_id", session.id).order("month_key", { ascending: false }),
+      supabase.from("portfolio_submissions").select("*").eq("client_id", session.id).order("created_at", { ascending: true }),
+      loadAllImportedTxs(session.id),
+      supabase.from("manual_transactions").select("*").eq("client_id", session.id).order("created_at", { ascending: false }),
+      supabase.from("client_documents").select("*").eq("client_id", session.id)
+    ]);
+    const isFirst = (entries || []).length === 0 && (pays || []).length === 0 && (subs || []).length === 0;
+    const alreadyDismissed = sessionStorage.getItem('welcome_dismissed_' + session.id);
+    setShowWelcome(isFirst && !alreadyDismissed);
+    setMonthEntries(entries || []);
+    setSubmissions(subs || []);
+    setPayslips(pays || []);
+    const isPortfolioOpen = clientData?.portfolio_open || false;
+    setPortfolioOpen(isPortfolioOpen);
+    const wasTabSaved = !!sessionStorage.getItem('mazan_activeTab');
+    sessionStorage.setItem('mazan_portfolioOpen', isPortfolioOpen ? "1" : "0");
+    if (isPortfolioOpen && !wasTabSaved) {
+      sessionStorage.setItem('mazan_activeTab', 'portfolio');
+      sessionStorage.setItem('mazan_portfolioTab', 'control');
+      setActiveTab('portfolio');
+      setPortfolioSubTab('control');
+      setVisitedTabs(prev => { const next = new Set(prev); next.add('portfolio'); return next; });
+      setVisitedPortfolioSubTabs(new Set(['control']));
+    }
+    setPortfolioOpenedAt(clientData?.portfolio_opened_at || null);
+    setCycleStartDay(clientData?.cycle_start_day || 1);
+    setClientPlan(clientData?.plan || "free");
+    setSubmittedAt(clientData?.submitted_at || null);
+    setRequiredDocs(clientData?.required_docs ?? null);
+    setQuestionnaireSpouses(clientData?.questionnaire_spouses ?? null);
+    setDocNotes(clientData?.doc_notes ?? {});
+    setCustomDocs(clientData?.custom_docs ?? []);
+    setHiddenCats(clientData?.hidden_cats ?? []);
+    await reloadScenarioCats(!!clientData?.portfolio_open).catch(() => {});
+    setClientDocs(cDocs || []);
+    setPortfolioMonths(pMonths || []);
+    setPortfolioSubs(pSubs || []);
+    const mappingObj = {};
+    (maps || []).forEach(m => { mappingObj[m.business_name] = m.category; });
+    setRememberedMappings(mappingObj);
+    setImportedTxs(iTxs);
+    setManualTxs(mTxs || []);
+    setImportedLoaded(true);
+  };
+
   const loadUserData = async () => {
     setLoadingData(true);
     // Fire-and-forget: update last seen timestamp for admin visibility
     supabase.from("clients").update({ last_seen_at: new Date().toISOString() }).eq("id", session.id);
     try {
-      const [{ data: entries }, { data: subs }, { data: maps }, { data: clientData }, { data: pays }, { data: pMonths }, { data: pSubs }, iTxs, { data: mTxs }, { data: cDocs }] = await Promise.all([
-        supabase.from("month_entries").select("*").eq("client_id", session.id).order("month_key", { ascending: false }),
-        supabase.from("submissions").select("*").eq("client_id", session.id).order("created_at", { ascending: true }),
-        supabase.from("remembered_mappings").select("*").eq("client_id", session.id),
-        supabase.from("clients").select("portfolio_open,portfolio_opened_at,email,phone,cycle_start_day,plan,submitted_at,required_docs,questionnaire_spouses,doc_notes,custom_docs,hidden_cats").eq("id", session.id).maybeSingle(),
-        supabase.from("payslips").select("*").eq("client_id", session.id).order("created_at", { ascending: false }),
-        supabase.from("portfolio_months").select("*").eq("client_id", session.id).order("month_key", { ascending: false }),
-        supabase.from("portfolio_submissions").select("*").eq("client_id", session.id).order("created_at", { ascending: true }),
-        loadAllImportedTxs(session.id),
-        supabase.from("manual_transactions").select("*").eq("client_id", session.id).order("created_at", { ascending: false }),
-        supabase.from("client_documents").select("*").eq("client_id", session.id)
-      ]);
-      const isFirst = (entries || []).length === 0 && (pays || []).length === 0 && (subs || []).length === 0;
-      const alreadyDismissed = sessionStorage.getItem('welcome_dismissed_' + session.id);
-      setShowWelcome(isFirst && !alreadyDismissed);
-      setMonthEntries(entries || []);
-      setSubmissions(subs || []);
-      setPayslips(pays || []);
-      setPortfolioOpen(clientData?.portfolio_open || false);
-      setPortfolioOpenedAt(clientData?.portfolio_opened_at || null);
-      setCycleStartDay(clientData?.cycle_start_day || 1);
-      setClientPlan(clientData?.plan || "free");
-      setSubmittedAt(clientData?.submitted_at || null);
-      setRequiredDocs(clientData?.required_docs ?? null);
-      setQuestionnaireSpouses(clientData?.questionnaire_spouses ?? null);
-      setDocNotes(clientData?.doc_notes ?? {});
-      setCustomDocs(clientData?.custom_docs ?? []);
-      setHiddenCats(clientData?.hidden_cats ?? []);
-
-      // טען קטגוריות תסריט פעיל (אם קיים)
-      if (clientData?.portfolio_open) {
-        const today = new Date().toISOString().slice(0, 10);
-        const { data: activeScen } = await supabase
-          .from("active_scenario")
-          .select("scenario_id")
-          .eq("client_id", session.id)
-          .lte("active_from", today)
-          .or(`active_until.is.null,active_until.gte.${today}`)
-          .order("active_from", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        if (activeScen?.scenario_id) {
-          const { data: items } = await supabase
-            .from("scenario_items")
-            .select("category_name")
-            .eq("scenario_id", activeScen.scenario_id);
-          setScenarioCats((items || []).map((r: any) => r.category_name));
-        } else {
-          setScenarioCats(null); // יש תיק פתוח אבל אין תסריט → הצג הכל
-        }
-      } else {
-        setScenarioCats(null); // תיק לא פתוח → הצג הכל
-      }
-
-      setClientDocs(cDocs || []);
-      setPortfolioMonths(pMonths || []);
-      setPortfolioSubs(pSubs || []);
-      const mappingObj = {};
-      (maps || []).forEach(m => { mappingObj[m.business_name] = m.category; });
-      setRememberedMappings(mappingObj);
-      setImportedTxs(iTxs);
-      setManualTxs(mTxs || []);
-      setImportedLoaded(true);
+      await fetchAndApplyData();
     } catch(err) {
       console.error("loadUserData error:", err);
-      // Even on error — release the loading state so app is usable
     } finally {
       setLoadingData(false);
     }
   };
+
+  // רענון ברקע — ללא spinner, לא הורס state של רכיבי ילדים
+  const reloadSilent = () => { fetchAndApplyData().catch(err => console.error("reloadSilent error:", err)); };
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(""), 3500); };
 
@@ -225,7 +295,7 @@ export default function ClientApp({ session, onLogout }) {
     const existing = monthEntries.find(e => e.month_key === key);
     if (!existing) {
       await supabase.from("month_entries").insert([{ client_id: session.id, month_key: key, label, is_finalized: false }]);
-      await loadUserData();
+      setMonthEntries(prev => [{ client_id: session.id, month_key: key, label, is_finalized: false }, ...prev]);
     }
     // open the month detail page — from there user can add sources
     const { data: entry } = await supabase.from("month_entries").select("*").eq("client_id", session.id).eq("month_key", key).maybeSingle();
@@ -258,7 +328,7 @@ export default function ClientApp({ session, onLogout }) {
     setUploadedFiles(p => [...p, ...newFiles]);
   };
 
-  const NON_PARSEABLE_EXTS = [".pdf", ".png", ".jpg", ".jpeg", ".doc", ".docx"];
+  const NON_PARSEABLE_EXTS = [".png", ".jpg", ".jpeg", ".doc", ".docx"];
   const isNonParseable = (name: string) => NON_PARSEABLE_EXTS.some(ext => name.toLowerCase().endsWith(ext));
 
   const analyzeFiles = async () => {
@@ -274,7 +344,12 @@ export default function ClientApp({ session, onLogout }) {
       }
       try {
         const buf = await file.arrayBuffer();
-        const parsed = parseExcelData(buf, file.name, rememberedMappings, categoryRules);
+        let parsed: any[];
+        if (file.name.toLowerCase().endsWith('.pdf')) {
+          parsed = await parseBankPDF(buf, file.name, rememberedMappings, categoryRules);
+        } else {
+          parsed = parseExcelData(buf, file.name, rememberedMappings, categoryRules);
+        }
         allTx = allTx.concat(parsed);
         results.push({ name: file.name, count: parsed.length });
       } catch(e: any) {
@@ -302,13 +377,14 @@ export default function ClientApp({ session, onLogout }) {
     }]);
     if (error) { showToast("שגיאת שמירה: " + error.message); return; }
 
-    await loadUserData();
-    // reload month subs
-    const { data: freshSubs } = await supabase.from("submissions").select("*").eq("client_id", session.id).eq("month_key", selectedMonthKey).order("created_at", { ascending: true });
+    // reload month subs ואת activeMonth — ללא spinner
+    const [{ data: freshSubs }, { data: freshEntry }] = await Promise.all([
+      supabase.from("submissions").select("*").eq("client_id", session.id).eq("month_key", selectedMonthKey).order("created_at", { ascending: true }),
+      supabase.from("month_entries").select("*").eq("client_id", session.id).eq("month_key", selectedMonthKey).maybeSingle(),
+    ]);
     setMonthSubs(freshSubs || []);
-    // refresh activeMonth
-    const { data: freshEntry } = await supabase.from("month_entries").select("*").eq("client_id", session.id).eq("month_key", selectedMonthKey).maybeSingle();
     if (freshEntry) setActiveMonth(freshEntry);
+    reloadSilent(); // רענן שאר הנתונים ברקע
 
     showToast("✅ הפירוט נשמר!");
     setScreen("month"); // always go to month view after saving
@@ -318,17 +394,16 @@ export default function ClientApp({ session, onLogout }) {
     if (!activeMonth) return;
     if (!window.confirm(`לסמן את ${activeMonth.label} כהושלם?\nלא תוכל להוסיף תנועות חדשות, אך תוכל לערוך קיימות.`)) return;
     await supabase.from("month_entries").update({ is_finalized: true }).eq("client_id", session.id).eq("month_key", activeMonth.month_key);
-    await loadUserData();
-    // check completion
-    // reload to get accurate counts
-    await loadUserData();
+    setMonthEntries(prev => prev.map(e => e.month_key === activeMonth.month_key ? { ...e, is_finalized: true } : e));
+    reloadSilent(); // רענן ברקע (לבדיקת completion)
     showToast("✅ החודש סומן כהושלם!");
     setScreen("dashboard");
   };
 
   const reopenMonth = async (monthKey) => {
     await supabase.from("month_entries").update({ is_finalized: false }).eq("client_id", session.id).eq("month_key", monthKey);
-    await loadUserData();
+    setMonthEntries(prev => prev.map(e => e.month_key === monthKey ? { ...e, is_finalized: false } : e));
+    reloadSilent();
     showToast("החודש נפתח מחדש לעריכה");
   };
 
@@ -345,13 +420,14 @@ export default function ClientApp({ session, onLogout }) {
     const newTxs = [...(sub.transactions || [])];
     newTxs[txIndex] = { ...newTxs[txIndex], cat: newCat, edited: true };
     await supabase.from("portfolio_submissions").update({ transactions: newTxs }).eq("id", submissionId);
-    await supabase.from("client_change_log").insert([{ client_id: session.id, event_type: "remap_business", details: { business_name: businessName, from_cat: oldCat, to_cat: newCat } }]);
-    await loadUserData();
+    supabase.from("client_change_log").insert([{ client_id: session.id, event_type: "remap_business", details: { business_name: businessName, from_cat: oldCat, to_cat: newCat } }]);
+    // עדכון ישיר של portfolioSubs — ללא loadUserData כדי לא להרוס localEdits
+    setPortfolioSubs(prev => prev.map(s => s.id === submissionId ? { ...s, transactions: newTxs } : s));
   };
 
   const deletePortfolioSub = async (submissionId) => {
     await supabase.from("portfolio_submissions").delete().eq("id", submissionId);
-    await loadUserData();
+    setPortfolioSubs(prev => prev.filter(s => s.id !== submissionId));
   };
 
   // ── category editing ──
@@ -377,7 +453,7 @@ export default function ClientApp({ session, onLogout }) {
 
   const chartData = [...finalizedMonths].reverse().slice(0,6).map(entry => {
     const subs = submissions.filter(s => s.month_key === entry.month_key);
-    const total = subs.flatMap(s => s.transactions || []).filter(t => !ignoredCats.has(t.cat)).reduce((sum, t) => sum + t.amount, 0);
+    const total = subs.flatMap(s => s.transactions || []).filter(t => !ignoredCats.has(t.cat)).reduce((sum, t) => sum + (incomeCats.has(t.cat) ? -t.amount : t.amount), 0);
     return { name: entry.label || "", הוצאות: Math.round(total) };
   });
 
@@ -405,22 +481,88 @@ export default function ClientApp({ session, onLogout }) {
   return (
     <div style={{ background:"var(--bg)", minHeight:"100vh", color:"var(--text)" }}>
       {/* Navbar */}
-      <div style={{ position:"sticky", top:0, zIndex:100, background:"var(--surface)", borderBottom:"1px solid var(--border)", padding:"14px 28px", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
-        <div style={{ display:"flex", alignItems:"center", gap:14 }}>
-          <div style={{ display:"flex", alignItems:"center", justifyContent:"center", width:38, height:38, background:"var(--green-mid)", borderRadius:10, flexShrink:0 }}>
-            <svg width="20" height="20" viewBox="0 0 32 32" fill="none">
+      <div style={{ position:"sticky", top:0, zIndex:100, background:"#fdfcf9", borderBottom:"1px solid var(--border)", padding:"0 28px", display:"flex", alignItems:"stretch", justifyContent:"space-between", height:62, boxShadow:"0 1px 0 var(--border), 0 4px 20px rgba(30,77,53,0.05)" }}>
+        {/* Right: Logo */}
+        <div style={{ display:"flex", alignItems:"center", gap:10, flexShrink:0, paddingLeft:20, borderLeft:"1.5px solid var(--border)" }}>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"center", width:34, height:34, background:"var(--green-mid)", borderRadius:9, flexShrink:0, boxShadow:"0 2px 8px rgba(45,106,79,0.25)" }}>
+            <svg width="18" height="18" viewBox="0 0 32 32" fill="none">
               <path d="M6 24 L12 16 L18 20 L26 10" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
               <path d="M22 10 H26 V14" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
           </div>
-          <div>
-            <div style={{ fontFamily:"'Fraunces', serif", fontWeight:600, fontSize:18, color:"var(--green-deep)", lineHeight:1 }}>מאזן</div>
-            <div style={{ fontSize:12, color:"var(--text-dim)", marginTop:2 }}>שלום, {session.name}</div>
-          </div>
+          <span style={{ fontFamily:"'Frank Ruhl Libre', serif", fontWeight:700, fontSize: 24, color:"var(--green-deep)", lineHeight:1, letterSpacing:"-0.3px" }}>מאזן</span>
         </div>
-        <div style={{ display:"flex", gap:8 }}>
+
+        {/* Center: Main tabs (only on dashboard) */}
+        {screen === "dashboard" && (
+          <div style={{ display:"flex", alignItems:"stretch" }}>
+            {[
+              ...(portfolioOpen ? [{ id:"portfolio", label:"תיק כלכלי" }] : []),
+              { id:"data", label:"חומרי בסיס" },
+              ...(completedOnboarding ? [{ id:"personal", label:"פרטים אישיים" }] : []),
+              ...(completedOnboarding ? [{ id:"analytics-trends", label:"מגמות" }] : []),
+              ...(completedOnboarding ? [{ id:"analytics-forecast", label:"תחזית" }] : []),
+            ].map(t => (
+              <button key={t.id} onClick={() => switchTab(t.id)}
+                onMouseEnter={e => { if (activeTab !== t.id) (e.currentTarget as HTMLElement).style.color = "var(--text)"; }}
+                onMouseLeave={e => { if (activeTab !== t.id) (e.currentTarget as HTMLElement).style.color = "var(--text-dim)"; }}
+                style={{
+                  padding: "0 20px",
+                  fontSize: 17,
+                  fontFamily: "inherit",
+                  fontWeight: activeTab===t.id ? 700 : 400,
+                  letterSpacing: "0.01em",
+                  color: activeTab===t.id ? "var(--green-mid)" : "var(--text-dim)",
+                  background: "none",
+                  border: "none",
+                  borderBottom: `3px solid ${activeTab===t.id ? "var(--green-mid)" : "transparent"}`,
+                  borderTop: "3px solid transparent",
+                  cursor: "pointer",
+                  transition: "color 0.15s, border-color 0.15s",
+                  whiteSpace: "nowrap",
+                }}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Left: Avatar chip + dropdown */}
+        <div style={{ display:"flex", alignItems:"center", gap:8, flexShrink:0 }}>
           {screen !== "dashboard" && <Btn variant="ghost" size="sm" onClick={() => setScreen("dashboard")}>ראשי</Btn>}
-          <Btn variant="ghost" size="sm" onClick={onLogout}>יציאה</Btn>
+          <div style={{ position:"relative" }}>
+            {/* Chip */}
+            <button onClick={() => setShowUserMenu(v => !v)}
+              style={{ display:"flex", alignItems:"center", gap:8, borderRadius:20, padding:"4px 10px 4px 4px", border:`1px solid ${showUserMenu ? "var(--green-soft)" : "var(--border)"}`, background: showUserMenu ? "var(--green-pale)" : "var(--surface)", cursor:"pointer", transition:"all 0.15s", fontFamily:"inherit" }}>
+              <div style={{ width:28, height:28, borderRadius:"50%", background:"linear-gradient(135deg, var(--green-mid), var(--green-deep))", display:"flex", alignItems:"center", justifyContent:"center", fontSize: 14, fontWeight:700, color:"#fff", flexShrink:0, letterSpacing:"0.02em" }}>
+                {(session.name||"?").charAt(0).toUpperCase()}
+              </div>
+              <span style={{ fontSize: 15, fontWeight:500, color:"var(--text-mid)", letterSpacing:"0.01em" }}>{session.name}</span>
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ transition:"transform 0.2s", transform: showUserMenu ? "rotate(180deg)" : "rotate(0deg)", color:"var(--text-dim)" }}>
+                <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
+            {/* Dropdown */}
+            {showUserMenu && (
+              <>
+                <div onClick={() => setShowUserMenu(false)} style={{ position:"fixed", inset:0, zIndex:199 }} />
+                <div style={{ position:"absolute", left:0, top:"calc(100% + 8px)", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:12, boxShadow:"0 8px 32px rgba(30,77,53,0.12)", zIndex:200, minWidth:140, overflow:"hidden" }}>
+                  <button onClick={() => { setShowUserMenu(false); onLogout(); }}
+                    style={{ display:"flex", alignItems:"center", gap:8, width:"100%", padding:"11px 16px", background:"none", border:"none", cursor:"pointer", fontFamily:"inherit", fontSize: 16, color:"var(--text-mid)", textAlign:"right", transition:"background 0.12s" }}
+                    onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = "var(--surface2)"}
+                    onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = "none"}
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                      <polyline points="16 17 21 12 16 7"/>
+                      <line x1="21" y1="12" x2="9" y2="12"/>
+                    </svg>
+                    התנתק
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
@@ -430,8 +572,8 @@ export default function ClientApp({ session, onLogout }) {
           <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", zIndex:9000 }} onClick={() => { setShowWelcome(false); sessionStorage.setItem('welcome_dismissed_' + session.id, '1'); }} />
           <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:`1px solid ${"var(--border)"}`, borderRadius:20, padding:"36px 32px", zIndex:9001, width:"min(480px,90vw)", textAlign:"center", boxShadow:"0 24px 64px rgba(0,0,0,0.6)" }}>
             <div style={{ fontSize:52, marginBottom:16 }}>👋</div>
-            <div style={{ fontWeight:800, fontSize:20, marginBottom:10 }}>ברוכים הבאים!</div>
-            <div style={{ color:"var(--text-dim)", fontSize:13, lineHeight:1.8, marginBottom:28 }}>
+            <div style={{ fontWeight:800, fontSize: 22, marginBottom:10 }}>ברוכים הבאים!</div>
+            <div style={{ color:"var(--text-dim)", fontSize: 15, lineHeight:1.8, marginBottom:28 }}>
               כדי שאלון יוכל לבנות לכם תכנית פיננסית מדויקת,<br/>
               נצטרך מכם מספר מסמכים. הרשימה המלאה מחכה לכם בדף הבא.
             </div>
@@ -444,7 +586,7 @@ export default function ClientApp({ session, onLogout }) {
 
       {/* Toast */}
       {toast && (
-        <div style={{ position:"fixed", bottom:24, right:24, background:"var(--green-deep)", color:"#fff", borderRadius:12, padding:"12px 20px", fontSize:13, zIndex:9999, boxShadow:"0 8px 32px rgba(30,77,53,0.3)" }}>
+        <div style={{ position:"fixed", bottom:24, right:24, background:"var(--green-deep)", color:"#fff", borderRadius:12, padding:"12px 20px", fontSize: 15, zIndex:9999, boxShadow:"0 8px 32px rgba(30,77,53,0.3)" }}>
           {toast}
         </div>
       )}
@@ -460,35 +602,61 @@ export default function ClientApp({ session, onLogout }) {
 
       {/* ── DASHBOARD ── */}
       {screen === "dashboard" && (
-        <div style={{ maxWidth:960, margin:"0 auto", padding:"28px 20px" }}>
-          {/* Tab bar — תמיד מוצג (כולל במהלך onboarding) */}
-          <div style={{ display:"flex", gap:4, marginBottom:24, borderBottom:`1px solid ${"var(--border)"}` }}>
-            {[
-              ...(portfolioOpen ? [{ id:"portfolio", label:"📁 תיק כלכלי" }] : []),
-              { id:"data", label:"📂 חומרי בסיס" },
-              ...(completedOnboarding ? [{ id:"personal", label:"פרטים אישיים" }] : []),
-              ...(completedOnboarding ? [{ id:"analytics-trends", label:"📊 מגמות" }] : []),
-              ...(completedOnboarding ? [{ id:"analytics-forecast", label:"🔮 תחזית" }] : []),
-            ].map(t => (
-              <button key={t.id} onClick={() => switchTab(t.id)} style={{ padding:"10px 18px", fontSize:13, fontFamily:"inherit", fontWeight:activeTab===t.id?700:400, color:activeTab===t.id?"var(--green-mid)":"var(--text-dim)", background:"none", border:"none", borderBottom:`2px solid ${activeTab===t.id?"var(--green-mid)":"transparent"}`, cursor:"pointer", marginBottom:-1 }}>
-                {t.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Sub-tab bar for חומרי בסיס */}
-          {activeTab === "data" && (
-            <div style={{ display:"flex", gap:4, marginBottom:20, borderBottom:`1px solid ${"var(--border)"}` }}>
-              {[
-                { id:"documents", label:"📂 מסמכים" },
-                { id:"questionnaire", label:"📝 שאלון אישי" },
-              ].map(t => (
-                <button key={t.id} onClick={() => setDataSubTab(t.id)} style={{ padding:"8px 16px", fontSize:13, fontFamily:"inherit", fontWeight:dataSubTab===t.id?700:400, color:dataSubTab===t.id?"var(--green-mid)":"var(--text-dim)", background:"none", border:"none", borderBottom:`2px solid ${dataSubTab===t.id?"var(--green-mid)":"transparent"}`, cursor:"pointer", marginBottom:-1 }}>
-                  {t.label}
-                </button>
-              ))}
+        <>
+          {/* Full-width sticky sub-tab strip */}
+          {(activeTab === "data" || activeTab === "portfolio") && (
+            <div style={{ background:"var(--surface2)", borderBottom:"1px solid var(--border)", position:"sticky", top:62, zIndex:90 }}>
+              <div style={{ maxWidth:960, margin:"0 auto", padding:"0 16px", display:"flex", alignItems:"center", height:46, gap:2 }}>
+                {activeTab === "data" && (
+                  [
+                    { id:"documents", label:"מסמכים" },
+                    { id:"questionnaire", label:"שאלון אישי" },
+                  ].map(t => (
+                    <button key={t.id} onClick={() => setDataSubTab(t.id)}
+                      onMouseEnter={e => { if (dataSubTab !== t.id) (e.currentTarget as HTMLElement).style.background = "rgba(216,243,220,0.5)"; }}
+                      onMouseLeave={e => { if (dataSubTab !== t.id) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                      style={{
+                        padding:"5px 16px", fontSize: 15, fontFamily:"inherit",
+                        fontWeight: dataSubTab===t.id ? 600 : 400,
+                        color: dataSubTab===t.id ? "var(--green-deep)" : "var(--text-dim)",
+                        background: dataSubTab===t.id ? "var(--green-mint)" : "transparent",
+                        border:"none", borderRadius:20,
+                        cursor:"pointer", transition:"all 0.15s", whiteSpace:"nowrap",
+                        letterSpacing:"0.01em",
+                      }}>
+                      {t.label}
+                    </button>
+                  ))
+                )}
+                {activeTab === "portfolio" && (
+                  [
+                    { id:"txs",     label:"פירוט תנועות" },
+                    { id:"control", label:"בקרת תיק כלכלי" },
+                    { id:"savings", label:"פירוט חסכונות" },
+                    { id:"balance", label:"מאזן מתוכנן" },
+                    { id:"debts",   label:"מנהל חובות" },
+                    { id:"tools",   label:"כלים לצמיחה" },
+                  ].map(t => (
+                    <button key={t.id} onClick={() => switchPortfolioSubTab(t.id)}
+                      onMouseEnter={e => { if (portfolioSubTab !== t.id) (e.currentTarget as HTMLElement).style.background = "rgba(216,243,220,0.5)"; }}
+                      onMouseLeave={e => { if (portfolioSubTab !== t.id) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                      style={{
+                        padding:"5px 16px", fontSize: 15, fontFamily:"inherit",
+                        fontWeight: portfolioSubTab===t.id ? 600 : 400,
+                        color: portfolioSubTab===t.id ? "var(--green-deep)" : "var(--text-dim)",
+                        background: portfolioSubTab===t.id ? "var(--green-mint)" : "transparent",
+                        border:"none", borderRadius:20,
+                        cursor:"pointer", transition:"all 0.15s", whiteSpace:"nowrap",
+                        letterSpacing:"0.01em",
+                      }}>
+                      {t.label}
+                    </button>
+                  ))
+                )}
+              </div>
             </div>
           )}
+          <div style={{ maxWidth:960, margin:"0 auto", padding:"24px 20px" }}>
 
           {/* Questionnaire sub-tab */}
           {activeTab === "data" && dataSubTab === "questionnaire" && (
@@ -510,7 +678,7 @@ export default function ClientApp({ session, onLogout }) {
               onNavigateTxs={openNewMonth}
               onNavigatePayslips={() => setScreen("payslips")}
               onNavigateQuestionnaire={() => { switchTab("data"); setDataSubTab("questionnaire"); }}
-              onMonthsChange={loadUserData}
+              onMonthsChange={reloadSilent}
               onDocsChange={async () => {
                 const { data } = await supabase.from("client_documents").select("*").eq("client_id", session.id);
                 setClientDocs(data || []);
@@ -529,13 +697,13 @@ export default function ClientApp({ session, onLogout }) {
             <div>
               {/* KPIs */}
               <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))", gap:12, marginBottom:24 }}>
-                <KpiCard icon="📁" label="חודשים שהושלמו" value={`${finalizedMonths.length} / ${REQUIRED_MONTHS}`} />
-                <KpiCard icon="🧠" label="מיפויים שנזכרו" value={Object.keys(rememberedMappings).length} />
-                <KpiCard icon="💰" label="הוצאות אחרונות" value={(() => {
+                <KpiCard icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--green-mid)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><polyline points="9 16 11 18 15 14"/></svg>} label="חודשים שהושלמו" value={`${finalizedMonths.length} / ${REQUIRED_MONTHS}`} />
+                <KpiCard icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--green-mid)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg>} label="מיפויים שנזכרו" value={Object.keys(rememberedMappings).length} />
+                <KpiCard icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--red)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>} label="הוצאות אחרונות" value={(() => {
                   const last = monthEntries[0];
                   if (!last) return "—";
                   const subs = submissions.filter(s => s.month_key === last.month_key);
-                  const total = subs.flatMap(s => s.transactions||[]).filter(t => !ignoredCats.has(t.cat)).reduce((sum,t) => sum+t.amount, 0);
+                  const total = subs.flatMap(s => s.transactions||[]).filter(t => !ignoredCats.has(t.cat)).reduce((sum,t) => sum+(incomeCats.has(t.cat)?-t.amount:t.amount), 0);
                   return "₪" + Math.round(total).toLocaleString();
                 })()} color={"var(--red)"} />
               </div>
@@ -543,16 +711,16 @@ export default function ClientApp({ session, onLogout }) {
               {/* Chart */}
               {chartData.length > 1 && completedOnboarding && (
                 <Card style={{ marginBottom:24 }}>
-                  <div style={{ fontWeight:700, marginBottom:16 }}>📈 הוצאות לאורך זמן</div>
+                  <div style={{ fontWeight:700, marginBottom:16, fontSize: 17, color:"var(--green-deep)", letterSpacing:"-0.1px" }}>הוצאות לאורך זמן</div>
                   <ResponsiveContainer width="100%" height={180}>
-                    <BarChart data={chartData}><CartesianGrid strokeDasharray="3 3" stroke={"var(--border)"} /><XAxis dataKey="name" tick={{ fill:"var(--text-dim)", fontSize:11 }} /><YAxis tick={{ fill:"var(--text-dim)", fontSize:11 }} /><Tooltip contentStyle={{ background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:8, color:"var(--text)", fontFamily:"'Heebo'" }} /><Bar dataKey="הוצאות" fill={"var(--green-mid)"} radius={[4,4,0,0]} /></BarChart>
+                    <BarChart data={chartData}><CartesianGrid strokeDasharray="3 3" stroke={"var(--border)"} /><XAxis dataKey="name" tick={{ fill:"var(--text-dim)", fontSize: 13 }} /><YAxis tick={{ fill:"var(--text-dim)", fontSize: 13 }} /><Tooltip contentStyle={{ background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:8, color:"var(--text)", fontFamily:"'Heebo'" }} /><Bar dataKey="הוצאות" fill={"var(--green-mid)"} radius={[4,4,0,0]} /></BarChart>
                   </ResponsiveContainer>
                 </Card>
               )}
 
 
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
-                <div style={{ fontWeight:700 }}>חודשים שהוזנו</div>
+                <div style={{ fontWeight:700, fontSize: 17, color:"var(--green-deep)", letterSpacing:"-0.1px" }}>חודשים שהוזנו</div>
                 <div style={{ display:"flex", gap:8 }}>
                   <Btn size="sm" variant="secondary" onClick={() => setShowConnectCard(true)}>🔗 חבר כרטיס</Btn>
                   {monthEntries.length < REQUIRED_MONTHS && <Btn size="sm" onClick={openNewMonth}>+ הוסף חודש</Btn>}
@@ -567,29 +735,29 @@ export default function ClientApp({ session, onLogout }) {
               ) : monthEntries.map(entry => {
                 const subs = submissions.filter(s => s.month_key === entry.month_key);
                 const allTx = subs.flatMap(s => s.transactions || []);
-                const total = allTx.filter(t => !ignoredCats.has(t.cat)).reduce((sum, t) => sum + t.amount, 0);
-                const top3 = (Object.entries(allTx.reduce((acc: Record<string,number>,t)=>{if(!ignoredCats.has(t.cat)){acc[t.cat]=(acc[t.cat]||0)+t.amount;}return acc;},{} as Record<string,number>)) as [string,number][]).sort((a,b)=>b[1]-a[1]).slice(0,3);
+                const total = allTx.filter(t => !ignoredCats.has(t.cat)).reduce((sum, t) => sum + (incomeCats.has(t.cat)?-t.amount:t.amount), 0);
+                const top3 = (Object.entries(allTx.reduce((acc: Record<string,number>,t)=>{if(!ignoredCats.has(t.cat)){acc[t.cat]=(acc[t.cat]||0)+(incomeCats.has(t.cat)?-t.amount:t.amount);}return acc;},{} as Record<string,number>)) as [string,number][]).sort((a,b)=>b[1]-a[1]).slice(0,3);
                 return (
                   <Card key={entry.id || entry.month_key} style={{ marginBottom:12, border:`1px solid ${entry.is_finalized?"rgba(46,204,138,0.25)":"var(--border)"}` }}>
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:10 }}>
                       <div style={{ flex:1, cursor:"pointer" }} onClick={() => openMonth(entry)}>
                         <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4 }}>
-                          <div style={{ fontWeight:700, fontSize:16 }}>{entry.label}</div>
+                          <div style={{ fontWeight:700, fontSize: 18 }}>{entry.label}</div>
                           {entry.is_finalized
-                            ? <span style={{ background:"rgba(46,204,138,0.15)", color:"var(--green-soft)", borderRadius:20, padding:"2px 10px", fontSize:11, fontWeight:700 }}>✓ הושלם</span>
-                            : <span style={{ background:"rgba(255,183,77,0.12)", color:"var(--gold)", borderRadius:20, padding:"2px 10px", fontSize:11 }}>בתהליך</span>
+                            ? <span style={{ background:"rgba(46,204,138,0.15)", color:"var(--green-soft)", borderRadius:20, padding:"2px 10px", fontSize: 13, fontWeight:700 }}>✓ הושלם</span>
+                            : <span style={{ background:"rgba(255,183,77,0.12)", color:"var(--gold)", borderRadius:20, padding:"2px 10px", fontSize: 13 }}>בתהליך</span>
                           }
                         </div>
-                        <div style={{ fontSize:12, color:"var(--text-dim)", marginBottom:8 }}>{subs.length} מקורות · {allTx.length} תנועות</div>
+                        <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:8 }}>{subs.length} מקורות · {allTx.length} תנועות</div>
                         <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-                          {top3.map(([cat,amt]) => <span key={cat} style={{ background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:8, padding:"2px 10px", fontSize:11 }}>{cat}: ₪{Math.round(amt).toLocaleString()}</span>)}
+                          {top3.map(([cat,amt]) => <span key={cat} style={{ background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:20, padding:"2px 10px", fontSize: 14, color:"var(--text-mid)" }}>{cat}: ₪{Math.round(amt).toLocaleString()}</span>)}
                         </div>
                       </div>
                       <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:6 }}>
-                        <div style={{ fontWeight:800, fontSize:20, color:"var(--red)" }}>₪{Math.round(total).toLocaleString()}</div>
+                        <div style={{ fontWeight:800, fontSize: 22, color:"var(--red)" }}>₪{Math.round(total).toLocaleString()}</div>
                         <div style={{ display:"flex", gap:6 }}>
-                          <Btn variant="ghost" size="sm" onClick={e => { e.stopPropagation(); exportMonthToExcel(entry); }}>⬇️ Excel</Btn>
-                          <button onClick={async e => { e.stopPropagation(); if (!window.confirm(`למחוק את ${entry.label}?`)) return; await supabase.from("submissions").delete().eq("client_id", session.id).eq("month_key", entry.month_key); await supabase.from("month_entries").delete().eq("client_id", session.id).eq("month_key", entry.month_key); await loadUserData(); }} style={{ background:"none", border:"1px solid rgba(247,92,92,0.4)", borderRadius:7, padding:"3px 8px", fontSize:11, color:"var(--red)", cursor:"pointer", fontFamily:"inherit" }}>🗑</button>
+                          <Btn variant="ghost" size="sm" onClick={e => { e.stopPropagation(); exportMonthToExcel(entry); }}>Excel ↓</Btn>
+                          <button onClick={async e => { e.stopPropagation(); if (!window.confirm(`למחוק את ${entry.label}?`)) return; await supabase.from("submissions").delete().eq("client_id", session.id).eq("month_key", entry.month_key); await supabase.from("month_entries").delete().eq("client_id", session.id).eq("month_key", entry.month_key); await loadUserData(); }} style={{ background:"none", border:"1px solid rgba(247,92,92,0.4)", borderRadius:7, padding:"3px 8px", fontSize: 13, color:"var(--red)", cursor:"pointer", fontFamily:"inherit" }}>🗑</button>
                         </div>
                       </div>
                     </div>
@@ -606,7 +774,7 @@ export default function ClientApp({ session, onLogout }) {
               clientPlan={clientPlan}
               portfolioMonths={portfolioMonths}
               portfolioSubs={portfolioSubs}
-              onDataChange={loadUserData}
+              onDataChange={reloadSilent}
               onMonthCreated={(newEntry) => setPortfolioMonths(p => [newEntry, ...p.filter(e => e.month_key !== newEntry.month_key)])}
               rememberedMappings={rememberedMappings}
               onRememberingAdded={(name, cat) => setRememberedMappings(p => ({ ...p, [name]: cat }))}
@@ -628,6 +796,9 @@ export default function ClientApp({ session, onLogout }) {
               ignoredCats={ignoredCats}
               incomeCats={incomeCats}
               categoryRules={categoryRules}
+              activeSubTab={portfolioSubTab}
+              visitedSubTabs={visitedPortfolioSubTabs}
+              onSubTabChange={switchPortfolioSubTab}
             />
           )}
 
@@ -636,37 +807,42 @@ export default function ClientApp({ session, onLogout }) {
             <ClientPersonalTab session={session} />
           )}
 
-          {/* ANALYTICS TRENDS TAB — מגמות */}
-          {completedOnboarding && activeTab === "analytics-trends" && (
-            <AnalyticsTrends
-              clientId={session.id}
-              portfolioSubs={portfolioSubs}
-              importedTxs={importedTxs}
-              manualTxs={manualTxs}
-              rememberedMappings={rememberedMappings}
-              cycleStartDay={cycleStartDay}
-              ignoredCats={ignoredCats}
-              incomeCats={incomeCats}
-              categoryRules={categoryRules}
-            />
+          {/* ANALYTICS TRENDS TAB — מגמות (lazy mount) */}
+          {completedOnboarding && visitedTabs.has("analytics-trends") && (
+            <div style={{ display: activeTab === "analytics-trends" ? "block" : "none" }}>
+              <AnalyticsTrends
+                clientId={session.id}
+                portfolioSubs={portfolioSubs}
+                importedTxs={importedTxs}
+                manualTxs={manualTxs}
+                rememberedMappings={rememberedMappings}
+                cycleStartDay={cycleStartDay}
+                ignoredCats={ignoredCats}
+                incomeCats={incomeCats}
+                categoryRules={categoryRules}
+              />
+            </div>
           )}
 
-          {/* ANALYTICS FORECAST TAB — תחזית */}
-          {completedOnboarding && activeTab === "analytics-forecast" && (
-            <AnalyticsForecast
-              clientId={session.id}
-              portfolioSubs={portfolioSubs}
-              importedTxs={importedTxs}
-              manualTxs={manualTxs}
-              rememberedMappings={rememberedMappings}
-              cycleStartDay={cycleStartDay}
-              ignoredCats={ignoredCats}
-              incomeCats={incomeCats}
-              fixedCats={fixedCats}
-              categoryRules={categoryRules}
-            />
+          {/* ANALYTICS FORECAST TAB — תחזית (lazy mount) */}
+          {completedOnboarding && visitedTabs.has("analytics-forecast") && (
+            <div style={{ display: activeTab === "analytics-forecast" ? "block" : "none" }}>
+              <AnalyticsForecast
+                clientId={session.id}
+                portfolioSubs={portfolioSubs}
+                importedTxs={importedTxs}
+                manualTxs={manualTxs}
+                rememberedMappings={rememberedMappings}
+                cycleStartDay={cycleStartDay}
+                ignoredCats={ignoredCats}
+                incomeCats={incomeCats}
+                fixedCats={fixedCats}
+                categoryRules={categoryRules}
+              />
+            </div>
           )}
-        </div>
+          </div>
+        </>
       )}
 
       {/* ── MONTH DETAIL ── */}
@@ -683,21 +859,20 @@ export default function ClientApp({ session, onLogout }) {
           onHiddenCatsChange={saveHiddenCats}
           scenarioCats={scenarioCats}
           ignoredCats={ignoredCats}
+          incomeCats={incomeCats}
           onAddSource={() => openUpload(activeMonth.month_key, activeMonth.label)}
           onFinalize={finalizeMonth}
           onReopen={() => reopenMonth(activeMonth.month_key)}
           onBack={() => setScreen("dashboard")}
           onDeleteSub={async (subId) => {
             await supabase.from("submissions").delete().eq("id", subId);
-            const { data: subs } = await supabase.from("submissions").select("*").eq("client_id", session.id).eq("month_key", activeMonth.month_key).order("created_at", { ascending: true });
-            setMonthSubs(subs || []);
-            await loadUserData();
+            setMonthSubs(prev => prev.filter(s => s.id !== subId));
+            reloadSilent();
           }}
           onUpdateSub={async (subId, newTx) => {
             await supabase.from("submissions").update({ transactions: newTx }).eq("id", subId);
-            const { data: subs } = await supabase.from("submissions").select("*").eq("client_id", session.id).eq("month_key", activeMonth.month_key).order("created_at", { ascending: true });
-            setMonthSubs(subs || []);
-            await loadUserData();
+            setMonthSubs(prev => prev.map(s => s.id === subId ? { ...s, transactions: newTx } : s));
+            reloadSilent();
           }}
         />
       )}
@@ -707,14 +882,14 @@ export default function ClientApp({ session, onLogout }) {
         <div style={{ maxWidth:640, margin:"0 auto", padding:"28px 20px" }}>
           <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:24 }}>
             <Btn variant="ghost" size="sm" onClick={() => { if (uploadSource === "month" && activeMonth) setScreen("month"); else setScreen("dashboard"); }}>← חזור</Btn>
-            <div style={{ fontWeight:700, fontSize:18 }}>📂 הוסף תנועות — {selectedMonthLabel}</div>
+            <div style={{ fontWeight:700, fontSize: 20, color:"var(--green-deep)", letterSpacing:"-0.3px" }}>הוסף תנועות — {selectedMonthLabel}</div>
           </div>
 
           <Card style={{ marginBottom:16 }}>
-            <div style={{ fontWeight:700, marginBottom:12, fontSize:14 }}>שם המקור</div>
-            <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:10 }}>
-              {["מקס","ישראכרט","ויזה","דיינרס","עו\"ש","אחר"].map(s => (
-                <button key={s} onClick={() => setSourceLabel(s)} style={{ padding:"6px 14px", borderRadius:20, fontSize:12, cursor:"pointer", fontFamily:"inherit", border:`1px solid ${sourceLabel===s?"var(--green-mid)":"var(--border)"}`, background:sourceLabel===s?"var(--green-mint)":"var(--surface2)", color:sourceLabel===s?"var(--green-mid)":"var(--text-dim)", fontWeight:sourceLabel===s?700:400 }}>{s}</button>
+            <div style={{ fontWeight:600, marginBottom:8, fontSize: 16, color:"var(--text-mid)" }}>שם המקור</div>
+            <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:10 }}>
+              {["כלול בכרטיס","עו\"ש","אחר"].map(s => (
+                <button type="button" key={s} onClick={() => setSourceLabel(s)} style={{ padding:"12px 28px", borderRadius:12, fontSize: 18, fontWeight:700, cursor:"pointer", fontFamily:"inherit", border:`2px solid ${sourceLabel===s?"var(--green-mid)":"var(--border)"}`, background:sourceLabel===s?"var(--green-mint)":"var(--surface2)", color:sourceLabel===s?"var(--green-deep)":"var(--text-dim)", boxShadow: sourceLabel===s?"0 2px 8px rgba(45,106,79,0.2)":"none", transition:"all 0.15s" }}>{s}</button>
               ))}
             </div>
             <Input label="או הכנס שם ידני" value={sourceLabel} onChange={e => setSourceLabel(e.target.value)} placeholder='למשל "מקס - אמא"' />
@@ -732,7 +907,7 @@ export default function ClientApp({ session, onLogout }) {
           >
             <div style={{ fontSize:32, marginBottom:10 }}>{dragOver ? "⬇️" : "📎"}</div>
             <div style={{ fontWeight:700, marginBottom:6 }}>{dragOver ? "שחרר להוספה" : "גרור קבצים לכאן"}</div>
-            <div style={{ fontSize:12, color:"var(--text-dim)", marginBottom:16 }}>Excel, CSV, PDF, Word, תמונות וכל קובץ פיננסי רלוונטי</div>
+            <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:16 }}>Excel, CSV, PDF, Word, תמונות וכל קובץ פיננסי רלוונטי</div>
             <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv,.pdf,.png,.jpg,.jpeg,.doc,.docx,.txt,.ods" multiple style={{ display:"none" }} onChange={e => handleFiles(e.target.files)} />
             <Btn onClick={() => fileInputRef.current?.click()}>בחר קבצים</Btn>
           </div>
@@ -743,15 +918,15 @@ export default function ClientApp({ session, onLogout }) {
                 const res = analyzeResults.find(r => r.name === f.name);
                 return (
                   <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 0", borderBottom:i<uploadedFiles.length-1?`1px solid ${"var(--border)"}22`:"none" }}>
-                    <span style={{ fontSize:13 }}>📄 {f.name}</span>
+                    <span style={{ fontSize: 15 }}>📄 {f.name}</span>
                     <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                       {res && (
-                        <span style={{ fontSize:11, color: res.error ? "var(--red)" : res.count === 0 ? "var(--gold)" : "var(--green-soft)" }}>
+                        <span style={{ fontSize: 13, color: res.error ? "var(--red)" : res.count === 0 ? "var(--gold)" : "var(--green-soft)" }}>
                           {res.error ? `⚠️ ${res.error}` : res.count === 0 ? "⚠️ לא זוהו תנועות" : `✓ ${res.count} תנועות`}
                         </span>
                       )}
-                      {analyzing && !res && <span style={{ fontSize:11, color:"var(--text-dim)" }}>מנתח...</span>}
-                      <button onClick={() => setUploadedFiles(p => p.filter((_,j) => j!==i))} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize:16 }}>×</button>
+                      {analyzing && !res && <span style={{ fontSize: 13, color:"var(--text-dim)" }}>מנתח...</span>}
+                      <button onClick={() => setUploadedFiles(p => p.filter((_,j) => j!==i))} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize: 18 }}>×</button>
                     </div>
                   </div>
                 );
@@ -760,7 +935,7 @@ export default function ClientApp({ session, onLogout }) {
           )}
 
           {analyzeResults.length > 0 && !analyzing && analyzeResults.every(r => r.count === 0) && (
-            <div style={{ background:"rgba(255,183,77,0.1)", border:"1px solid var(--gold)", borderRadius:8, padding:"10px 14px", marginBottom:14, fontSize:13, color:"var(--gold)" }}>
+            <div style={{ background:"rgba(255,183,77,0.1)", border:"1px solid var(--gold)", borderRadius:8, padding:"10px 14px", marginBottom:14, fontSize: 15, color:"var(--gold)" }}>
               ⚠️ לא זוהו תנועות באף קובץ. בדוק שהקבצים הם Excel/CSV עם עמודות תאריך, שם ועסק וסכום.
             </div>
           )}
@@ -777,20 +952,20 @@ export default function ClientApp({ session, onLogout }) {
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:20, flexWrap:"wrap", gap:10 }}>
             <div style={{ display:"flex", alignItems:"center", gap:10 }}>
               <Btn variant="ghost" size="sm" onClick={() => setScreen("upload")}>← חזור</Btn>
-              <div style={{ fontWeight:700, fontSize:18 }}>✏️ סיווג תנועות</div>
+              <div style={{ fontWeight:700, fontSize: 20, color:"var(--green-deep)", letterSpacing:"-0.3px" }}>סיווג תנועות</div>
             </div>
             <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-              <span style={{ fontSize:13, color:"var(--text-dim)", alignSelf:"center" }}>{transactions.length} תנועות</span>
-              <Btn size="sm" onClick={saveSubmission}>💾 שמור ←</Btn>
+              <span style={{ fontSize: 15, color:"var(--text-dim)", alignSelf:"center" }}>{transactions.length} תנועות</span>
+              <Btn size="sm" onClick={saveSubmission}>שמור ←</Btn>
             </div>
           </div>
 
           {/* Filter bar */}
           <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
             {[["all","הכל"],["low","ביטחון נמוך"],["edited","נערך"]].map(([v,l]) => (
-              <button key={v} onClick={() => setFilter(v)} style={{ padding:"6px 16px", borderRadius:20, fontSize:14, cursor:"pointer", fontFamily:"inherit", border:`1px solid ${filter===v?"var(--green-mid)":"var(--border)"}`, background:filter===v?"var(--green-mint)":"transparent", color:filter===v?"var(--green-deep)":"var(--text-mid)" }}>{l}</button>
+              <button key={v} onClick={() => setFilter(v)} style={{ padding:"6px 16px", borderRadius:20, fontSize: 16, cursor:"pointer", fontFamily:"inherit", border:`1px solid ${filter===v?"var(--green-mid)":"var(--border)"}`, background:filter===v?"var(--green-mint)":"transparent", color:filter===v?"var(--green-deep)":"var(--text-mid)" }}>{l}</button>
             ))}
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="חיפוש..." style={{ flex:1, minWidth:120, background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:20, padding:"6px 16px", color:"var(--text)", fontSize:14, fontFamily:"inherit", outline:"none" }} />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="חיפוש..." style={{ flex:1, minWidth:120, background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:20, padding:"6px 16px", color:"var(--text)", fontSize: 16, fontFamily:"inherit", outline:"none" }} />
           </div>
 
           <RememberModal
@@ -813,83 +988,178 @@ export default function ClientApp({ session, onLogout }) {
             onJustHere={() => setPendingRemember(null)}
           />
 
-          {filteredTx.map(tx => {
-            const isKnown = !!rememberedMappings[tx.name];
-            return (
-            <Card key={tx.id} style={{ marginBottom:10, padding:"14px 18px" }}>
-              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
-                <div style={{ flex:1 }}>
-                  <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                    <span style={{ fontWeight:600, fontSize:15 }}>{tx.name}</span>
-                    <span style={{ fontSize:10, padding:"2px 7px", borderRadius:10, fontWeight:600,
-                      background: isKnown ? "rgba(46,204,138,0.12)" : "rgba(255,183,77,0.12)",
-                      color: isKnown ? "var(--green-soft)" : "var(--gold)",
-                      border: `1px solid ${isKnown ? "rgba(46,204,138,0.3)" : "rgba(255,183,77,0.3)"}`,
-                    }}>{isKnown ? "מוכר" : "חדש"}</span>
+          {(() => {
+            const isPdf = (tx: any) => (tx.source || '').toLowerCase().endsWith('.pdf');
+            const toggleFlowType = (id: any) => {
+              setTransactions(prev => prev.map(t =>
+                t.id === id
+                  ? { ...t, flow_type: t.flow_type === 'credit_transfer' ? 'expense' : 'credit_transfer' }
+                  : t
+              ));
+            };
+
+            const incomeTxs        = filteredTx.filter(tx => tx.maxCat === 'הכנסות');
+            const creditTransferTxs = filteredTx.filter(tx => tx.maxCat !== 'הכנסות' && tx.flow_type === 'credit_transfer');
+            const expenseTxs       = filteredTx.filter(tx => tx.maxCat !== 'הכנסות' && tx.flow_type !== 'credit_transfer');
+            const hasIncome         = incomeTxs.length > 0;
+            const hasTransfers      = creditTransferTxs.length > 0;
+
+            const toggleSelect = (id: any) => setSelectedTxIds(prev => {
+              const next = new Set(prev);
+              next.has(id) ? next.delete(id) : next.add(id);
+              return next;
+            });
+
+            const renderTxCard = (tx: any, inTransferSection = false) => {
+              const isKnown  = !!rememberedMappings[tx.name];
+              const needsCat = tx.conf === 'low' && tx.cat === 'הוצאות לא מתוכננות' && isPdf(tx) && !inTransferSection;
+              const isSelected = selectedTxIds.has(tx.id);
+              return (
+              <Card key={tx.id} onClick={() => { if (activeTxId === tx.id || activeTxId === `note_${tx.id}`) { setActiveTxId(null); } else { toggleSelect(tx.id); } }} style={{ marginBottom:10, padding:"14px 18px", opacity: inTransferSection ? 0.85 : 1, cursor:"pointer", border: isSelected ? "2px solid var(--green-mid)" : "1px solid var(--border)", background: isSelected ? "var(--green-pale)" : "var(--surface)" }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
+                  <div style={{ flex:1, display:"flex", alignItems:"flex-start", gap:10 }}>
+                    <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(tx.id)} onClick={e => e.stopPropagation()}
+                      style={{ marginTop:3, width:16, height:16, cursor:"pointer", accentColor:"var(--green-mid)", flexShrink:0 }} />
+                    <div>
+                    <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                      <span style={{ fontWeight:600, fontSize: 17 }}>{tx.name}</span>
+                      <span style={{ fontSize: 12, padding:"2px 8px", borderRadius:20, fontWeight:600,
+                        background: isKnown ? "rgba(46,204,138,0.12)" : "rgba(255,183,77,0.12)",
+                        color: isKnown ? "var(--green-soft)" : "var(--gold)",
+                        border: `1px solid ${isKnown ? "rgba(46,204,138,0.3)" : "rgba(255,183,77,0.3)"}`,
+                      }}>{isKnown ? "מוכר" : "חדש"}</span>
+                    </div>
+                    <div style={{ fontSize: 15, color:"var(--text-dim)" }}>{tx.date}</div>
+                    {tx.note && <div style={{ fontSize: 14, color:"var(--text-mid)", marginTop:3, fontStyle:"italic" }}>{tx.note}</div>}
+                    </div>
                   </div>
-                  <div style={{ fontSize:12, color:"var(--text-dim)" }}>{tx.date}</div>
-                  {tx.note && (
-                    <div style={{ fontSize:12, color:"var(--text-mid)", marginTop:3, fontStyle:"italic" }}>📝 {tx.note}</div>
-                  )}
+                  <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }} onClick={e => e.stopPropagation()}>
+                    <span style={{ fontWeight:700, color: tx.maxCat === 'הכנסות' ? "var(--green-mid)" : "var(--red)", fontSize: 17 }}>
+                      {tx.maxCat === 'הכנסות' ? '+' : ''}₪{tx.amount.toLocaleString()}
+                    </span>
+                    {!inTransferSection && (
+                      <>
+                        <button type="button"
+                          onClick={e => { e.stopPropagation(); setActiveTxId(tx.id === activeTxId ? null : tx.id); setCatSearch(""); setPendingRemember(null); }}
+                          style={{ background: needsCat ? "rgba(192,57,43,0.08)" : "var(--green-mint)", border:`1px solid ${needsCat ? "var(--red)" : "var(--green-soft)"}`, borderRadius:20, padding:"5px 14px", fontSize: 15, color: needsCat ? "var(--red)" : "var(--green-deep)", cursor:"pointer", fontFamily:"inherit", fontWeight:600 }}
+                        >{needsCat ? '⚠️ דרוש סיווג' : tx.cat}</button>
+                        {tx.cat !== 'להתעלם' ? (
+                          <button type="button"
+                            onClick={e => { e.stopPropagation(); setPrevCatMap(p => ({...p, [tx.id]: tx.cat})); setTransactions(prev => prev.map(t => t.id === tx.id ? { ...t, cat:"להתעלם", edited:true, conf:"high" } : t)); setActiveTxId(null); }}
+                            title="התעלם מתנועה זו — לא תיספר"
+                            style={{ background:"transparent", border:"1px solid var(--border)", borderRadius:8, padding:"5px 10px", fontSize: 15, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}
+                          >⊘</button>
+                        ) : prevCatMap[tx.id] ? (
+                          <button type="button"
+                            onClick={e => { e.stopPropagation(); const prev = prevCatMap[tx.id]; setTransactions(p => p.map(t => t.id === tx.id ? { ...t, cat:prev, edited:true, conf:"high" } : t)); setPrevCatMap(p => { const n={...p}; delete n[tx.id]; return n; }); }}
+                            title="בטל התעלמות"
+                            style={{ background:"var(--green-mint)", border:"1px solid var(--green-soft)", borderRadius:8, padding:"5px 10px", fontSize:13, color:"var(--green-deep)", cursor:"pointer", fontFamily:"inherit", whiteSpace:"nowrap" }}
+                          >↩️ {prevCatMap[tx.id]}</button>
+                        ) : null}
+                      </>
+                    )}
+                    <button
+                      onClick={() => setActiveTxId(activeTxId === `note_${tx.id}` ? null : `note_${tx.id}`)}
+                      style={{ background:"transparent", border:"1px solid var(--border)", borderRadius:8, padding:"5px 10px", fontSize: 15, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}
+                      title="הוסף הערה"
+                    >✎</button>
+                    {isPdf(tx) && (
+                      <button
+                        onClick={() => toggleFlowType(tx.id)}
+                        title={inTransferSection ? "הזז להוצאות רגילות" : "סמן כחיוב אשראי — לא ייספר בהוצאות"}
+                        style={{ background: inTransferSection ? "var(--green-mint)" : "transparent", border:`1px solid ${inTransferSection ? "var(--green-soft)" : "var(--border)"}`, borderRadius:8, padding:"5px 10px", fontSize: 14, color: inTransferSection ? "var(--green-deep)" : "var(--text-dim)", cursor:"pointer", fontFamily:"inherit", whiteSpace:"nowrap" }}
+                      >{inTransferSection ? "↩️ הוצאה" : "💳 כלול בכרטיס"}</button>
+                    )}
+                  </div>
                 </div>
-                <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
-                  <span style={{ fontWeight:700, color:"var(--red)", fontSize:15 }}>₪{tx.amount.toLocaleString()}</span>
-                  <button
-                    onClick={() => { setActiveTxId(tx.id === activeTxId ? null : tx.id); setCatSearch(""); setPendingRemember(null); }}
-                    style={{ background:"var(--green-mint)", border:"1px solid var(--green-soft)", borderRadius:8, padding:"5px 14px", fontSize:13, color:"var(--green-deep)", cursor:"pointer", fontFamily:"inherit", fontWeight:600 }}
-                  >{tx.cat}</button>
-                  <button
-                    onClick={() => setActiveTxId(activeTxId === `note_${tx.id}` ? null : `note_${tx.id}`)}
-                    style={{ background:"transparent", border:"1px solid var(--border)", borderRadius:8, padding:"5px 10px", fontSize:13, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}
-                    title="הוסף הערה"
-                  >📝</button>
-                </div>
-              </div>
-
-              {activeTxId === tx.id && (
-                <CategoryPicker
-                  current={tx.cat}
-                  catSearch={catSearch}
-                  setCatSearch={setCatSearch}
-                  categories={categories}
-                  rows={categoryRows}
-                  clientCats={clientCats}
-                  clientId={session.id}
-                  onCategoryAdded={reloadCategories}
-                  hiddenCats={hiddenCats}
-                  onHiddenCatsChange={saveHiddenCats}
-                  onSelect={(cat) => {
-                    const txName = tx.name;
-                    setTransactions(prev => prev.map(t =>
-                      t.name === txName ? { ...t, cat, edited: true, conf: "high" } : t
-                    ));
-                    setActiveTxId(null);
-                    setCatSearch("");
-                    setPendingRemember({ name: txName, cat });
-                  }}
-                />
-              )}
-
-              {activeTxId === `note_${tx.id}` && (
-                <div style={{ marginTop:10 }}>
-                  <input
-                    autoFocus
-                    value={tx.note || ""}
-                    onChange={e => updateTxNote(tx.id, e.target.value)}
-                    placeholder="הוסף הערה לעסקה זו..."
-                    style={{ width:"100%", background:"var(--surface2)", border:"1.5px solid var(--green-soft)", borderRadius:8, padding:"8px 12px", color:"var(--text)", fontFamily:"inherit", fontSize:14, outline:"none", boxSizing:"border-box" }}
-                    onKeyDown={e => { if (e.key === "Enter" || e.key === "Escape") setActiveTxId(null); }}
+                {!inTransferSection && activeTxId === tx.id && (
+                  <CategoryPicker
+                    current={tx.cat}
+                    catSearch={catSearch}
+                    setCatSearch={setCatSearch}
+                    categories={categories}
+                    rows={categoryRows}
+                    clientCats={clientCats}
+                    clientId={session.id}
+                    onCategoryAdded={reloadCategories}
+                    hiddenCats={hiddenCats}
+                    onHiddenCatsChange={saveHiddenCats}
+                    onSelect={(cat) => {
+                      setTransactions(prev => prev.map(t =>
+                        t.id === tx.id ? { ...t, cat, edited: true, conf: "high" } : t
+                      ));
+                      setActiveTxId(null); setCatSearch("");
+                      setPendingRemember({ name: tx.name, cat });
+                    }}
                   />
-                  <div style={{ fontSize:11, color:"var(--text-dim)", marginTop:4 }}>Enter או Escape לסגור</div>
-                </div>
-              )}
-            </Card>
+                )}
+                {activeTxId === `note_${tx.id}` && (
+                  <div style={{ marginTop:10 }}>
+                    <input autoFocus value={tx.note || ""} onChange={e => updateTxNote(tx.id, e.target.value)}
+                      placeholder="הוסף הערה לעסקה זו..."
+                      style={{ width:"100%", background:"var(--surface2)", border:"1.5px solid var(--green-soft)", borderRadius:8, padding:"8px 12px", color:"var(--text)", fontFamily:"inherit", fontSize: 16, outline:"none", boxSizing:"border-box" }}
+                      onKeyDown={e => { if (e.key === "Enter" || e.key === "Escape") setActiveTxId(null); }}
+                    />
+                    <div style={{ fontSize: 13, color:"var(--text-dim)", marginTop:4 }}>Enter או Escape לסגור</div>
+                  </div>
+                )}
+              </Card>
+              );
+            };
+
+            return (
+              <>
+                {hasIncome && (
+                  <>
+                    <div style={{ fontWeight:800, fontSize: 20, color:"var(--green-deep)", marginBottom:10, marginTop:8, padding:"10px 14px", background:"var(--green-mint)", borderRadius:10, display:"flex", alignItems:"center", gap:8, borderBottom:"2px solid var(--green-soft)" }}>
+                      💰 הכנסות <span style={{ fontWeight:500, color:"var(--green-mid)", fontSize: 16 }}>({incomeTxs.length})</span>
+                    </div>
+                    {incomeTxs.map(tx => renderTxCard(tx, false))}
+                  </>
+                )}
+                {expenseTxs.length > 0 && (
+                  <div style={{ fontWeight:800, fontSize: 20, color:"var(--red)", marginBottom:10, marginTop: hasIncome ? 16 : 8, padding:"10px 14px", background:"var(--red-light)", borderRadius:10, display:"flex", alignItems:"center", gap:8, borderBottom:"2px solid var(--red)" }}>
+                    💸 הוצאות <span style={{ fontWeight:500, color:"var(--text-dim)", fontSize: 16 }}>({expenseTxs.length})</span>
+                  </div>
+                )}
+                {expenseTxs.map(tx => renderTxCard(tx, false))}
+                {hasTransfers && (
+                  <>
+                    <div style={{ fontWeight:800, fontSize: 20, color:"var(--text-dim)", marginBottom:6, marginTop:20, padding:"10px 14px", background:"var(--surface2)", borderRadius:10, display:"flex", alignItems:"center", gap:8, borderBottom:"2px solid var(--border)" }}>
+                      🔄 חיובי אשראי <span style={{ fontWeight:500, color:"var(--text-dim)", fontSize: 16 }}>({creditTransferTxs.length})</span>
+                    </div>
+                    <div style={{ fontSize: 15, color:"var(--text-dim)", background:"rgba(255,183,77,0.08)", border:"1px solid rgba(255,183,77,0.25)", borderRadius:8, padding:"8px 14px", marginBottom:10 }}>
+                      ℹ️ תנועות אלו הן תשלומי כרטיס אשראי — <strong>לא נספרות כהוצאה</strong> כדי למנוע כפילות עם נתוני מקס/ישראכרט. לחץ על ↩️ כדי להעביר להוצאות.
+                    </div>
+                    {creditTransferTxs.map(tx => renderTxCard(tx, true))}
+                  </>
+                )}
+              </>
             );
-          })}
+          })()}
+
+          {/* Bulk action bar */}
+          {selectedTxIds.size > 0 && (
+            <div style={{ position:"sticky", bottom:72, display:"flex", justifyContent:"center", marginTop:12, zIndex:100 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:10, background:"var(--green-deep)", color:"#fff", borderRadius:14, padding:"10px 20px", boxShadow:"0 4px 24px rgba(30,77,53,0.45)", fontSize: 16 }}>
+                <span style={{ fontWeight:700 }}>{selectedTxIds.size} נבחרו</span>
+                <button type="button" onClick={() => { setTransactions(prev => prev.map(t => selectedTxIds.has(t.id) ? { ...t, cat:"להתעלם", edited:true, conf:"high" } : t)); setSelectedTxIds(new Set()); }}
+                  style={{ background:"rgba(255,255,255,0.15)", border:"1px solid rgba(255,255,255,0.3)", borderRadius:8, padding:"5px 14px", fontSize: 15, color:"#fff", cursor:"pointer", fontFamily:"inherit", fontWeight:600 }}>
+                  ⊘ התעלם מנבחרים
+                </button>
+                <button type="button" onClick={() => { setTransactions(prev => prev.filter(t => !selectedTxIds.has(t.id))); setSelectedTxIds(new Set()); }}
+                  style={{ background:"rgba(192,57,43,0.7)", border:"1px solid rgba(255,255,255,0.2)", borderRadius:8, padding:"5px 14px", fontSize: 15, color:"#fff", cursor:"pointer", fontFamily:"inherit", fontWeight:600 }}>
+                  🗑 מחק נבחרים
+                </button>
+                <button type="button" onClick={() => setSelectedTxIds(new Set())}
+                  style={{ background:"transparent", border:"none", color:"rgba(255,255,255,0.6)", cursor:"pointer", fontSize: 20, padding:"0 4px" }}>×</button>
+              </div>
+            </div>
+          )}
 
           {/* Save button at bottom too */}
-          <div style={{ position:"sticky", bottom:20, display:"flex", justifyContent:"center", marginTop:16 }}>
-            <Btn onClick={saveSubmission} style={{ boxShadow:"0 4px 20px rgba(45,106,79,0.3)", padding:"12px 36px", fontSize:15 }}>💾 שמור את כל הסיווגים</Btn>
+          <div style={{ position:"sticky", bottom:20, display:"flex", justifyContent:"center", marginTop:8 }}>
+            <Btn onClick={saveSubmission} style={{ boxShadow:"0 4px 20px rgba(45,106,79,0.3)", padding:"12px 36px", fontSize: 17 }}>שמור את כל הסיווגים ←</Btn>
           </div>
         </div>
       )}
@@ -909,24 +1179,52 @@ export default function ClientApp({ session, onLogout }) {
         />
       )}
 
-      {/* ── כפתורי יצירת קשר צפים ── */}
-      <div style={{ position:"fixed", bottom:24, left:24, display:"flex", flexDirection:"column", gap:10, zIndex:1000 }}>
-        <a href="https://wa.me/972542558557" target="_blank" rel="noreferrer"
-          title="שלח הודעת WhatsApp לאלון"
-          style={{ width:48, height:48, borderRadius:"50%", background:"#25D366", display:"flex", alignItems:"center", justifyContent:"center", boxShadow:"0 4px 14px rgba(37,211,102,0.4)", textDecoration:"none" }}>
-          <svg width="26" height="26" viewBox="0 0 32 32" fill="white">
-            <path d="M16 3C9.373 3 4 8.373 4 15c0 2.385.668 4.61 1.832 6.514L4 29l7.697-1.799A12.93 12.93 0 0016 27c6.627 0 12-5.373 12-12S22.627 3 16 3zm6.406 16.594c-.27.755-1.59 1.44-2.184 1.527-.55.08-1.243.114-2.006-.126-.464-.147-1.06-.344-1.82-.674-3.196-1.38-5.287-4.603-5.447-4.815-.16-.212-1.3-1.73-1.3-3.3s.82-2.344 1.112-2.664c.291-.32.635-.4.847-.4.212 0 .423.002.608.01.195.01.457-.074.715.546.268.643.91 2.216.99 2.376.08.16.133.347.027.556-.107.212-.16.344-.32.53l-.48.558c-.16.16-.326.333-.14.653.186.32.826 1.362 1.773 2.206 1.218 1.086 2.245 1.422 2.564 1.582.32.16.507.133.694-.08.186-.212.8-.934.014-1.147-.787-.213-.16-1.067.16-1.067z"/>
-          </svg>
-        </a>
-        <a href="mailto:alon4040@gmail.com" target="_blank" rel="noreferrer"
-          title="שלח מייל לאלון"
-          style={{ width:48, height:48, borderRadius:"50%", background:"var(--green-mid)", display:"flex", alignItems:"center", justifyContent:"center", boxShadow:"0 4px 14px rgba(46,183,124,0.4)", textDecoration:"none" }}>
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
-            <polyline points="22,6 12,13 2,6"/>
-          </svg>
-        </a>
-      </div>
+      {/* ── פס צד יצירת קשר ── */}
+      <a
+        href="https://wa.me/972542558557"
+        target="_blank"
+        rel="noreferrer"
+        title="שלח הודעת WhatsApp"
+        style={{
+          position: "fixed",
+          right: 0,
+          top: "50%",
+          transform: "translateY(-50%)",
+          zIndex: 1000,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 8,
+          background: "var(--green-mid)",
+          borderRadius: "12px 0 0 12px",
+          padding: "16px 10px",
+          textDecoration: "none",
+          boxShadow: "-2px 0 18px rgba(45,106,79,0.18)",
+          transition: "background 0.2s, box-shadow 0.2s",
+        }}
+        onMouseEnter={e => {
+          (e.currentTarget as HTMLElement).style.background = "var(--green-deep)";
+          (e.currentTarget as HTMLElement).style.boxShadow = "-2px 0 24px rgba(45,106,79,0.3)";
+        }}
+        onMouseLeave={e => {
+          (e.currentTarget as HTMLElement).style.background = "var(--green-mid)";
+          (e.currentTarget as HTMLElement).style.boxShadow = "-2px 0 18px rgba(45,106,79,0.18)";
+        }}
+      >
+        <svg width="22" height="22" viewBox="0 0 32 32" fill="white">
+          <path d="M16 3C9.373 3 4 8.373 4 15c0 2.385.668 4.61 1.832 6.514L4 29l7.697-1.799A12.93 12.93 0 0016 27c6.627 0 12-5.373 12-12S22.627 3 16 3zm6.406 16.594c-.27.755-1.59 1.44-2.184 1.527-.55.08-1.243.114-2.006-.126-.464-.147-1.06-.344-1.82-.674-3.196-1.38-5.287-4.603-5.447-4.815-.16-.212-1.3-1.73-1.3-3.3s.82-2.344 1.112-2.664c.291-.32.635-.4.847-.4.212 0 .423.002.608.01.195.01.457-.074.715.546.268.643.91 2.216.99 2.376.08.16.133.347.027.556-.107.212-.16.344-.32.53l-.48.558c-.16.16-.326.333-.14.653.186.32.826 1.362 1.773 2.206 1.218 1.086 2.245 1.422 2.564 1.582.32.16.507.133.694-.08.186-.212.8-.934.014-1.147-.787-.213-.16-1.067.16-1.067z"/>
+        </svg>
+        <span style={{
+          writingMode: "vertical-rl",
+          transform: "rotate(180deg)",
+          fontSize: 12,
+          color: "rgba(255,255,255,0.75)",
+          letterSpacing: "0.06em",
+          fontWeight: 500,
+        }}>
+          צור קשר
+        </span>
+      </a>
     </div>
   );
 }
@@ -944,20 +1242,20 @@ function MonthPickerModal({ usedMonths, onConfirm, onCancel }) {
     <>
       <div onClick={onCancel} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", zIndex:9000 }} />
       <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:`1px solid ${"var(--border)"}`, borderRadius:16, padding:28, zIndex:9001, width:320, boxShadow:"0 20px 60px rgba(0,0,0,0.6)" }}>
-        <div style={{ fontWeight:700, fontSize:16, marginBottom:20 }}>📅 הוסף חודש</div>
+        <div style={{ fontWeight:700, fontSize: 18, marginBottom:20, color:"var(--green-deep)" }}>הוסף חודש</div>
         <div style={{ marginBottom:14 }}>
-          <div style={{ fontSize:12, color:"var(--text-dim)", marginBottom:5, fontWeight:600 }}>חודש</div>
-          <select value={month} onChange={e => setMonth(Number(e.target.value))} style={{ width:"100%", background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:8, padding:"10px 12px", color:"var(--text)", fontFamily:"'Heebo',sans-serif", fontSize:13, direction:"rtl" }}>
+          <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:5, fontWeight:600 }}>חודש</div>
+          <select value={month} onChange={e => setMonth(Number(e.target.value))} style={{ width:"100%", background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:8, padding:"10px 12px", color:"var(--text)", fontFamily:"'Heebo',sans-serif", fontSize: 15, direction:"rtl" }}>
             {HEBREW_MONTHS.map((m,i) => <option key={i} value={i}>{m}</option>)}
           </select>
         </div>
         <div style={{ marginBottom:20 }}>
-          <div style={{ fontSize:12, color:"var(--text-dim)", marginBottom:5, fontWeight:600 }}>שנה</div>
-          <select value={year} onChange={e => setYear(Number(e.target.value))} style={{ width:"100%", background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:8, padding:"10px 12px", color:"var(--text)", fontFamily:"'Heebo',sans-serif", fontSize:13, direction:"rtl" }}>
+          <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:5, fontWeight:600 }}>שנה</div>
+          <select value={year} onChange={e => setYear(Number(e.target.value))} style={{ width:"100%", background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:8, padding:"10px 12px", color:"var(--text)", fontFamily:"'Heebo',sans-serif", fontSize: 15, direction:"rtl" }}>
             {years.map(y => <option key={y} value={y}>{y}</option>)}
           </select>
         </div>
-        {alreadyUsed && <div style={{ background:"rgba(255,183,77,0.1)", border:"1px solid rgba(255,183,77,0.3)", borderRadius:8, padding:"8px 12px", fontSize:12, color:"var(--gold)", marginBottom:14 }}>⚠️ חודש זה כבר קיים — לחץ עליו ברשימה</div>}
+        {alreadyUsed && <div style={{ background:"rgba(255,183,77,0.1)", border:"1px solid rgba(255,183,77,0.3)", borderRadius:8, padding:"8px 12px", fontSize: 14, color:"var(--gold)", marginBottom:14 }}>⚠️ חודש זה כבר קיים — לחץ עליו ברשימה</div>}
         <div style={{ display:"flex", gap:10 }}>
           <Btn onClick={() => onConfirm(key, HEBREW_MONTHS[month], year)} disabled={alreadyUsed} style={{ flex:1, justifyContent:"center" }}>בחר ←</Btn>
           <Btn variant="ghost" onClick={onCancel}>ביטול</Btn>
@@ -967,8 +1265,28 @@ function MonthPickerModal({ usedMonths, onConfirm, onCancel }) {
   );
 }
 
+// ── ConfirmModal — modal אישור מעוצב ──────────────────────────────────────────
+function ConfirmModal({ title, body, confirmText = "אשר", danger = false, onConfirm, onCancel }: {
+  title: string; body?: string; confirmText?: string; danger?: boolean;
+  onConfirm: () => void; onCancel: () => void;
+}) {
+  return (
+    <>
+      <div onClick={onCancel} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:9000 }} />
+      <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:16, padding:28, zIndex:9001, width:340, boxShadow:"0 20px 60px rgba(0,0,0,0.4)", direction:"rtl" }}>
+        <div style={{ fontWeight:700, fontSize:18, marginBottom: body ? 12 : 20, color: danger ? "var(--red)" : "var(--green-deep)" }}>{title}</div>
+        {body && <div style={{ fontSize:15, color:"var(--text-dim)", marginBottom:20, lineHeight:1.6 }}>{body}</div>}
+        <div style={{ display:"flex", gap:10 }}>
+          <button onClick={onConfirm} style={{ flex:1, padding:"10px 0", borderRadius:8, border:"none", background: danger ? "var(--red)" : "var(--green-mid)", color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>{confirmText}</button>
+          <button onClick={onCancel} style={{ padding:"10px 18px", borderRadius:8, border:"1px solid var(--border)", background:"transparent", color:"var(--text-dim)", fontSize:15, cursor:"pointer", fontFamily:"inherit" }}>ביטול</button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ── LoanFieldForm — מחוץ ל-OnboardingChecklist כדי למנוע remount בכל הקשה ──────
-const LOAN_FLD_STYLE: React.CSSProperties = { width:"100%", boxSizing:"border-box", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"8px 10px", color:"var(--text)", fontSize:12, fontFamily:"inherit", outline:"none" };
+const LOAN_FLD_STYLE: React.CSSProperties = { width:"100%", boxSizing:"border-box", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"8px 10px", color:"var(--text)", fontSize: 14, fontFamily:"inherit", outline:"none" };
 
 function LoanFieldForm({ cat, fields, onChange }) {
   const f = fields || {};
@@ -977,22 +1295,22 @@ function LoanFieldForm({ cat, fields, onChange }) {
     <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
       {[["lender","שם המלווה"],["start_date","תאריך התחלה","date"],["end_date","תאריך סיום","date"],["amount","סכום ראשוני (₪)","number"],["monthly","החזר חודשי (₪)","number"]].map(([k,lbl,t]) => (
         <div key={k}>
-          <div style={{ fontSize:11, color:"var(--text-dim)", marginBottom:3 }}>{lbl}</div>
+          <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:3 }}>{lbl}</div>
           <input type={t||"text"} value={f[k]||""} onChange={e=>set(k,e.target.value)} style={LOAN_FLD_STYLE} placeholder="..." />
         </div>
       ))}
       <div>
-        <div style={{ fontSize:11, color:"var(--text-dim)", marginBottom:3 }}>ריבית</div>
+        <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:3 }}>ריבית</div>
         <div style={{ display:"flex", gap:14, marginTop:6 }}>
           {["כן","לא"].map(v => (
-            <label key={v} style={{ display:"flex", gap:5, alignItems:"center", fontSize:13, cursor:"pointer" }}>
+            <label key={v} style={{ display:"flex", gap:5, alignItems:"center", fontSize: 15, cursor:"pointer" }}>
               <input type="radio" name={`int_${cat}`} checked={f.interest===v} onChange={()=>set("interest",v)} /> {v}
             </label>
           ))}
         </div>
       </div>
       <div style={{ gridColumn:"1/-1" }}>
-        <div style={{ fontSize:11, color:"var(--text-dim)", marginBottom:3 }}>הערות</div>
+        <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:3 }}>הערות</div>
         <textarea value={f.notes||""} onChange={e=>set("notes",e.target.value)} rows={2} style={{ ...LOAN_FLD_STYLE, resize:"vertical" }} placeholder="פרטים נוספים..." />
       </div>
     </div>
@@ -1098,8 +1416,10 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
     const alreadyUsed = finalizedMonths.some(m => m.month_key === newKey && m.id !== editMonthEntry.id);
     if (alreadyUsed) { setEditMonthErr("חודש זה כבר קיים — בחר חודש אחר"); return; }
     setEditMonthSaving(true);
-    await supabase.from("month_entries").update({ month_key: newKey, label: newLabel }).eq("id", editMonthEntry.id);
-    await supabase.from("submissions").update({ month_key: newKey }).eq("client_id", session.id).eq("month_key", editMonthEntry.month_key);
+    const { error: err1 } = await supabase.from("month_entries").update({ month_key: newKey, label: newLabel }).eq("id", editMonthEntry.id);
+    if (err1) { setEditMonthErr("שגיאה בשמירה — " + err1.message); setEditMonthSaving(false); return; }
+    const { error: err2 } = await supabase.from("submissions").update({ month_key: newKey }).eq("client_id", session.id).eq("month_key", editMonthEntry.month_key);
+    if (err2) { setEditMonthErr("שגיאה בעדכון הגשות — " + err2.message); setEditMonthSaving(false); return; }
     setEditMonthEntry(null);
     setEditMonthSaving(false);
     if (onMonthsChange) await onMonthsChange();
@@ -1208,19 +1528,19 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
   const NoteBar = ({ docKey }: { docKey: string }) => {
     const note = docNotes[docKey];
     if (!note) return null;
-    return <div style={{ fontSize:12, color:"var(--text-mid)", background:"rgba(46,125,82,0.07)", borderRadius:6, padding:"6px 12px", marginBottom:6, borderRight:"3px solid var(--green-mid)" }}>📌 {note}</div>;
+    return <div style={{ fontSize: 14, color:"var(--text-mid)", background:"rgba(46,125,82,0.07)", borderRadius:6, padding:"6px 12px", marginBottom:6, borderRight:"3px solid var(--green-mid)" }}>📌 {note}</div>;
   };
 
   const SectionHeader = ({ id, icon, label, required = false, done, partial, onClick }) => (
     <div onClick={onClick} style={{ display:"flex", alignItems:"center", gap:12, padding:"14px 18px", background: done?"rgba(46,204,138,0.06)":"var(--surface2)", borderRadius: expanded===id?"10px 10px 0 0":10, border:`1px solid ${done?"rgba(46,204,138,0.3)":partial?"rgba(79,142,247,0.3)":"var(--border)"}`, cursor:"pointer", userSelect:"none" }}>
-      <span style={{ fontSize:20 }}>{icon}</span>
+      <span style={{ fontSize: 22 }}>{icon}</span>
       <div style={{ flex:1 }}>
-        <div style={{ fontWeight:600, fontSize:14 }}>{label}</div>
-        {required && <div style={{ fontSize:11, color:"var(--text-dim)" }}>חובה</div>}
+        <div style={{ fontWeight:600, fontSize: 16 }}>{label}</div>
+        {required && <div style={{ fontSize: 13, color:"var(--text-dim)" }}>חובה</div>}
       </div>
-      {done && <span style={{ background:"rgba(46,204,138,0.15)", color:"#22c55e", borderRadius:20, padding:"3px 12px", fontSize:12, fontWeight:700 }}>✓ הושלם</span>}
-      {!done && partial && <span style={{ background:"rgba(79,142,247,0.12)", color:"var(--green-mid)", borderRadius:20, padding:"3px 12px", fontSize:12 }}>בתהליך</span>}
-      <span style={{ color:"var(--text-dim)", fontSize:14, marginRight:4 }}>{expanded===id?"▲":"▼"}</span>
+      {done && <span style={{ background:"rgba(46,204,138,0.15)", color:"#22c55e", borderRadius:20, padding:"3px 12px", fontSize: 14, fontWeight:700 }}>✓ הושלם</span>}
+      {!done && partial && <span style={{ background:"rgba(79,142,247,0.12)", color:"var(--green-mid)", borderRadius:20, padding:"3px 12px", fontSize: 14 }}>בתהליך</span>}
+      <span style={{ color:"var(--text-dim)", fontSize: 16, marginRight:4 }}>{expanded===id?"▲":"▼"}</span>
     </div>
   );
 
@@ -1239,14 +1559,14 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
     return (
       <div style={{ marginTop:8, marginBottom:4 }}>
         {saved.map((f,i) => (
-          <div key={i} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, color:"var(--text)", padding:"3px 0" }}>
+          <div key={i} style={{ display:"flex", alignItems:"center", gap:8, fontSize: 14, color:"var(--text)", padding:"3px 0" }}>
             <span>📎 {f.filename}</span>
-            {f.path && <button onClick={() => openFile(f.path)} style={{ background:"none", border:"none", color:"var(--green-mid)", cursor:"pointer", fontSize:11, padding:"0 2px" }} title="צפה">👁</button>}
-            <button onClick={() => deleteFile(cat, i)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize:11, padding:"0 2px" }} title="מחק">✕</button>
+            {f.path && <button onClick={() => openFile(f.path)} style={{ background:"none", border:"none", color:"var(--green-mid)", cursor:"pointer", fontSize: 13, padding:"0 2px" }} title="צפה">👁</button>}
+            <button onClick={() => deleteFile(cat, i)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize: 13, padding:"0 2px" }} title="מחק">✕</button>
           </div>
         ))}
         {pend.map((f,i) => (
-          <div key={i} style={{ fontSize:12, color:"var(--green-mid)", padding:"3px 0" }}>📎 {f.name} <span style={{ color:"var(--text-dim)" }}>(ממתין לשמירה)</span></div>
+          <div key={i} style={{ fontSize: 14, color:"var(--green-mid)", padding:"3px 0" }}>📎 {f.name} <span style={{ color:"var(--text-dim)" }}>(ממתין לשמירה)</span></div>
         ))}
       </div>
     );
@@ -1260,9 +1580,9 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
     </div>
   );
 
-  const fldStyle = { width:"100%", boxSizing:"border-box", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"8px 10px", color:"var(--text)", fontSize:12, fontFamily:"inherit", outline:"none" };
+  const fldStyle = { width:"100%", boxSizing:"border-box", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"8px 10px", color:"var(--text)", fontSize: 14, fontFamily:"inherit", outline:"none" };
   const bodyStyle = { border:"1px solid var(--border)", borderTop:"none", borderRadius:"0 0 10px 10px", padding:"16px 18px", background:"var(--surface)", marginBottom:2 };
-  const descStyle = { fontSize:13, color:"var(--text)", opacity:0.8, marginBottom:12 };
+  const descStyle = { fontSize: 15, color:"var(--text)", opacity:0.8, marginBottom:12 };
 
   return (
     <div style={{ marginBottom:28 }}>
@@ -1271,20 +1591,20 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
         <>
           <div onClick={() => setEditMonthEntry(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:9000 }} />
           <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:16, padding:28, zIndex:9001, width:300, boxShadow:"0 20px 60px rgba(0,0,0,0.5)" }}>
-            <div style={{ fontWeight:700, fontSize:15, marginBottom:16 }}>✏️ ערוך חודש</div>
+            <div style={{ fontWeight:700, fontSize: 18, marginBottom:16 }}>✏️ ערוך חודש</div>
             <div style={{ marginBottom:12 }}>
-              <div style={{ fontSize:12, color:"var(--text-mid)", marginBottom:5, fontWeight:600 }}>חודש</div>
-              <select value={editMonthVal.month} onChange={e => { setEditMonthVal(p => ({...p, month: Number(e.target.value)})); setEditMonthErr(""); }} style={{ width:"100%", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"9px 12px", color:"var(--text)", fontFamily:"inherit", fontSize:13, direction:"rtl" }}>
+              <div style={{ fontSize: 14, color:"var(--text-mid)", marginBottom:5, fontWeight:600 }}>חודש</div>
+              <select value={editMonthVal.month} onChange={e => { setEditMonthVal(p => ({...p, month: Number(e.target.value)})); setEditMonthErr(""); }} style={{ width:"100%", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"9px 12px", color:"var(--text)", fontFamily:"inherit", fontSize: 15, direction:"rtl" }}>
                 {HEBREW_MONTHS.map((m,i) => <option key={i} value={i}>{m}</option>)}
               </select>
             </div>
             <div style={{ marginBottom:16 }}>
-              <div style={{ fontSize:12, color:"var(--text-mid)", marginBottom:5, fontWeight:600 }}>שנה</div>
-              <select value={editMonthVal.year} onChange={e => { setEditMonthVal(p => ({...p, year: Number(e.target.value)})); setEditMonthErr(""); }} style={{ width:"100%", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"9px 12px", color:"var(--text)", fontFamily:"inherit", fontSize:13, direction:"rtl" }}>
+              <div style={{ fontSize: 14, color:"var(--text-mid)", marginBottom:5, fontWeight:600 }}>שנה</div>
+              <select value={editMonthVal.year} onChange={e => { setEditMonthVal(p => ({...p, year: Number(e.target.value)})); setEditMonthErr(""); }} style={{ width:"100%", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"9px 12px", color:"var(--text)", fontFamily:"inherit", fontSize: 15, direction:"rtl" }}>
                 {[2023,2024,2025,2026,2027].map(y => <option key={y} value={y}>{y}</option>)}
               </select>
             </div>
-            {editMonthErr && <div style={{ fontSize:12, color:"var(--red)", marginBottom:10 }}>⚠️ {editMonthErr}</div>}
+            {editMonthErr && <div style={{ fontSize: 14, color:"var(--red)", marginBottom:10 }}>⚠️ {editMonthErr}</div>}
             <div style={{ display:"flex", gap:8 }}>
               <Btn onClick={saveEditMonth} disabled={editMonthSaving} style={{ flex:1, justifyContent:"center" }}>{editMonthSaving ? "שומר..." : "שמור"}</Btn>
               <Btn variant="ghost" onClick={() => setEditMonthEntry(null)} style={{ flex:1, justifyContent:"center" }}>ביטול</Btn>
@@ -1295,7 +1615,7 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
 
       {/* Progress bar */}
       <div style={{ marginBottom:20 }}>
-        <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:"var(--text-dim)", marginBottom:6 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", fontSize: 15, color:"var(--text-dim)", marginBottom:6 }}>
           <span>התקדמות כללית</span>
           <span style={{ fontWeight:700, color: progressPct===100?"#22c55e":"var(--text-dim)" }}>{progressPct}%</span>
         </div>
@@ -1304,7 +1624,7 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
         </div>
       </div>
 
-      <div style={{ fontWeight:700, fontSize:16, marginBottom:16 }}>📋 מסמכים נדרשים</div>
+      <div style={{ fontWeight:700, fontSize: 18, marginBottom:16 }}>📋 מסמכים נדרשים</div>
 
       {/* 1. פירוט תנועות */}
       <div style={{ marginBottom:8 }}>
@@ -1313,9 +1633,9 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
         {expanded==="txs" && (
           <div style={bodyStyle}>
             {finalizedMonths.map(m => (
-              <div key={m.id} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", fontSize:13, color:"var(--text)", padding:"3px 0" }}>
+              <div key={m.id} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", fontSize: 15, color:"var(--text)", padding:"3px 0" }}>
                 <span>✓ {m.label}</span>
-                <button onClick={() => openEditMonth(m)} style={{ background:"none", border:"none", color:"var(--text-mid)", cursor:"pointer", fontSize:12, padding:"2px 6px" }} title="ערוך שם חודש">✏️</button>
+                <button onClick={() => openEditMonth(m)} style={{ background:"none", border:"none", color:"var(--text-mid)", cursor:"pointer", fontSize: 14, padding:"2px 6px" }} title="ערוך שם חודש">✏️</button>
               </div>
             ))}
             <div style={{ ...descStyle, marginTop:6 }}>{txsDone ? "3 חודשי פירוט הושלמו ✓" : `הושלמו ${finalizedMonths.length} מתוך 3 חודשים`}</div>
@@ -1330,7 +1650,7 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
         <DoneLine done={payslipsDone} />
         {expanded==="pays" && (
           <div style={bodyStyle}>
-            {payslips.map(p => <div key={p.id} style={{ fontSize:13, color:"var(--text)", padding:"3px 0" }}>✓ {p.month_label || p.label || new Date(p.created_at).toLocaleDateString("he-IL",{month:"long",year:"numeric"})}</div>)}
+            {payslips.map(p => <div key={p.id} style={{ fontSize: 15, color:"var(--text)", padding:"3px 0" }}>✓ {p.month_label || p.label || new Date(p.created_at).toLocaleDateString("he-IL",{month:"long",year:"numeric"})}</div>)}
             <div style={{ ...descStyle, marginTop:6 }}>{payslipsDone ? "3 תלושים הועלו ✓" : `הועלו ${payslips.length} מתוך 3 תלושים`}</div>
             {!payslipsDone && <Btn size="sm" variant="secondary" onClick={()=>{setExpanded(null);onNavigatePayslips();}}>💼 העלה תלוש →</Btn>}
           </div>
@@ -1354,17 +1674,17 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
                 const pend     = pendingFiles[cat] || [];
                 return (
                   <div key={cat} style={{ marginBottom:14, padding:"12px 14px", background:"var(--surface2)", borderRadius:8, border:"1px solid var(--border)" }}>
-                    <div style={{ fontWeight:600, fontSize:13, marginBottom:8 }}>{lt.icon} {lt.label}</div>
-                    {lt.fileLabel && <div style={{ fontSize:12, color:"var(--text)", opacity:.7, marginBottom:8 }}>נדרש: {lt.fileLabel}</div>}
+                    <div style={{ fontWeight:600, fontSize: 15, marginBottom:8 }}>{lt.icon} {lt.label}</div>
+                    {lt.fileLabel && <div style={{ fontSize: 14, color:"var(--text)", opacity:.7, marginBottom:8 }}>נדרש: {lt.fileLabel}</div>}
                     {(isFields||isBoth) && <LoanFieldForm cat={cat} fields={loanFields[cat]} onChange={(c,k,v) => setLoanFields(prev => ({ ...prev, [c]: { ...(prev[c]||{}), [k]:v } }))} />}
                     {!isFields && (
                       <>
                         <input ref={el=>fileRefs.current[cat]=el} type="file" multiple accept=".pdf,.jpg,.jpeg,.png" style={{ display:"none" }} onChange={e=>onFileChange(cat,e)} />
                         {[...saved.map((f,i)=>({...f,_i:i})), ...pend.map(f=>({filename:f.name,_pending:true}))].map((f,i) => (
-                          <div key={i} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, color:f._pending?"var(--green-mid)":"var(--text)", padding:"2px 0" }}>
+                          <div key={i} style={{ display:"flex", alignItems:"center", gap:8, fontSize: 14, color:f._pending?"var(--green-mid)":"var(--text)", padding:"2px 0" }}>
                             <span>📎 {f.filename}{f._pending&&" (ממתין)"}</span>
-                            {!f._pending && f.path && <button onClick={()=>openFile(f.path)} style={{ background:"none", border:"none", color:"var(--green-mid)", cursor:"pointer", fontSize:11 }}>👁</button>}
-                            {!f._pending && <button onClick={()=>deleteFile(cat,f._i)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize:11 }}>✕</button>}
+                            {!f._pending && f.path && <button onClick={()=>openFile(f.path)} style={{ background:"none", border:"none", color:"var(--green-mid)", cursor:"pointer", fontSize: 13 }}>👁</button>}
+                            {!f._pending && <button onClick={()=>deleteFile(cat,f._i)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize: 13 }}>✕</button>}
                           </div>
                         ))}
                         <div style={{ display:"flex", gap:8, marginTop:8 }}>
@@ -1382,13 +1702,13 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
               {!showLoanPicker
                 ? <Btn size="sm" variant="secondary" onClick={()=>setShowLoanPicker(true)} style={{ marginBottom:14 }}>+ הוסף הלוואה</Btn>
                 : <div style={{ marginBottom:14, padding:12, background:"var(--surface2)", borderRadius:8, border:"1px solid var(--border)" }}>
-                    <div style={{ fontWeight:600, fontSize:13, marginBottom:10 }}>בחר סוג הלוואה:</div>
+                    <div style={{ fontWeight:600, fontSize: 15, marginBottom:10 }}>בחר סוג הלוואה:</div>
                     <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
                       {LOAN_TYPES.filter(lt=>!activeLoanTypes.includes(lt.id)).map(lt => (
-                        <button key={lt.id} onClick={()=>{setActiveLoanTypes(p=>[...p,lt.id]);setShowLoanPicker(false);}} style={{ padding:"6px 14px", borderRadius:20, border:"1px solid var(--border)", background:"var(--surface)", fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>{lt.icon} {lt.label}</button>
+                        <button key={lt.id} onClick={()=>{setActiveLoanTypes(p=>[...p,lt.id]);setShowLoanPicker(false);}} style={{ padding:"6px 14px", borderRadius:20, border:"1px solid var(--border)", background:"var(--surface)", fontSize: 14, cursor:"pointer", fontFamily:"inherit" }}>{lt.icon} {lt.label}</button>
                       ))}
                     </div>
-                    <button onClick={()=>setShowLoanPicker(false)} style={{ marginTop:10, fontSize:12, color:"var(--text-dim)", background:"none", border:"none", cursor:"pointer" }}>ביטול</button>
+                    <button onClick={()=>setShowLoanPicker(false)} style={{ marginTop:10, fontSize: 15, color:"var(--text-dim)", background:"none", border:"none", cursor:"pointer" }}>ביטול</button>
                   </div>
               }
               <Btn onClick={markLoansDone} disabled={!loansHasAny||saving==="loans_section"} style={{ width:"100%" }}>{saving==="loans_section"?"שומר...":"✓ סיימתי להוסיף הלוואות"}</Btn>
@@ -1480,14 +1800,14 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
       {needsQuestionnaire && (
         <div style={{ marginBottom:8 }}>
           <div onClick={onNavigateQuestionnaire} style={{ display:"flex", alignItems:"center", gap:12, padding:"14px 18px", background: questDone?"rgba(46,204,138,0.06)":"var(--surface2)", borderRadius:10, border:`1px solid ${questDone?"rgba(46,204,138,0.3)":"var(--border)"}`, cursor:"pointer", userSelect:"none" }}>
-            <span style={{ fontSize:20 }}>📝</span>
+            <span style={{ fontSize: 22 }}>📝</span>
             <div style={{ flex:1 }}>
-              <div style={{ fontWeight:600, fontSize:14 }}>שאלון אישי</div>
-              <div style={{ fontSize:11, color:"var(--text-dim)" }}>לחץ כדי למלא את השאלון</div>
+              <div style={{ fontWeight:600, fontSize: 16 }}>שאלון אישי</div>
+              <div style={{ fontSize: 13, color:"var(--text-dim)" }}>לחץ כדי למלא את השאלון</div>
             </div>
             {questDone
-              ? <span style={{ background:"rgba(46,204,138,0.15)", color:"#22c55e", borderRadius:20, padding:"3px 12px", fontSize:12, fontWeight:700 }}>✓ הושלם</span>
-              : <span style={{ color:"var(--text-dim)", fontSize:13 }}>←</span>
+              ? <span style={{ background:"rgba(46,204,138,0.15)", color:"#22c55e", borderRadius:20, padding:"3px 12px", fontSize: 14, fontWeight:700 }}>✓ הושלם</span>
+              : <span style={{ color:"var(--text-dim)", fontSize: 15 }}>←</span>
             }
           </div>
         </div>
@@ -1496,7 +1816,7 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
       {/* הגשה */}
       <div style={{ marginTop:24, padding:"18px 20px", background:requiredDone?"rgba(46,204,138,0.06)":"var(--surface2)", borderRadius:12, border:`1px solid ${requiredDone?"rgba(46,204,138,0.3)":"var(--border)"}` }}>
         {!requiredDone && (
-          <div style={{ fontSize:12, color:"var(--text-dim)", marginBottom:10, textAlign:"center", lineHeight:1.6 }}>
+          <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:10, textAlign:"center", lineHeight:1.6 }}>
             להגשה יש להשלים קודם:
             {!txsDone && <span> · פירוט תנועות</span>}
             {!payslipsDone && <span> · תלושי שכר</span>}
@@ -1504,7 +1824,7 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
             {!questDone && <span> · שאלון אישי</span>}
           </div>
         )}
-        <Btn onClick={handleSubmit} disabled={!requiredDone||submitting} style={{ width:"100%", padding:"14px", fontSize:15, fontWeight:700, opacity:requiredDone?1:0.45 }}>{submitting?"מגיש...":"✅ הגש לאלון"}</Btn>
+        <Btn onClick={handleSubmit} disabled={!requiredDone||submitting} style={{ width:"100%", padding:"14px", fontSize: 17, fontWeight:700, opacity:requiredDone?1:0.45 }}>{submitting?"מגיש...":"✅ הגש לאלון"}</Btn>
       </div>
     </div>
   );
@@ -1518,13 +1838,13 @@ function OnboardingProgress({ subsCount, payslipsCount, total }) {
   return (
     <div style={{ background:"var(--surface2)", borderRadius:12, padding:"16px 20px", marginBottom:20, border:`1px solid ${"var(--border)"}` }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
-        <div style={{ fontWeight:700, fontSize:14 }}>📋 השלמת נתונים ראשוניים</div>
-        <div style={{ fontSize:12, color:done?"var(--green-soft)":"var(--text-dim)" }}>{done?"✅ הכל הושלם!":`${completedSteps}/${totalSteps} שלבים`}</div>
+        <div style={{ fontWeight:700, fontSize: 18 }}>📋 השלמת נתונים ראשוניים</div>
+        <div style={{ fontSize: 14, color:done?"var(--green-soft)":"var(--text-dim)" }}>{done?"✅ הכל הושלם!":`${completedSteps}/${totalSteps} שלבים`}</div>
       </div>
       <div style={{ background:"var(--surface)", borderRadius:20, height:8, overflow:"hidden" }}>
         <div style={{ width:`${(completedSteps/totalSteps)*100}%`, height:"100%", background:`linear-gradient(90deg,${"var(--green-mid)"},${"var(--green-soft)"})`, borderRadius:20, transition:"width .4s" }} />
       </div>
-      <div style={{ display:"flex", gap:16, marginTop:10, fontSize:12 }}>
+      <div style={{ display:"flex", gap:16, marginTop:10, fontSize: 14 }}>
         <span style={{ color:subsCount>=total?"var(--green-soft)":"var(--text-dim)" }}>{subsCount>=total?"✓":"○"} בסיס חומרים לבניית התיק הכלכלי {subsCount}/{total}</span>
         <span style={{ color:payslipsCount>=total?"var(--green-soft)":"var(--text-dim)" }}>{payslipsCount>=total?"✓":"○"} תלושי משכורת {payslipsCount}/{total}</span>
       </div>
@@ -1533,11 +1853,11 @@ function OnboardingProgress({ subsCount, payslipsCount, total }) {
 }
 
 // ── Month Detail Screen ───────────────────────────────────────────────────────
-function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onBack, onDeleteSub, onUpdateSub, categories, categoryRows = [], clientCats, clientId, onCategoryAdded, ignoredCats = IGNORED_CATEGORIES, hiddenCats = [], onHiddenCatsChange = undefined as any, scenarioCats = null as any }) {
+function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onBack, onDeleteSub, onUpdateSub, categories, categoryRows = [], clientCats, clientId, onCategoryAdded, ignoredCats = IGNORED_CATEGORIES, incomeCats = new Set<string>(), hiddenCats = [], onHiddenCatsChange = undefined as any, scenarioCats = null as any }) {
   const allTx = subs.flatMap(s => s.transactions || []);
-  const total = allTx.filter(t => !ignoredCats.has(t.cat)).reduce((sum, t) => sum + t.amount, 0);
+  const total = allTx.filter(t => !ignoredCats.has(t.cat)).reduce((sum, t) => sum + (incomeCats.has(t.cat) ? -Number(t.amount||0) : Number(t.amount||0)), 0);
   const catMap: Record<string, number> = {};
-  allTx.forEach(t => { catMap[t.cat] = (catMap[t.cat] || 0) + t.amount; });
+  allTx.forEach(t => { catMap[t.cat] = (catMap[t.cat] || 0) + (incomeCats.has(t.cat) ? -Number(t.amount||0) : Number(t.amount||0)); });
   const catSummary = Object.entries(catMap).sort((a,b) => b[1]-a[1]);
 
   const [editingSub, setEditingSub] = useState(null); // sub being edited
@@ -1546,7 +1866,14 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
   const [catSearch, setCatSearch]   = useState("");
 
   const startEdit = (sub) => { setEditingSub(sub.id); setEditTx(sub.transactions || []); };
-  const saveEdit  = () => { onUpdateSub(editingSub, editTx); setEditingSub(null); };
+  const saveEdit  = async () => {
+    try {
+      await onUpdateSub(editingSub, editTx);
+      setEditingSub(null);
+    } catch(e) {
+      alert("שגיאה בשמירה — נסה שוב");
+    }
+  };
 
   return (
     <div style={{ maxWidth:900, margin:"0 auto", padding:"28px 20px" }}>
@@ -1555,13 +1882,13 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
         <Btn variant="ghost" size="sm" onClick={onBack}>← חזור</Btn>
         <div style={{ flex:1 }}>
           <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-            <div style={{ fontWeight:700, fontSize:20 }}>{entry.label}</div>
+            <div style={{ fontWeight:700, fontSize: 22 }}>{entry.label}</div>
             {entry.is_finalized
-              ? <span style={{ background:"rgba(46,204,138,0.15)", color:"var(--green-soft)", borderRadius:20, padding:"3px 12px", fontSize:12, fontWeight:700 }}>✓ הושלם</span>
-              : <span style={{ background:"rgba(255,183,77,0.12)", color:"var(--gold)", borderRadius:20, padding:"3px 12px", fontSize:12 }}>בתהליך</span>
+              ? <span style={{ background:"rgba(46,204,138,0.15)", color:"var(--green-soft)", borderRadius:20, padding:"3px 12px", fontSize: 14, fontWeight:700 }}>✓ הושלם</span>
+              : <span style={{ background:"rgba(255,183,77,0.12)", color:"var(--gold)", borderRadius:20, padding:"3px 12px", fontSize: 14 }}>בתהליך</span>
             }
           </div>
-          <div style={{ fontSize:12, color:"var(--text-dim)" }}>{subs.length} מקורות · {allTx.length} תנועות · ₪{Math.round(total).toLocaleString()}</div>
+          <div style={{ fontSize: 15, color:"var(--text-dim)" }}>{subs.length} מקורות · {allTx.length} תנועות · ₪{Math.round(total).toLocaleString()}</div>
         </div>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
           <Btn size="sm" onClick={onAddSource}>+ הוסף מקור</Btn>
@@ -1579,77 +1906,139 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
           <Btn onClick={onAddSource}>+ הוסף מקור ראשון</Btn>
         </Card>
       ) : (
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:24 }}>
-          {/* Category summary */}
-          <Card>
-            <div style={{ fontWeight:700, marginBottom:12, fontSize:14 }}>📊 סיכום לפי סעיף</div>
-            <div style={{ maxHeight:300, overflowY:"auto" }}>
-              {catSummary.map(([cat, amt]) => (
-                <div key={cat} style={{ display:"flex", justifyContent:"space-between", padding:"6px 0", borderBottom:`1px solid ${"var(--border)"}22`, fontSize:12 }}>
-                  <span>{cat}</span>
+        <>
+          {/* Category summary — compact */}
+          <Card style={{ marginBottom:16 }}>
+            <div style={{ fontWeight:700, marginBottom:10, fontSize: 18 }}>📊 סיכום לפי סעיף</div>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:"4px 16px" }}>
+              {catSummary.filter(([cat]) => !ignoredCats.has(cat)).slice(0,10).map(([cat, amt]) => (
+                <div key={cat} style={{ display:"flex", gap:6, fontSize: 14, alignItems:"center" }}>
+                  <span style={{ color:"var(--text-dim)" }}>{cat}</span>
                   <span style={{ fontWeight:700, color:"var(--red)" }}>₪{Math.round(amt).toLocaleString()}</span>
                 </div>
               ))}
             </div>
           </Card>
 
-          {/* Sources list */}
-          <Card>
-            <div style={{ fontWeight:700, marginBottom:12, fontSize:14 }}>📋 מקורות</div>
-            {subs.map(sub => (
-              <div key={sub.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 0", borderBottom:`1px solid ${"var(--border)"}22` }}>
-                <div>
-                  <div style={{ fontSize:13, fontWeight:600 }}>{sub.source_label || sub.label}</div>
-                  <div style={{ fontSize:11, color:"var(--text-dim)" }}>{(sub.transactions||[]).length} תנועות</div>
+          {/* Sources — expandable inline */}
+          {subs.map(sub => {
+            const isOpen = editingSub === sub.id;
+            const subTotal = (sub.transactions||[])
+              .filter(t => !ignoredCats.has(t.cat))
+              .reduce((s, t) => s + (incomeCats.has(t.cat) ? -Number(t.amount||0) : Number(t.amount||0)), 0);
+            return (
+              <div key={sub.id} style={{ marginBottom:12 }}>
+                {/* Source header */}
+                <div
+                  onClick={() => isOpen ? setEditingSub(null) : startEdit(sub)}
+                  style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
+                    background:"var(--surface)", border:`2px solid ${isOpen ? "var(--green-mid)" : "var(--border)"}`,
+                    borderRadius: isOpen ? "12px 12px 0 0" : 12,
+                    padding:"14px 18px", cursor:"pointer",
+                    transition:"border-color 0.15s" }}
+                >
+                  <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                    <span style={{ fontSize: 20 }}>{isOpen ? "▾" : "▸"}</span>
+                    <div>
+                      <div style={{ fontWeight:700, fontSize: 16 }}>{sub.source_label || sub.label}</div>
+                      <div style={{ fontSize: 15, color:"var(--text-dim)" }}>
+                        {(sub.transactions||[]).length} תנועות
+                        {subTotal > 0 && <> · <span style={{ color:"var(--red)", fontWeight:600 }}>₪{Math.round(subTotal).toLocaleString()}</span></>}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ display:"flex", gap:8, alignItems:"center" }} onClick={e => e.stopPropagation()}>
+                    <Btn size="sm" onClick={() => isOpen ? setEditingSub(null) : startEdit(sub)}>
+                      {isOpen ? "סגור ▲" : "✏️ ערוך תנועות"}
+                    </Btn>
+                    <button
+                      onClick={() => { if (window.confirm("למחוק מקור זה?")) onDeleteSub(sub.id); }}
+                      style={{ background:"none", border:"1px solid rgba(247,92,92,0.4)", borderRadius:7, padding:"5px 10px", fontSize: 14, color:"var(--red)", cursor:"pointer", fontFamily:"inherit" }}
+                    >🗑</button>
+                  </div>
                 </div>
-                <div style={{ display:"flex", gap:6 }}>
-                  <button onClick={() => startEdit(sub)} style={{ background:"none", border:`1px solid ${"var(--border)"}`, borderRadius:7, padding:"3px 10px", fontSize:11, color:"var(--green-mid)", cursor:"pointer", fontFamily:"inherit" }}>✏️ ערוך</button>
-                  <button onClick={() => { if (window.confirm("למחוק מקור זה?")) onDeleteSub(sub.id); }} style={{ background:"none", border:`1px solid rgba(247,92,92,0.4)`, borderRadius:7, padding:"3px 10px", fontSize:11, color:"var(--red)", cursor:"pointer", fontFamily:"inherit" }}>🗑</button>
-                </div>
-              </div>
-            ))}
-          </Card>
-        </div>
-      )}
 
-      {/* Inline editor */}
-      {editingSub && (
-        <Card style={{ marginBottom:16 }}>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
-            <div style={{ fontWeight:700 }}>✏️ עריכת תנועות</div>
-            <div style={{ display:"flex", gap:8 }}>
-              <Btn size="sm" onClick={saveEdit}>שמור</Btn>
-              <Btn variant="ghost" size="sm" onClick={() => setEditingSub(null)}>ביטול</Btn>
-            </div>
-          </div>
-          {editTx.map((tx, i) => (
-            <div key={tx.id || i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 0", borderBottom:`1px solid ${"var(--border)"}22`, flexWrap:"wrap", gap:8 }}>
-              <div style={{ flex:1 }}>
-                <div style={{ fontSize:12, fontWeight:600 }}>{tx.name}</div>
-                <div style={{ fontSize:11, color:"var(--text-dim)" }}>{tx.date} · ₪{tx.amount?.toLocaleString()}</div>
+                {/* Inline editor — opens directly under header */}
+                {isOpen && (
+                  <div style={{ border:"2px solid var(--green-mid)", borderTop:"none", borderRadius:"0 0 12px 12px", padding:"16px 16px 12px", background:"var(--surface)" }}>
+                    {editTx.map((tx, i) => {
+                      const isIgnored = tx.cat === 'להתעלם';
+                      return (
+                      <div key={tx.id || i} onClick={() => { if (editCatOpen === (tx.id||i) || editCatOpen === `note_${tx.id||i}`) setEditCatOpen(null); }} style={{ marginBottom:8, padding:"10px 14px",
+                        background: isIgnored ? "var(--surface2)" : "var(--surface)",
+                        border:`1px solid ${isIgnored ? "var(--border)" : "var(--border)"}`,
+                        borderRadius:10, opacity: isIgnored ? 0.55 : 1,
+                        cursor: (editCatOpen === (tx.id||i) || editCatOpen === `note_${tx.id||i}`) ? "pointer" : "default" }}>
+                        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
+                          <div style={{ flex:1, minWidth:120 }}>
+                            <div style={{ fontWeight:600, fontSize: 15, textDecoration: isIgnored ? "line-through" : "none", color: isIgnored ? "var(--text-dim)" : "var(--text)" }}>{tx.name}</div>
+                            <div style={{ fontSize: 13, color:"var(--text-dim)" }}>{tx.date}</div>
+                            {tx.note && <div style={{ fontSize: 13, color:"var(--text-mid)", fontStyle:"italic", marginTop:2 }}>📝 {tx.note}</div>}
+                          </div>
+                          <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }} onClick={e => e.stopPropagation()}>
+                            <span style={{ fontWeight:700, fontSize: 15, color: isIgnored ? "var(--text-dim)" : "var(--red)" }}>₪{tx.amount?.toLocaleString()}</span>
+                            {!isIgnored && (
+                              <button
+                                onClick={() => { const next = editCatOpen === (tx.id||i) ? null : (tx.id||i); if (next !== null) setCatSearch(""); setEditCatOpen(next); }}
+                                style={{ background:"var(--green-mint)", border:"1px solid var(--green-soft)", borderRadius:8, padding:"4px 12px", fontSize: 14, color:"var(--green-deep)", cursor:"pointer", fontFamily:"inherit", fontWeight:600 }}
+                              >{tx.cat}</button>
+                            )}
+                            <button
+                              onClick={() => isIgnored
+                                ? setEditTx(p => p.map((t,j) => j===i ? { ...t, cat:"הוצאות לא מתוכננות", edited:true } : t))
+                                : setEditTx(p => p.map((t,j) => j===i ? { ...t, cat:"להתעלם", edited:true } : t))
+                              }
+                              title={isIgnored ? "בטל התעלמות" : "התעלם — לא ייספר"}
+                              style={{ background:"transparent", border:"1px solid var(--border)", borderRadius:8, padding:"4px 8px", fontSize: 14, color: isIgnored ? "var(--green-mid)" : "var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}
+                            >{isIgnored ? "↩️" : "⊘"}</button>
+                            <button
+                              onClick={() => setEditCatOpen(editCatOpen === `note_${tx.id||i}` ? null : `note_${tx.id||i}`)}
+                              title="הערה"
+                              style={{ background:"transparent", border:"1px solid var(--border)", borderRadius:8, padding:"4px 8px", fontSize: 15, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}
+                            >📝</button>
+                          </div>
+                        </div>
+                        {editCatOpen === (tx.id||i) && (
+                          <div style={{ marginTop:8 }}>
+                            <CategoryPicker
+                              current={tx.cat}
+                              catSearch={catSearch}
+                              setCatSearch={setCatSearch}
+                              categories={categories}
+                              rows={categoryRows}
+                              clientCats={clientCats}
+                              clientId={clientId}
+                              onCategoryAdded={onCategoryAdded}
+                              hiddenCats={hiddenCats}
+                              onHiddenCatsChange={onHiddenCatsChange}
+                              scenarioCats={scenarioCats}
+                              onSelect={(cat) => { setEditTx(p => p.map((t,j) => j===i?{...t,cat,edited:true}:t)); setEditCatOpen(null); setCatSearch(""); }}
+                            />
+                          </div>
+                        )}
+                        {editCatOpen === `note_${tx.id||i}` && (
+                          <div style={{ marginTop:8 }}>
+                            <input autoFocus value={tx.note || ""}
+                              onChange={e => setEditTx(p => p.map((t,j) => j===i ? { ...t, note:e.target.value } : t))}
+                              placeholder="הוסף הערה..."
+                              style={{ width:"100%", background:"var(--surface2)", border:"1.5px solid var(--green-soft)", borderRadius:8, padding:"7px 12px", color:"var(--text)", fontFamily:"inherit", fontSize: 15, outline:"none", boxSizing:"border-box" }}
+                              onKeyDown={e => { if (e.key==="Enter"||e.key==="Escape") setEditCatOpen(null); }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                      );
+                    })}
+                    <div style={{ display:"flex", justifyContent:"center", gap:10, marginTop:12, paddingTop:12, borderTop:"1px solid var(--border)" }}>
+                      <Btn onClick={saveEdit}>💾 שמור שינויים</Btn>
+                      <Btn variant="ghost" onClick={() => setEditingSub(null)}>ביטול</Btn>
+                    </div>
+                  </div>
+                )}
               </div>
-              <button onClick={() => setEditCatOpen(editCatOpen === (tx.id||i) ? null : (tx.id||i))} style={{ background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:8, padding:"4px 12px", fontSize:11, color:"var(--green-mid)", cursor:"pointer", fontFamily:"inherit" }}>{tx.cat}</button>
-              {editCatOpen === (tx.id||i) && (
-                <div style={{ width:"100%", marginTop:6 }}>
-                  <CategoryPicker
-                    current={tx.cat}
-                    catSearch={catSearch}
-                    setCatSearch={setCatSearch}
-                    categories={categories}
-                    rows={categoryRows}
-                    clientCats={clientCats}
-                    clientId={clientId}
-                    onCategoryAdded={onCategoryAdded}
-                    hiddenCats={hiddenCats}
-                    onHiddenCatsChange={onHiddenCatsChange}
-                    scenarioCats={scenarioCats}
-                    onSelect={(cat) => { setEditTx(p => p.map((t,j) => j===i?{...t,cat,edited:true}:t)); setEditCatOpen(null); setCatSearch(""); }}
-                  />
-                </div>
-              )}
-            </div>
-          ))}
-        </Card>
+            );
+          })}
+        </>
       )}
     </div>
   );
@@ -1661,61 +2050,48 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
 
 
 // ── Portfolio Tab ─────────────────────────────────────────────────────────────
-function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, onDataChange, onMonthCreated, rememberedMappings, onRememberingAdded, cycleStartDay, importedTxs, manualTxs, onManualTxAdded, onManualTxDeleted, onUpdatePortfolioTxCat, onDeletePortfolioSub, onCycleStartDayChange, categories, categoryRows = [], clientCats, onCategoryAdded, ignoredCats = IGNORED_CATEGORIES, incomeCats = new Set<string>(), categoryRules = [] as any[], hiddenCats = [] as string[], onHiddenCatsChange = undefined as any, scenarioCats = null as any }) {
-  const [tab, setTab] = useState(() => sessionStorage.getItem('mazan_portfolioTab') || "control");
-  const [controlKey, setControlKey] = useState(0);
-  const switchPortfolioTab = (id) => { sessionStorage.setItem('mazan_portfolioTab', id); setTab(id); if (id === "control") setControlKey(k => k + 1); };
+function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, onDataChange, onMonthCreated, rememberedMappings, onRememberingAdded, cycleStartDay, importedTxs, manualTxs, onManualTxAdded, onManualTxDeleted, onUpdatePortfolioTxCat, onDeletePortfolioSub, onCycleStartDayChange, categories, categoryRows = [], clientCats, onCategoryAdded, ignoredCats = IGNORED_CATEGORIES, incomeCats = new Set<string>(), categoryRules = [] as any[], hiddenCats = [] as string[], onHiddenCatsChange = undefined as any, scenarioCats = null as any, activeSubTab = "control", visitedSubTabs = new Set(["control"]) as Set<string>, onSubTabChange = (_id: string) => {} }) {
   // Lift upload state here so re-renders don't reset it
   const [pStep, setPStep]                 = useState("list");
   const [activeEntry, setActiveEntry]     = useState(null);
   const [entrySubs, setEntrySubs]         = useState([]);
 
-  const tabs = [
-    { id:"txs",     label:"📋 פירוט תנועות" },
-    { id:"control", label:"בקרת תיק כלכלי" },
-    { id:"savings", label:"פירוט חסכונות" },
-    { id:"balance", label:"מאזן מתוכנן" },
-    { id:"debts",   label:"💳 מנהל חובות" },
-    { id:"tools",   label:"🧰 כלים לצמיחה" },
-  ];
-
   return (
     <div>
-      <div style={{ display:"flex", gap:4, marginBottom:20, flexWrap:"wrap" }}>
-        {tabs.map(t => (
-          <button key={t.id} onClick={() => switchPortfolioTab(t.id)} style={{ padding:"8px 16px", fontSize:12, fontFamily:"inherit", fontWeight:tab===t.id?700:400, color:tab===t.id?"var(--text)":"var(--text-dim)", background:tab===t.id?"var(--surface2)":"transparent", border:`1px solid ${tab===t.id?"var(--border)":"transparent"}`, borderRadius:8, cursor:"pointer" }}>{t.label}</button>
-        ))}
-      </div>
 
-      {tab === "txs" && (
-        <AllTransactionsTab
-          clientId={clientId}
-          importedTxs={importedTxs || []}
-          portfolioSubs={portfolioSubs}
-          manualTxs={manualTxs || []}
-          cycleStartDay={cycleStartDay}
-          onCycleStartDayChange={onCycleStartDayChange}
-          rememberedMappings={rememberedMappings}
-          onDataChange={onDataChange}
-          onManualTxAdded={onManualTxAdded}
-          onManualTxDeleted={onManualTxDeleted}
-          onUpdatePortfolioTxCat={onUpdatePortfolioTxCat}
-          onDeletePortfolioSub={onDeletePortfolioSub}
-          onNavigateToUpload={() => switchPortfolioTab("upload")}
-          categories={categories}
-          categoryRows={categoryRows}
-          clientCats={clientCats}
-          onCategoryAdded={onCategoryAdded}
-          hiddenCats={hiddenCats}
-          onHiddenCatsChange={onHiddenCatsChange}
-          scenarioCats={scenarioCats}
-          ignoredCats={ignoredCats}
-          categoryRules={categoryRules}
-        />
+      {visitedSubTabs.has("txs") && (
+        <div style={{ display: activeSubTab === "txs" ? "block" : "none" }}>
+          <AllTransactionsTab
+            clientId={clientId}
+            importedTxs={importedTxs || []}
+            portfolioSubs={portfolioSubs}
+            manualTxs={manualTxs || []}
+            cycleStartDay={cycleStartDay}
+            onCycleStartDayChange={onCycleStartDayChange}
+            rememberedMappings={rememberedMappings}
+            onDataChange={onDataChange}
+            onManualTxAdded={onManualTxAdded}
+            onManualTxDeleted={onManualTxDeleted}
+            onUpdatePortfolioTxCat={onUpdatePortfolioTxCat}
+            onDeletePortfolioSub={onDeletePortfolioSub}
+            onNavigateToUpload={() => { setPStep("list"); onSubTabChange("upload"); }}
+            categories={categories}
+            categoryRows={categoryRows}
+            clientCats={clientCats}
+            onCategoryAdded={onCategoryAdded}
+            hiddenCats={hiddenCats}
+            onHiddenCatsChange={onHiddenCatsChange}
+            scenarioCats={scenarioCats}
+            ignoredCats={ignoredCats}
+            incomeCats={incomeCats}
+            categoryRules={categoryRules}
+          />
+        </div>
       )}
 
-      {/* Always keep PortfolioUploadTab mounted — just hide it when not active */}
-      <div style={{ display: tab === "upload" ? "block" : "none" }}>
+      {/* PortfolioUploadTab — lazy mount, then stay mounted to preserve upload state */}
+      {visitedSubTabs.has("upload") && (
+      <div style={{ display: activeSubTab === "upload" ? "block" : "none" }}>
         <PortfolioUploadTab
           clientId={clientId}
           portfolioMonths={portfolioMonths}
@@ -1727,6 +2103,8 @@ function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, on
           activeEntry={activeEntry} setActiveEntry={setActiveEntry}
           entrySubs={entrySubs} setEntrySubs={setEntrySubs}
           onMonthCreated={onMonthCreated}
+          cycleStartDay={cycleStartDay || 1}
+          incomeCats={incomeCats}
           categories={categories}
           categoryRows={categoryRows}
           clientCats={clientCats}
@@ -1738,33 +2116,47 @@ function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, on
           categoryRules={categoryRules}
         />
       </div>
-      {tab === "control" && (
-        <PortfolioControlTab
-          key={`control-${clientId}-${controlKey}`}
-          clientId={clientId}
-          portfolioMonths={portfolioMonths}
-          portfolioSubs={portfolioSubs}
-          cycleStartDay={cycleStartDay || 1}
-          importedTxs={importedTxs || []}
-          manualTxs={manualTxs || []}
-          rememberedMappings={rememberedMappings || {}}
-          onCycleStartDayChange={onCycleStartDayChange}
-          ignoredCats={ignoredCats}
-          categoryRules={categoryRules}
-        />
       )}
-      {tab === "savings" && (
+      {visitedSubTabs.has("control") && (
+        <div style={{ display: activeSubTab === "control" ? "block" : "none" }}>
+          <PortfolioControlTab
+            key={`control-${clientId}`}
+            clientId={clientId}
+            portfolioMonths={portfolioMonths}
+            portfolioSubs={portfolioSubs}
+            cycleStartDay={cycleStartDay || 1}
+            importedTxs={importedTxs || []}
+            manualTxs={manualTxs || []}
+            rememberedMappings={rememberedMappings || {}}
+            onCycleStartDayChange={onCycleStartDayChange}
+            ignoredCats={ignoredCats}
+            incomeCats={incomeCats}
+            categoryRules={categoryRules}
+          />
+        </div>
+      )}
+      {activeSubTab === "savings" && (
         <Card style={{ textAlign:"center", padding:"64px 32px" }}>
           <div style={{ fontSize:48, marginBottom:16 }}>🚧</div>
-          <div style={{ fontWeight:700, fontSize:18, marginBottom:8 }}>פירוט חסכונות</div>
-          <div style={{ color:"var(--text-dim)", fontSize:14 }}>בקרוב</div>
+          <div style={{ fontWeight:700, fontSize: 20, marginBottom:8 }}>פירוט חסכונות</div>
+          <div style={{ color:"var(--text-dim)", fontSize: 16 }}>בקרוב</div>
         </Card>
       )}
-      {tab === "balance" && (
-        <ClientScenarioView clientId={clientId} />
+      {visitedSubTabs.has("balance") && (
+        <div style={{ display: activeSubTab === "balance" ? "block" : "none" }}>
+          <ClientScenarioView clientId={clientId} />
+        </div>
       )}
-      {tab === "debts"   && <DebtManager clientId={clientId} />}
-      {tab === "tools"   && <GrowthTools />}
+      {visitedSubTabs.has("debts") && (
+        <div style={{ display: activeSubTab === "debts" ? "block" : "none" }}>
+          <DebtManager clientId={clientId} />
+        </div>
+      )}
+      {visitedSubTabs.has("tools") && (
+        <div style={{ display: activeSubTab === "tools" ? "block" : "none" }}>
+          <GrowthTools />
+        </div>
+      )}
 
       <InsightsPanel
         clientId={clientId}
@@ -1783,23 +2175,65 @@ function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, on
 }
 
 // ── Portfolio Upload Tab ──────────────────────────────────────────────────────
-function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataChange, onMonthCreated, rememberedMappings, onRememberingAdded, step, setStep, activeEntry, setActiveEntry, entrySubs, setEntrySubs, categories, categoryRows = [], clientCats, onCategoryAdded, ignoredCats = IGNORED_CATEGORIES, categoryRules = [] as any[], hiddenCats = [] as string[], onHiddenCatsChange = undefined as any, scenarioCats = null as any }) {
+function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataChange, onMonthCreated, rememberedMappings, onRememberingAdded, step, setStep, activeEntry, setActiveEntry, entrySubs, setEntrySubs, cycleStartDay = 1, incomeCats = new Set<string>(), categories, categoryRows = [], clientCats, onCategoryAdded, ignoredCats = IGNORED_CATEGORIES, categoryRules = [] as any[], hiddenCats = [] as string[], onHiddenCatsChange = undefined as any, scenarioCats = null as any }) {
+  // ── פונקציית עזר: חישוב טווח חיוב לפי מפתח חודש ────────────────────────────
+  function getBillingRange(monthKey: string): { startDate: Date; endDate: Date; rangeLabel: string } | null {
+    if (!monthKey) return null;
+    const [y, m] = monthKey.split("-").map(Number);
+    if (!y || !m) return null;
+    const sd = (!cycleStartDay || cycleStartDay < 1 || cycleStartDay > 28) ? 1 : cycleStartDay;
+    let sMonth = m, sYear = y, eMonth = m, eYear = y, eDayNum: number;
+    if (sd === 1) {
+      eDayNum = new Date(y, m, 0).getDate();
+    } else {
+      sMonth = m - 1; sYear = y;
+      if (sMonth === 0) { sMonth = 12; sYear = y - 1; }
+      eDayNum = sd - 1;
+    }
+    const startDate = new Date(sYear, sMonth - 1, sd);
+    const endDate = new Date(eYear, eMonth - 1, eDayNum);
+    const rangeLabel = `${String(sd).padStart(2,"0")}.${String(sMonth).padStart(2,"0")} – ${String(eDayNum).padStart(2,"0")}.${String(eMonth).padStart(2,"0")}`;
+    return { startDate, endDate, rangeLabel };
+  }
+
+  function parseTxDate(dateStr: string): Date | null {
+    if (!dateStr) return null;
+    const s = String(dateStr).trim();
+    if (s.includes('/')) {
+      const p = s.split('/');
+      let yr = +p[2];
+      if (yr < 100) yr += 2000;
+      return new Date(yr, +p[1] - 1, +p[0]);
+    } else if (s.includes('-') && s.split('-').length === 3) {
+      const p = s.split('-');
+      return new Date(+p[0], +p[1] - 1, +p[2]);
+    }
+    return null;
+  }
   const [showPicker, setShowPicker]   = useState(false);
+  const [deletedMonthKeys, setDeletedMonthKeys] = useState<Set<string>>(new Set());
   const [uploadedFiles, setUploadedFiles] = useState([]);
-  const [sourceLabel, setSourceLabel] = useState("");
+  const [sourceType, setSourceType]       = useState("");
+  const [sourceNickname, setSourceNickname] = useState("");
+  const [editingSubId, setEditingSubId]   = useState<string|null>(null);
+  const [confirmModal, setConfirmModal]   = useState<{title:string;body?:string;confirmText?:string;danger?:boolean;onConfirm:()=>void}|null>(null);
+  const sourceLabel = sourceType
+    ? (sourceNickname.trim() ? `${sourceType} — ${sourceNickname.trim()}` : sourceType)
+    : sourceNickname.trim();
   const [transactions, setTransactions] = useState([]);
   const [filter, setFilter]           = useState("all");
   const [search, setSearch]           = useState("");
   const [activeTxId, setActiveTxId]   = useState(null);
+  const [prevCatMapP, setPrevCatMapP] = useState<Record<string,string>>({});
   const [catSearch, setCatSearch]     = useState("");
   const [saving, setSaving]           = useState(false);
   const [pendingRemember, setPendingRemember] = useState(null);
   const [analyzing, setAnalyzing]     = useState(false);
-  const [analyzeResults, setAnalyzeResults] = useState<{name:string,count:number,error?:string}[]>([]);
+  const [analyzeResults, setAnalyzeResults] = useState<{name:string,count:number,outOfRange?:number,rangeLabel?:string,error?:string}[]>([]);
   const [dragOver, setDragOver]       = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const usedKeys = portfolioMonths.map(e => e.month_key);
+  const usedKeys = portfolioMonths.filter(e => !deletedMonthKeys.has(e.month_key)).map(e => e.month_key);
 
   // ── helpers ──
   const loadEntrySubs = async (monthKey) => {
@@ -1838,26 +2272,31 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
     setActiveEntry(resolvedEntry);
     setEntrySubs(subs);
     setUploadedFiles([]);
-    setSourceLabel("");
+    setSourceType("");
+    setSourceNickname("");
+    setEditingSubId(null);
     setTransactions([]);
     setStep("upload");
   };
 
   const goToUpload = () => {
     setUploadedFiles([]);
-    setSourceLabel("");
+    setSourceType("");
+    setSourceNickname("");
+    setEditingSubId(null);
     setTransactions([]);
     setStep("upload");
   };
 
-  const NON_PARSEABLE_EXTS = [".pdf", ".png", ".jpg", ".jpeg", ".doc", ".docx"];
+  const NON_PARSEABLE_EXTS = [".png", ".jpg", ".jpeg", ".doc", ".docx"];
   const isNonParseable = (name: string) => NON_PARSEABLE_EXTS.some(ext => name.toLowerCase().endsWith(ext));
 
   const analyzeFiles = async () => {
     setAnalyzing(true);
     setAnalyzeResults([]);
-    const results: {name:string,count:number,error?:string}[] = [];
+    const results: {name:string,count:number,outOfRange?:number,rangeLabel?:string,error?:string}[] = [];
     let allTx: any[] = [];
+    const range = activeEntry ? getBillingRange(activeEntry.month_key) : null;
     for (const file of uploadedFiles) {
       if (isNonParseable(file.name)) {
         results.push({ name: file.name, count: 0, error: "סוג קובץ זה אינו נתמך לניתוח אוטומטי — יש להמיר ל-Excel או CSV" });
@@ -1866,9 +2305,25 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
       }
       try {
         const buf = await file.arrayBuffer();
-        const parsed = parseExcelData(buf, file.name, rememberedMappings, categoryRules);
+        let parsed: any[];
+        if (file.name.toLowerCase().endsWith('.pdf')) {
+          parsed = await parseBankPDF(buf, file.name, rememberedMappings, categoryRules);
+        } else {
+          parsed = parseExcelData(buf, file.name, rememberedMappings, categoryRules);
+        }
+        // סנן לפי טווח החודש הנבחר
+        let outOfRange = 0;
+        if (range) {
+          const before = parsed.length;
+          parsed = parsed.filter(tx => {
+            const d = parseTxDate(tx.date);
+            if (!d) return true; // שמור אם לא ניתן לנתח את התאריך
+            return d >= range.startDate && d <= range.endDate;
+          });
+          outOfRange = before - parsed.length;
+        }
         allTx = allTx.concat(parsed);
-        results.push({ name: file.name, count: parsed.length });
+        results.push({ name: file.name, count: parsed.length, outOfRange, rangeLabel: range?.rangeLabel });
       } catch(e: any) {
         results.push({ name: file.name, count: 0, error: e?.message || "שגיאה בניתוח הקובץ" });
       }
@@ -1883,38 +2338,90 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
 
   const saveSource = async () => {
     setSaving(true);
-    await supabase.from("portfolio_submissions").insert([{
-      client_id: clientId,
-      month_key: activeEntry.month_key,
-      label: sourceLabel || activeEntry.label,
-      source_label: sourceLabel,
-      files: uploadedFiles.map(f => f.name),
-      transactions,
-      created_at: new Date().toISOString()
-    }]);
+    if (editingSubId) {
+      // עדכון מקור קיים
+      const { error } = await supabase.from("portfolio_submissions").update({
+        transactions,
+        source_label: sourceLabel,
+        source_type: sourceType,
+        source_nickname: sourceNickname,
+      }).eq("id", editingSubId);
+      setSaving(false);
+      if (error) { alert("שגיאה בשמירה — " + error.message); return; }
+    } else {
+      // הוספת מקור חדש
+      const { error } = await supabase.from("portfolio_submissions").insert([{
+        client_id: clientId,
+        month_key: activeEntry.month_key,
+        label: sourceLabel || activeEntry.label,
+        source_label: sourceLabel,
+        source_type: sourceType,
+        source_nickname: sourceNickname,
+        files: uploadedFiles.map(f => f.name),
+        transactions,
+        created_at: new Date().toISOString()
+      }]);
+      setSaving(false);
+      if (error) { alert("שגיאה בשמירה — " + error.message); return; }
+    }
     // reload fresh
     const subs = await loadEntrySubs(activeEntry.month_key);
     setEntrySubs(subs);
-    setSaving(false);
-    setUploadedFiles([]); setTransactions([]); setSourceLabel("");
+    setUploadedFiles([]); setTransactions([]); setSourceType(""); setSourceNickname(""); setEditingSubId(null);
     setStep("month");
     onDataChange(); // fire without await
   };
 
-  const deleteSub = async (subId) => {
-    if (!window.confirm("למחוק מקור זה?")) return;
-    await supabase.from("portfolio_submissions").delete().eq("id", subId);
-    const subs = await loadEntrySubs(activeEntry.month_key);
-    setEntrySubs(subs);
-    onDataChange(); // fire without await
+  const confirmDeleteSub = (sub) => {
+    const txCount = (sub.transactions || []).length;
+    setConfirmModal({
+      title: "מחיקת מקור",
+      body: `האם למחוק את "${sub.source_label || sub.label}" ואת כל ${txCount} התנועות שלו?\nפעולה זו אינה הפיכה.`,
+      confirmText: "🗑 מחק",
+      danger: true,
+      onConfirm: async () => {
+        setConfirmModal(null);
+        await supabase.from("portfolio_submissions").delete().eq("id", sub.id);
+        const subs = await loadEntrySubs(activeEntry.month_key);
+        setEntrySubs(subs);
+        onDataChange();
+      }
+    });
+  };
+
+  const editSub = (sub) => {
+    const label = sub.source_label || sub.label || "";
+    const type = sub.source_type || "";
+    const nick = sub.source_nickname || (type ? "" : label);
+    setConfirmModal({
+      title: "עריכת סיווגי תנועות",
+      body: `כניסה לעריכת הסיווגים של "${label}".\nתוכל לשנות קטגוריה לכל תנועה ולשמור בסיום.`,
+      confirmText: "✏️ ערוך",
+      danger: false,
+      onConfirm: () => {
+        setConfirmModal(null);
+        setEditingSubId(sub.id);
+        setSourceType(type);
+        setSourceNickname(nick);
+        setTransactions(sub.transactions || []);
+        setFilter("all");
+        setSearch("");
+        setActiveTxId(null);
+        setStep("review");
+      }
+    });
   };
 
   const deleteMonth = async (entry, e) => {
     e.stopPropagation();
     if (!window.confirm(`למחוק את ${entry.label} וכל הנתונים שלו?`)) return;
-    await supabase.from("portfolio_submissions").delete().eq("client_id", clientId).eq("month_key", entry.month_key);
-    await supabase.from("portfolio_months").delete().eq("client_id", clientId).eq("month_key", entry.month_key);
-    onDataChange(); // fire without await
+    // הסר מיידית מה-UI
+    setDeletedMonthKeys(prev => { const next = new Set(prev); next.add(entry.month_key); return next; });
+    // מחק מה-DB — שניהם במקביל
+    await Promise.all([
+      supabase.from("portfolio_submissions").delete().eq("client_id", clientId).eq("month_key", entry.month_key),
+      supabase.from("portfolio_months").delete().eq("client_id", clientId).eq("month_key", entry.month_key),
+    ]);
   };
 
   const finalizeMonth = async () => {
@@ -1954,10 +2461,10 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
           <div style={{ marginBottom:16 }}>הוסף את החודש הראשון לתיק</div>
           <Btn onClick={() => setShowPicker(true)}>+ הוסף חודש</Btn>
         </Card>
-      ) : portfolioMonths.map(entry => {
+      ) : portfolioMonths.filter(entry => !deletedMonthKeys.has(entry.month_key)).map(entry => {
         const subs = portfolioSubs.filter(s => s.month_key === entry.month_key);
         const allTx = subs.flatMap(s => s.transactions || []);
-        const total = allTx.filter(t => !ignoredCats.has(t.cat)).reduce((sum,t) => sum+t.amount, 0);
+        const total = allTx.filter(t => !ignoredCats.has(t.cat)).reduce((sum,t) => sum+(incomeCats.has(t.cat)?-t.amount:t.amount), 0);
         return (
           <Card key={entry.month_key} style={{ marginBottom:10, border:`1px solid ${entry.is_finalized?"rgba(46,204,138,0.25)":"var(--border)"}` }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
@@ -1965,15 +2472,15 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
                 <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
                   <span style={{ fontWeight:700 }}>{entry.label}</span>
                   {entry.is_finalized
-                    ? <span style={{ background:"rgba(46,204,138,0.15)", color:"var(--green-soft)", borderRadius:20, padding:"2px 10px", fontSize:11 }}>✓ הושלם</span>
-                    : <span style={{ background:"rgba(255,183,77,0.12)", color:"var(--gold)", borderRadius:20, padding:"2px 10px", fontSize:11 }}>בתהליך</span>
+                    ? <span style={{ background:"rgba(46,204,138,0.15)", color:"var(--green-soft)", borderRadius:20, padding:"2px 10px", fontSize: 13 }}>✓ הושלם</span>
+                    : <span style={{ background:"rgba(255,183,77,0.12)", color:"var(--gold)", borderRadius:20, padding:"2px 10px", fontSize: 13 }}>בתהליך</span>
                   }
                 </div>
-                <div style={{ fontSize:12, color:"var(--text-dim)" }}>{subs.length} מקורות · {allTx.length} תנועות · ₪{Math.round(total).toLocaleString()}</div>
+                <div style={{ fontSize: 15, color:"var(--text-dim)" }}>{subs.length} מקורות · {allTx.length} תנועות · ₪{Math.round(total).toLocaleString()}</div>
               </div>
               <button
                 onClick={e => deleteMonth(entry, e)}
-                style={{ background:"none", border:"1px solid rgba(247,92,92,0.4)", borderRadius:7, padding:"4px 12px", fontSize:12, color:"var(--red)", cursor:"pointer", fontFamily:"inherit", flexShrink:0, marginRight:8 }}
+                style={{ background:"none", border:"1px solid rgba(247,92,92,0.4)", borderRadius:7, padding:"4px 12px", fontSize: 14, color:"var(--red)", cursor:"pointer", fontFamily:"inherit", flexShrink:0, marginRight:8 }}
               >🗑 מחק</button>
             </div>
           </Card>
@@ -1987,65 +2494,93 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
   if (step === "month") {
     if (!activeEntry) return <div style={{color:"var(--text-dim)",padding:32,textAlign:"center"}}><Spinner /></div>;
     const allTx = entrySubs.flatMap(s => s.transactions || []);
-    const total = allTx.filter(t => !ignoredCats.has(t.cat)).reduce((sum,t) => sum+t.amount, 0);
+    const total = allTx.filter(t => !ignoredCats.has(t.cat)).reduce((sum,t) => sum+(incomeCats.has(t.cat)?-t.amount:t.amount), 0);
     const catMap: Record<string, number> = {};
-    allTx.forEach(t => { catMap[t.cat] = (catMap[t.cat]||0)+t.amount; });
+    allTx.forEach(t => { catMap[t.cat] = (catMap[t.cat]||0)+(incomeCats.has(t.cat)?-t.amount:t.amount); });
 
     return (
       <div>
+        {confirmModal && (
+          <ConfirmModal
+            title={confirmModal.title}
+            body={confirmModal.body}
+            confirmText={confirmModal.confirmText}
+            danger={confirmModal.danger}
+            onConfirm={confirmModal.onConfirm}
+            onCancel={() => setConfirmModal(null)}
+          />
+        )}
+
         {/* Header */}
         <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:20, flexWrap:"wrap" }}>
           <Btn variant="ghost" size="sm" onClick={() => setStep("list")}>← חזור</Btn>
           <div style={{ flex:1 }}>
             <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-              <span style={{ fontWeight:700, fontSize:18 }}>{activeEntry.label}</span>
+              <span style={{ fontWeight:700, fontSize: 20 }}>{activeEntry.label}</span>
               {activeEntry.is_finalized
-                ? <span style={{ background:"rgba(46,204,138,0.15)", color:"var(--green-soft)", borderRadius:20, padding:"2px 10px", fontSize:12 }}>✓ הושלם</span>
-                : <span style={{ background:"rgba(255,183,77,0.12)", color:"var(--gold)", borderRadius:20, padding:"2px 10px", fontSize:12 }}>בתהליך</span>
+                ? <span style={{ background:"rgba(46,204,138,0.15)", color:"var(--green-soft)", borderRadius:20, padding:"2px 10px", fontSize: 14 }}>✓ הושלם</span>
+                : entrySubs.length === 0
+                  ? <span style={{ background:"rgba(255,183,77,0.12)", color:"var(--gold)", borderRadius:20, padding:"2px 10px", fontSize: 14 }}>בתהליך</span>
+                  : null
               }
             </div>
-            <div style={{ fontSize:12, color:"var(--text-dim)" }}>{entrySubs.length} מקורות · {allTx.length} תנועות · ₪{Math.round(total).toLocaleString()}</div>
+            <div style={{ fontSize: 15, color:"var(--text-dim)" }}>{entrySubs.length} מקורות · {allTx.length} תנועות · ₪{Math.round(total).toLocaleString()}</div>
           </div>
-          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-            <Btn size="sm" onClick={goToUpload}>+ הוסף מקור</Btn>
-            {!activeEntry.is_finalized && entrySubs.length > 0 && <Btn size="sm" onClick={finalizeMonth}>✅ סיימתי</Btn>}
-            {activeEntry.is_finalized && <Btn variant="ghost" size="sm" onClick={reopenMonth}>🔓 פתח לעריכה</Btn>}
-          </div>
+          {activeEntry.is_finalized && (
+            <Btn variant="ghost" size="sm" onClick={reopenMonth}>🔓 פתח לעריכה</Btn>
+          )}
         </div>
 
-        {entrySubs.length === 0 ? (
-          <Card style={{ textAlign:"center", padding:40, color:"var(--text-dim)" }}>
-            <div style={{ fontSize:32, marginBottom:12 }}>📂</div>
-            <div style={{ marginBottom:16 }}>עוד לא הוספת מקורות לחודש זה</div>
-            <Btn onClick={goToUpload}>+ הוסף מקור ראשון</Btn>
-          </Card>
-        ) : (
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))", gap:16 }}>
-            <Card>
-              <div style={{ fontWeight:700, marginBottom:12, fontSize:14 }}>📊 סיכום לפי סעיף</div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))", gap:16 }}>
+          {/* סיכום לפי סעיף */}
+          <Card>
+            <div style={{ fontWeight:700, marginBottom:12, fontSize: 18 }}>📊 סיכום לפי סעיף</div>
+            {allTx.length === 0 ? (
+              <div style={{ color:"var(--text-dim)", fontSize:14, textAlign:"center", padding:"16px 0" }}>אין תנועות עדיין</div>
+            ) : (
               <div style={{ maxHeight:280, overflowY:"auto" }}>
                 {Object.entries(catMap).sort((a,b)=>b[1]-a[1]).map(([cat,amt]) => (
-                  <div key={cat} style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", borderBottom:`1px solid ${"var(--border)"}22`, fontSize:12 }}>
+                  <div key={cat} style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", borderBottom:`1px solid ${"var(--border)"}22`, fontSize: 14 }}>
                     <span>{cat}</span>
                     <span style={{ fontWeight:700, color:"var(--red)" }}>₪{Math.round(amt).toLocaleString()}</span>
                   </div>
                 ))}
               </div>
-            </Card>
-            <Card>
-              <div style={{ fontWeight:700, marginBottom:12, fontSize:14 }}>📋 מקורות</div>
-              {entrySubs.map(sub => (
+            )}
+          </Card>
+
+          {/* מקורות */}
+          <Card>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+              <div style={{ fontWeight:700, fontSize: 18 }}>📋 מקורות</div>
+              <Btn size="sm" onClick={goToUpload}>+ הוסף מקור</Btn>
+            </div>
+            {entrySubs.length === 0 ? (
+              <div style={{ textAlign:"center", color:"var(--text-dim)", fontSize:14, padding:"20px 0" }}>
+                עוד לא הוספת מקורות לחודש זה
+              </div>
+            ) : (
+              entrySubs.map(sub => (
                 <div key={sub.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 0", borderBottom:`1px solid ${"var(--border)"}22` }}>
                   <div>
-                    <div style={{ fontSize:13, fontWeight:600 }}>{sub.source_label || sub.label}</div>
-                    <div style={{ fontSize:11, color:"var(--text-dim)" }}>{(sub.transactions||[]).length} תנועות</div>
+                    <div style={{ fontSize: 15, fontWeight:600 }}>{sub.source_label || sub.label}</div>
+                    <div style={{ fontSize: 13, color:"var(--text-dim)" }}>{(sub.transactions||[]).length} תנועות</div>
                   </div>
-                  <button onClick={() => deleteSub(sub.id)} style={{ background:"none", border:"1px solid rgba(247,92,92,0.4)", borderRadius:7, padding:"3px 10px", fontSize:11, color:"var(--red)", cursor:"pointer", fontFamily:"inherit" }}>🗑</button>
+                  <div style={{ display:"flex", gap:6 }}>
+                    <button
+                      onClick={() => editSub(sub)}
+                      style={{ background:"transparent", border:"1px solid var(--border)", borderRadius:7, padding:"3px 10px", fontSize:13, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}
+                    >✏️ ערוך</button>
+                    <button
+                      onClick={() => confirmDeleteSub(sub)}
+                      style={{ background:"none", border:"1px solid rgba(247,92,92,0.4)", borderRadius:7, padding:"3px 10px", fontSize:13, color:"var(--red)", cursor:"pointer", fontFamily:"inherit" }}
+                    >🗑</button>
+                  </div>
                 </div>
-              ))}
-            </Card>
-          </div>
-        )}
+              ))
+            )}
+          </Card>
+        </div>
       </div>
     );
   }
@@ -2054,24 +2589,44 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
   if (step === "upload") {
     if (!activeEntry) { setStep("list"); return null; }
     return (
-    <div style={{ maxWidth:580 }}>
+    <div style={{ maxWidth:580, margin:"0 auto" }}>
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:20 }}>
         <Btn variant="ghost" size="sm" onClick={() => setStep("month")}>← חזור</Btn>
-        <div style={{ fontWeight:700, fontSize:16 }}>הוסף מקור — {activeEntry?.label}</div>
+        <div style={{ fontWeight:700, fontSize: 18 }}>הוסף מקור — {activeEntry?.label}</div>
       </div>
 
       <Card style={{ marginBottom:14 }}>
-        <div style={{ fontWeight:700, marginBottom:10, fontSize:13 }}>שם המקור</div>
-        <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:10 }}>
-          {["מקס","ישראכרט","ויזה","דיינרס","עו\"ש","אחר"].map(s => (
-            <button key={s} onClick={() => setSourceLabel(s)}
-              style={{ padding:"5px 12px", borderRadius:20, fontSize:12, cursor:"pointer", fontFamily:"inherit",
-                border:`1px solid ${sourceLabel===s?"var(--green-mid)":"var(--border)"}`,
-                background:sourceLabel===s?"var(--green-mint)":"var(--surface2)",
-                color:sourceLabel===s?"var(--green-mid)":"var(--text-dim)" }}>{s}</button>
+        <div style={{ fontWeight:700, marginBottom:10, fontSize: 15 }}>שם המקור</div>
+        <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom: sourceType ? 12 : 0 }}>
+          {["כלול בכרטיס","עו\"ש","אחר"].map(s => (
+            <button type="button" key={s}
+              onClick={() => { setSourceType(s === sourceType ? "" : s); setSourceNickname(""); }}
+              style={{ padding:"12px 28px", borderRadius:12, fontSize: 18, fontWeight:700, cursor:"pointer", fontFamily:"inherit",
+                border:`2px solid ${sourceType===s?"var(--green-mid)":"var(--border)"}`,
+                background:sourceType===s?"var(--green-mint)":"var(--surface2)",
+                color:sourceType===s?"var(--green-deep)":"var(--text-dim)",
+                boxShadow: sourceType===s?"0 2px 8px rgba(45,106,79,0.2)":"none",
+                transition:"all 0.15s" }}>{s}</button>
           ))}
         </div>
-        <Input label="או הכנס ידנית" value={sourceLabel} onChange={e => setSourceLabel(e.target.value)} placeholder="שם המקור" />
+        {sourceType && (
+          <div>
+            <div style={{ fontSize: 14, color:"var(--text-dim)", marginBottom:5 }}>
+              {sourceType === "אחר" ? "שם חופשי (אופציונלי)" : `כינוי (אופציונלי) — למשל: לאומי, פועלים, כאל`}
+            </div>
+            <input
+              value={sourceNickname}
+              onChange={e => setSourceNickname(e.target.value)}
+              placeholder={sourceType === "אחר" ? "למשל: קופת גמל, ביטקוין..." : `למשל: ${sourceType} לאומי`}
+              style={{ width:"100%", boxSizing:"border-box", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"9px 12px", color:"var(--text)", fontSize:15, fontFamily:"inherit", outline:"none" }}
+            />
+            {sourceLabel && (
+              <div style={{ fontSize:13, color:"var(--text-dim)", marginTop:5 }}>
+                שם המקור: <strong style={{ color:"var(--green-deep)" }}>{sourceLabel}</strong>
+              </div>
+            )}
+          </div>
+        )}
       </Card>
 
       <div
@@ -2084,9 +2639,9 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
         onDragLeave={() => setDragOver(false)}
         onDrop={e => { e.preventDefault(); setDragOver(false); const files = Array.from(e.dataTransfer.files) as File[]; setUploadedFiles(p => [...p, ...files.filter((f: File) => !p.find((u: File) => u.name===f.name))]); }}
       >
-        <div style={{ fontSize:28, marginBottom:8 }}>{dragOver ? "⬇️" : "📎"}</div>
-        <div style={{ fontWeight:600, fontSize:13, marginBottom:4 }}>{dragOver ? "שחרר להוספה" : "גרור קבצים לכאן"}</div>
-        <div style={{ fontSize:12, color:"var(--text-dim)", marginBottom:12 }}>Excel, CSV, PDF, Word, תמונות וכל קובץ פיננסי</div>
+        <div style={{ fontSize: 30, marginBottom:8 }}>{dragOver ? "⬇️" : "📎"}</div>
+        <div style={{ fontWeight:600, fontSize: 15, marginBottom:4 }}>{dragOver ? "שחרר להוספה" : "גרור קבצים לכאן"}</div>
+        <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:12 }}>Excel, CSV, PDF, Word, תמונות וכל קובץ פיננסי</div>
         <input ref={fileRef} type="file"
           accept=".xlsx,.xls,.csv,.pdf,.png,.jpg,.jpeg,.doc,.docx,.txt,.ods"
           multiple style={{ display:"none" }}
@@ -2099,16 +2654,20 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
           {uploadedFiles.map((f,i) => {
             const res = analyzeResults.find(r => r.name === f.name);
             return (
-              <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom:i<uploadedFiles.length-1?`1px solid ${"var(--border)"}22`:"none", fontSize:12 }}>
+              <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom:i<uploadedFiles.length-1?`1px solid ${"var(--border)"}22`:"none", fontSize: 14 }}>
                 <span>📄 {f.name}</span>
                 <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                   {res && (
-                    <span style={{ fontSize:11, color: res.error ? "var(--red)" : res.count === 0 ? "var(--gold)" : "var(--green-soft)" }}>
-                      {res.error ? `⚠️ ${res.error}` : res.count === 0 ? "⚠️ לא זוהו תנועות" : `✓ ${res.count} תנועות`}
+                    <span style={{ fontSize: 13, color: res.error ? "var(--red)" : res.count === 0 ? "var(--gold)" : "var(--green-soft)" }}>
+                      {res.error ? `⚠️ ${res.error}` : res.count === 0 ? "⚠️ לא זוהו תנועות" : (
+                        res.rangeLabel
+                          ? `✓ ${res.count} תנועות נוספו לטווח ${res.rangeLabel}${(res.outOfRange || 0) > 0 ? ` • ${res.outOfRange} מחוץ לטווח` : ""}`
+                          : `✓ ${res.count} תנועות`
+                      )}
                     </span>
                   )}
-                  {analyzing && !res && <span style={{ fontSize:11, color:"var(--text-dim)" }}>מנתח...</span>}
-                  <button onClick={() => setUploadedFiles(p => p.filter((_,j)=>j!==i))} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize:16 }}>×</button>
+                  {analyzing && !res && <span style={{ fontSize: 13, color:"var(--text-dim)" }}>מנתח...</span>}
+                  <button onClick={() => setUploadedFiles(p => p.filter((_,j)=>j!==i))} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize: 18 }}>×</button>
                 </div>
               </div>
             );
@@ -2117,12 +2676,12 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
       )}
 
       {analyzeResults.length > 0 && !analyzing && analyzeResults.every(r => r.count === 0) && (
-        <div style={{ background:"rgba(255,183,77,0.1)", border:"1px solid var(--gold)", borderRadius:8, padding:"10px 14px", marginBottom:12, fontSize:12, color:"var(--gold)" }}>
+        <div style={{ background:"rgba(255,183,77,0.1)", border:"1px solid var(--gold)", borderRadius:8, padding:"10px 14px", marginBottom:12, fontSize: 14, color:"var(--gold)" }}>
           ⚠️ לא זוהו תנועות באף קובץ. בדוק שהקבצים הם Excel/CSV עם עמודות תאריך, שם עסק וסכום.
         </div>
       )}
 
-      <Btn onClick={analyzeFiles} disabled={uploadedFiles.length===0||!sourceLabel||analyzing} style={{ width:"100%", justifyContent:"center" }}>
+      <Btn onClick={analyzeFiles} disabled={uploadedFiles.length===0||!sourceType||analyzing} style={{ width:"100%", justifyContent:"center" }}>
         {analyzing ? "⏳ מנתח..." : "🔍 נתח תנועות ←"}
       </Btn>
     </div>
@@ -2133,23 +2692,33 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
   // ══ REVIEW ════════════════════════════════════════════════════════════════════
   if (step === "review") return (
     <div>
+      {confirmModal && (
+        <ConfirmModal
+          title={confirmModal.title}
+          body={confirmModal.body}
+          confirmText={confirmModal.confirmText}
+          danger={confirmModal.danger}
+          onConfirm={confirmModal.onConfirm}
+          onCancel={() => setConfirmModal(null)}
+        />
+      )}
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:8 }}>
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-          <Btn variant="ghost" size="sm" onClick={() => setStep("upload")}>← חזור</Btn>
-          <div style={{ fontWeight:700 }}>✏️ סיווג תנועות — {sourceLabel}</div>
+          <Btn variant="ghost" size="sm" onClick={() => { const wasEditing = !!editingSubId; setEditingSubId(null); setStep(wasEditing ? "month" : "upload"); }}>← חזור</Btn>
+          <div style={{ fontWeight:700 }}>✏️ {editingSubId ? "עריכת" : "סיווג"} תנועות — {sourceLabel}</div>
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-          <span style={{ fontSize:12, color:"var(--text-dim)" }}>{transactions.length} תנועות</span>
+          <span style={{ fontSize: 15, color:"var(--text-dim)" }}>{transactions.length} תנועות</span>
           <Btn size="sm" onClick={saveSource} disabled={saving}>💾 {saving?"שומר...":"שמור"}</Btn>
         </div>
       </div>
 
       <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap" }}>
         {[["all","הכל"],["low","ביטחון נמוך"]].map(([v,l]) => (
-          <button key={v} onClick={() => setFilter(v)} style={{ padding:"4px 12px", borderRadius:20, fontSize:12, cursor:"pointer", fontFamily:"inherit", border:`1px solid ${filter===v?"var(--green-mid)":"var(--border)"}`, background:filter===v?"var(--green-mint)":"transparent", color:filter===v?"var(--green-deep)":"var(--text-mid)" }}>{l}</button>
+          <button key={v} onClick={() => setFilter(v)} style={{ padding:"4px 12px", borderRadius:20, fontSize: 14, cursor:"pointer", fontFamily:"inherit", border:`1px solid ${filter===v?"var(--green-mid)":"var(--border)"}`, background:filter===v?"var(--green-mint)":"transparent", color:filter===v?"var(--green-deep)":"var(--text-mid)" }}>{l}</button>
         ))}
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="חיפוש..."
-          style={{ flex:1, minWidth:120, background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:20, padding:"4px 12px", color:"var(--text)", fontSize:12, fontFamily:"inherit", outline:"none" }} />
+          style={{ flex:1, minWidth:120, background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:20, padding:"4px 12px", color:"var(--text)", fontSize: 14, fontFamily:"inherit", outline:"none" }} />
       </div>
 
       <RememberModal
@@ -2172,78 +2741,148 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
         onJustHere={() => setPendingRemember(null)}
       />
 
-      {filteredTx.map(tx => {
-        const isKnown = !!rememberedMappings[tx.name];
-        return (
-        <Card key={tx.id} style={{ marginBottom:8, padding:"12px 16px" }}>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
-            <div style={{ flex:1 }}>
-              <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                <span style={{ fontWeight:600, fontSize:14 }}>{tx.name}</span>
-                <span style={{ fontSize:10, padding:"2px 6px", borderRadius:10, fontWeight:600,
-                  background: isKnown ? "rgba(46,204,138,0.12)" : "rgba(255,183,77,0.12)",
-                  color: isKnown ? "var(--green-soft)" : "var(--gold)",
-                  border: `1px solid ${isKnown ? "rgba(46,204,138,0.3)" : "rgba(255,183,77,0.3)"}`,
-                }}>{isKnown ? "מוכר" : "חדש"}</span>
+      {(() => {
+        const isPdf = (tx: any) => (tx.source || '').toLowerCase().endsWith('.pdf');
+        const toggleFlowType = (id: any) => {
+          setTransactions(prev => prev.map(t =>
+            t.id === id
+              ? { ...t, flow_type: t.flow_type === 'credit_transfer' ? 'expense' : 'credit_transfer' }
+              : t
+          ));
+        };
+
+        const incomeTxs         = filteredTx.filter(tx => tx.maxCat === 'הכנסות');
+        const creditTransferTxs = filteredTx.filter(tx => tx.maxCat !== 'הכנסות' && tx.flow_type === 'credit_transfer');
+        const expenseTxs        = filteredTx.filter(tx => tx.maxCat !== 'הכנסות' && tx.flow_type !== 'credit_transfer');
+        const hasIncome         = incomeTxs.length > 0;
+        const hasTransfers      = creditTransferTxs.length > 0;
+
+        const renderCard = (tx: any, inTransferSection = false) => {
+          const isKnown  = !!rememberedMappings[tx.name];
+          const needsCat = tx.conf === 'low' && tx.cat === 'הוצאות לא מתוכננות' && isPdf(tx) && !inTransferSection;
+          return (
+          <Card key={tx.id} style={{ marginBottom:8, padding:"12px 16px", opacity: inTransferSection ? 0.85 : 1 }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
+              <div style={{ flex:1 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                  <span style={{ fontWeight:600, fontSize: 16 }}>{tx.name}</span>
+                  <span style={{ fontSize: 12, padding:"2px 6px", borderRadius:10, fontWeight:600,
+                    background: isKnown ? "rgba(46,204,138,0.12)" : "rgba(255,183,77,0.12)",
+                    color: isKnown ? "var(--green-soft)" : "var(--gold)",
+                    border: `1px solid ${isKnown ? "rgba(46,204,138,0.3)" : "rgba(255,183,77,0.3)"}`,
+                  }}>{isKnown ? "מוכר" : "חדש"}</span>
+                </div>
+                <div style={{ fontSize: 15, color:"var(--text-dim)" }}>{tx.date}</div>
+                {tx.note && <div style={{ fontSize: 14, color:"var(--text-mid)", marginTop:3, fontStyle:"italic" }}>📝 {tx.note}</div>}
               </div>
-              <div style={{ fontSize:12, color:"var(--text-dim)" }}>{tx.date}</div>
-              {tx.note && <div style={{ fontSize:12, color:"var(--text-mid)", marginTop:3, fontStyle:"italic" }}>📝 {tx.note}</div>}
+              <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                <span style={{ fontWeight:700, color: tx.maxCat === 'הכנסות' ? "var(--green-mid)" : "var(--red)", fontSize: 16 }}>
+                  {tx.maxCat === 'הכנסות' ? '+' : ''}₪{tx.amount?.toLocaleString()}
+                </span>
+                {!inTransferSection && (
+                  <>
+                    <button
+                      onClick={e => { e.stopPropagation(); setActiveTxId(activeTxId===tx.id?null:tx.id); setCatSearch(""); }}
+                      style={{ background: needsCat ? "rgba(192,57,43,0.08)" : "var(--green-mint)", border:`1px solid ${needsCat ? "var(--red)" : "var(--green-soft)"}`, borderRadius:8, padding:"5px 12px", fontSize: 15, color: needsCat ? "var(--red)" : "var(--green-deep)", cursor:"pointer", fontFamily:"inherit", fontWeight:600 }}>
+                      {needsCat ? '⚠️ דרוש סיווג' : tx.cat}
+                    </button>
+                    {tx.cat !== 'להתעלם' ? (
+                      <button
+                        onClick={e => { e.stopPropagation(); setPrevCatMapP(p => ({...p, [tx.id]: tx.cat})); setTransactions(p => p.map(t => t.id===tx.id ? { ...t, cat:"להתעלם", edited:true, conf:"high" } : t)); setActiveTxId(null); }}
+                        title="התעלם מתנועה זו — לא תיספר"
+                        style={{ background:"transparent", border:"1px solid var(--border)", borderRadius:8, padding:"5px 10px", fontSize: 15, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}
+                      >⊘</button>
+                    ) : prevCatMapP[tx.id] ? (
+                      <button
+                        onClick={e => { e.stopPropagation(); const prev = prevCatMapP[tx.id]; setTransactions(p => p.map(t => t.id===tx.id ? { ...t, cat:prev, edited:true, conf:"high" } : t)); setPrevCatMapP(p => { const n={...p}; delete n[tx.id]; return n; }); }}
+                        title="בטל התעלמות"
+                        style={{ background:"var(--green-mint)", border:"1px solid var(--green-soft)", borderRadius:8, padding:"5px 10px", fontSize:13, color:"var(--green-deep)", cursor:"pointer", fontFamily:"inherit", whiteSpace:"nowrap" }}
+                      >↩️ {prevCatMapP[tx.id]}</button>
+                    ) : null}
+                  </>
+                )}
+                <button
+                  onClick={e => { e.stopPropagation(); setActiveTxId(activeTxId===`note_${tx.id}`?null:`note_${tx.id}`); }}
+                  style={{ background:"transparent", border:"1px solid var(--border)", borderRadius:8, padding:"5px 10px", fontSize: 15, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}
+                  title="הוסף הערה">📝</button>
+                {isPdf(tx) && (
+                  <button
+                    onClick={e => { e.stopPropagation(); toggleFlowType(tx.id); }}
+                    title={inTransferSection ? "הזז להוצאות רגילות" : "סמן כחיוב אשראי — לא ייספר בהוצאות"}
+                    style={{ background: inTransferSection ? "var(--green-mint)" : "transparent", border:`1px solid ${inTransferSection ? "var(--green-soft)" : "var(--border)"}`, borderRadius:8, padding:"5px 10px", fontSize: 14, color: inTransferSection ? "var(--green-deep)" : "var(--text-dim)", cursor:"pointer", fontFamily:"inherit", whiteSpace:"nowrap" }}
+                  >{inTransferSection ? "↩️ הוצאה" : "💳 כלול בכרטיס"}</button>
+                )}
+              </div>
             </div>
-            <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
-              <span style={{ fontWeight:700, color:"var(--red)", fontSize:14 }}>₪{tx.amount?.toLocaleString()}</span>
-              <button
-                onClick={e => { e.stopPropagation(); setActiveTxId(activeTxId===tx.id?null:tx.id); setCatSearch(""); }}
-                style={{ background:"var(--green-mint)", border:"1px solid var(--green-soft)", borderRadius:8, padding:"5px 12px", fontSize:13, color:"var(--green-deep)", cursor:"pointer", fontFamily:"inherit", fontWeight:600 }}>
-                {tx.cat}
-              </button>
-              <button
-                onClick={e => { e.stopPropagation(); setActiveTxId(activeTxId===`note_${tx.id}`?null:`note_${tx.id}`); }}
-                style={{ background:"transparent", border:"1px solid var(--border)", borderRadius:8, padding:"5px 10px", fontSize:12, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}
-                title="הוסף הערה">📝</button>
-            </div>
-          </div>
-          {activeTxId === tx.id && (
-            <CategoryPicker
-              current={tx.cat}
-              catSearch={catSearch}
-              setCatSearch={setCatSearch}
-              categories={categories}
-              rows={categoryRows}
-              clientCats={clientCats}
-              clientId={clientId}
-              onCategoryAdded={onCategoryAdded}
-              hiddenCats={hiddenCats}
-              onHiddenCatsChange={onHiddenCatsChange}
-              onSelect={(cat) => {
-                const txName = tx.name;
-                setTransactions(p => p.map(t =>
-                  t.name === txName ? { ...t, cat, edited: true, conf: "high" } : t
-                ));
-                setActiveTxId(null);
-                setCatSearch("");
-                setPendingRemember({ name: txName, cat });
-              }}
-            />
-          )}
-          {activeTxId === `note_${tx.id}` && (
-            <div style={{ marginTop:8 }}>
-              <input
-                autoFocus
-                value={tx.note || ""}
-                onChange={e => setTransactions(p => p.map(t => t.id===tx.id?{...t,note:e.target.value}:t))}
-                placeholder="הוסף הערה לעסקה זו..."
-                style={{ width:"100%", background:"var(--surface2)", border:"1.5px solid var(--green-soft)", borderRadius:8, padding:"7px 12px", color:"var(--text)", fontFamily:"inherit", fontSize:13, outline:"none", boxSizing:"border-box" }}
-                onKeyDown={e => { if (e.key==="Enter"||e.key==="Escape") setActiveTxId(null); }}
+            {!inTransferSection && activeTxId === tx.id && (
+              <CategoryPicker
+                current={tx.cat}
+                catSearch={catSearch}
+                setCatSearch={setCatSearch}
+                categories={categories}
+                rows={categoryRows}
+                clientCats={clientCats}
+                clientId={clientId}
+                onCategoryAdded={onCategoryAdded}
+                hiddenCats={hiddenCats}
+                onHiddenCatsChange={onHiddenCatsChange}
+                onSelect={(cat) => {
+                  setTransactions(p => p.map(t =>
+                    t.id === tx.id ? { ...t, cat, edited: true, conf: "high" } : t
+                  ));
+                  setActiveTxId(null); setCatSearch("");
+                  setPendingRemember({ name: tx.name, cat });
+                }}
               />
-            </div>
-          )}
-        </Card>
+            )}
+            {activeTxId === `note_${tx.id}` && (
+              <div style={{ marginTop:8 }}>
+                <input autoFocus value={tx.note || ""}
+                  onChange={e => setTransactions(p => p.map(t => t.id===tx.id?{...t,note:e.target.value}:t))}
+                  placeholder="הוסף הערה לעסקה זו..."
+                  style={{ width:"100%", background:"var(--surface2)", border:"1.5px solid var(--green-soft)", borderRadius:8, padding:"7px 12px", color:"var(--text)", fontFamily:"inherit", fontSize: 15, outline:"none", boxSizing:"border-box" }}
+                  onKeyDown={e => { if (e.key==="Enter"||e.key==="Escape") setActiveTxId(null); }}
+                />
+              </div>
+            )}
+          </Card>
+          );
+        };
+
+        return (
+          <>
+            {hasIncome && (
+              <>
+                <div style={{ fontWeight:800, fontSize: 20, color:"var(--green-deep)", marginBottom:10, marginTop:8, padding:"10px 14px", background:"var(--green-mint)", borderRadius:10, display:"flex", alignItems:"center", gap:8, borderBottom:"2px solid var(--green-soft)" }}>
+                  💰 הכנסות <span style={{ fontWeight:500, color:"var(--green-mid)", fontSize: 16 }}>({incomeTxs.length})</span>
+                </div>
+                {incomeTxs.map(tx => renderCard(tx, false))}
+              </>
+            )}
+            {expenseTxs.length > 0 && (
+              <div style={{ fontWeight:800, fontSize: 20, color:"var(--red)", marginBottom:10, marginTop: hasIncome ? 16 : 8, padding:"10px 14px", background:"var(--red-light)", borderRadius:10, display:"flex", alignItems:"center", gap:8, borderBottom:"2px solid var(--red)" }}>
+                💸 הוצאות <span style={{ fontWeight:500, color:"var(--text-dim)", fontSize: 16 }}>({expenseTxs.length})</span>
+              </div>
+            )}
+            {expenseTxs.map(tx => renderCard(tx, false))}
+            {hasTransfers && (
+              <>
+                <div style={{ fontWeight:800, fontSize: 20, color:"var(--text-dim)", marginBottom:6, marginTop:20, padding:"10px 14px", background:"var(--surface2)", borderRadius:10, display:"flex", alignItems:"center", gap:8, borderBottom:"2px solid var(--border)" }}>
+                  🔄 חיובי אשראי <span style={{ fontWeight:500, color:"var(--text-dim)", fontSize: 16 }}>({creditTransferTxs.length})</span>
+                </div>
+                <div style={{ fontSize: 15, color:"var(--text-dim)", background:"rgba(255,183,77,0.08)", border:"1px solid rgba(255,183,77,0.25)", borderRadius:8, padding:"8px 14px", marginBottom:10 }}>
+                  ℹ️ תנועות אלו הן תשלומי כרטיס אשראי — <strong>לא נספרות כהוצאה</strong> כדי למנוע כפילות עם נתוני מקס/ישראכרט. לחץ על ↩️ כדי להעביר להוצאות.
+                </div>
+                {creditTransferTxs.map(tx => renderCard(tx, true))}
+              </>
+            )}
+          </>
         );
-      })}
+      })()}
 
       {/* Save button at bottom */}
       <div style={{ position:"sticky", bottom:20, display:"flex", justifyContent:"center", marginTop:16 }}>
-        <Btn onClick={saveSource} disabled={saving} style={{ boxShadow:"0 4px 20px rgba(45,106,79,0.3)", padding:"12px 36px", fontSize:15 }}>
+        <Btn onClick={saveSource} disabled={saving} style={{ boxShadow:"0 4px 20px rgba(45,106,79,0.3)", padding:"12px 36px", fontSize: 17 }}>
           💾 {saving?"שומר...":"שמור את כל הסיווגים"}
         </Btn>
       </div>
@@ -2258,7 +2897,7 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
 // ── assignBillingMonth ────────────────────────────────────────────────────────
 // date: "DD/MM/YYYY" or "YYYY-MM-DD" → "YYYY-MM" based on cycleStartDay
 
-function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleStartDay, importedTxs, manualTxs, rememberedMappings, onCycleStartDayChange, ignoredCats = IGNORED_CATEGORIES, categoryRules = [] as any[] }) {
+function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleStartDay, importedTxs, manualTxs, rememberedMappings, onCycleStartDayChange, ignoredCats = IGNORED_CATEGORIES, incomeCats = new Set<string>(), categoryRules = [] as any[] }) {
   const NOW_YEAR  = new Date().getFullYear();
   const NOW_MONTH = new Date().getMonth() + 1; // 1–12
   const NOW_DAY   = new Date().getDate();
@@ -2269,7 +2908,7 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
 
   const saveCycleDay = async () => {
     const d = parseInt(tempDay);
-    if (isNaN(d) || d < 1 || d > 28) return;
+    if (isNaN(d) || d < 1 || d > 31) return;
     setSavingDay(true);
     await supabase.from("clients").update({ cycle_start_day: d }).eq("id", clientId);
     if (onCycleStartDayChange) onCycleStartDayChange(d);
@@ -2330,17 +2969,30 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
 
   const MONTHS_HE = ["ינ׳","פב׳","מר׳","אפ׳","מי׳","יו׳","יל׳","אוג׳","ספ׳","אוק׳","נו׳","דצ׳"];
 
-  // ── Load all periods once ─────────────────────────────────────────────────
+  // ── Load all periods ─────────────────────────────────────────────────────
+  const loadPeriods = async () => {
+    const { data: per } = await supabase
+      .from("active_scenario")
+      .select("id, scenario_id, active_from, active_until, scenarios(name)")
+      .eq("client_id", clientId)
+      .order("active_from", { ascending: false });
+    // סנן רשומות שהתסריט שלהן נמחק (join החזיר null)
+    setAllPeriods((per || []).filter(p => p.scenario_id && p.scenarios));
+  };
+
+  useEffect(() => { loadPeriods(); }, [clientId]); // eslint-disable-line
+
+  // ── Real-time: כשתסריט פעיל משתנה — רענן מיידית ──────────────────────────
   useEffect(() => {
-    (async () => {
-      const { data: per } = await supabase
-        .from("active_scenario")
-        .select("id, scenario_id, active_from, active_until, scenarios(name)")
-        .eq("client_id", clientId)
-        .order("active_from", { ascending: false });
-      setAllPeriods(per || []);
-    })();
-  }, [clientId]);
+    const channel = supabase
+      .channel(`portfolio_control_scenario_${clientId}`)
+      .on("postgres_changes", {
+        event: "*", schema: "public", table: "active_scenario",
+        filter: `client_id=eq.${clientId}`,
+      }, () => { loadPeriods(); setItemsCache({}); })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [clientId]); // eslint-disable-line
 
   // ── When year changes or periods load → find & load scenario items ────────
   useEffect(() => {
@@ -2352,49 +3004,70 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
     if (cached) { setScenarioItems(cached); return; }
     supabase.from("scenario_items").select("*")
       .eq("scenario_id", period.scenario_id).order("sort_order")
-      .then(({ data }) => {
+      .then(({ data, error }) => {
+        if (error) { console.error("scenario_items load error:", error); return; }
         const items = data || [];
         setScenarioItems(items);
         setItemsCache(prev => ({ ...prev, [period.scenario_id]: items }));
       });
   }, [allPeriods, selectedYear]); // eslint-disable-line
 
-  // ── Build txMap: { "YYYY-MM": { categoryName: totalAmount } } ────────────
-  const txMap = useMemo(() => {
-    const map = {};
-    const add = (mk, cat, amt) => {
+  // ── Build txMap: שני מפות נפרדות — הכנסות והוצאות ────────────────────────
+  const { incomeMap, expenseMap } = useMemo(() => {
+    const inc = {};
+    const exp = {};
+    const add = (map, mk, cat, amt) => {
       if (!mk || !cat || !amt) return;
       if (!map[mk]) map[mk] = {};
       map[mk][cat] = (map[mk][cat] || 0) + amt;
     };
-    // From portfolio submissions (already classified)
+    // From portfolio submissions
     portfolioSubs.forEach(sub => {
       const mk = sub.month_key;
       if (!mk || +mk.split('-')[0] !== currentYear) return;
       (sub.transactions || []).forEach(tx => {
         if (ignoredCats.has(tx.cat)) return;
-        add(mk, tx.cat || "הוצאות לא מתוכננות", tx.amount || 0);
+        if (tx.flow_type === 'credit_transfer') return;
+        const cat = tx.cat || "הוצאות לא מתוכננות";
+        if (incomeCats.has(cat)) add(inc, mk, cat, tx.amount || 0);
+        else add(exp, mk, cat, tx.amount || 0);
       });
     });
-    // From imported transactions (classify on the fly)
+    // From imported transactions
     (importedTxs || []).forEach(tx => {
       if ((tx.amount || 0) <= 0) return;
       const mk = tx.billing_month || assignBillingMonth(tx.date, cycleStartDay || 1);
       if (!mk || +mk.split('-')[0] !== currentYear) return;
       const cat = tx.cat || classifyTx(tx.name, tx.max_category, rememberedMappings || {}, categoryRules).cat;
       if (ignoredCats.has(cat)) return;
-      add(mk, cat, tx.amount);
+      if (incomeCats.has(cat)) add(inc, mk, cat, tx.amount);
+      else add(exp, mk, cat, tx.amount);
     });
-    // From manual transactions
+    // From manual transactions — type קובע להכנסה או הוצאה
     (manualTxs || []).forEach(tx => {
       if ((tx.amount || 0) <= 0) return;
       const mk = tx.billing_month;
       if (!mk || +mk.split('-')[0] !== currentYear) return;
       if (ignoredCats.has(tx.cat)) return;
-      add(mk, tx.cat, tx.amount);
+      if (tx.type === 'income') add(inc, mk, tx.cat, tx.amount);
+      else add(exp, mk, tx.cat, tx.amount);
+    });
+    return { incomeMap: inc, expenseMap: exp };
+  }, [portfolioSubs, importedTxs, manualTxs, rememberedMappings, cycleStartDay, currentYear, incomeCats, ignoredCats]);
+
+  // txMap משולב — לשימוש ב-missingCats ובכל מקום שלא מבחין בין סוגים
+  const txMap = useMemo(() => {
+    const map = {};
+    [incomeMap, expenseMap].forEach(src => {
+      Object.entries(src).forEach(([mk, cats]: [string, any]) => {
+        if (!map[mk]) map[mk] = {};
+        Object.entries(cats).forEach(([cat, amt]: [string, any]) => {
+          map[mk][cat] = (map[mk][cat] || 0) + amt;
+        });
+      });
     });
     return map;
-  }, [portfolioSubs, importedTxs, manualTxs, rememberedMappings, cycleStartDay, currentYear]);
+  }, [incomeMap, expenseMap]);
 
   // Months this year that have any data, up to current month
   const activeMks = useMemo(() =>
@@ -2406,20 +3079,25 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
   const numActive = activeMks.length;
 
   // ── Helpers ──────────────────────────────────────────────────────────────
-  const getAct = (cat, mk)      => txMap[mk]?.[cat] || 0;
-  const getSum = (cat)          => activeMks.reduce((s, mk) => s + getAct(cat, mk), 0);
-  const getAvg = (cat)          => numActive > 0 ? getSum(cat) / numActive : 0;
+  // getAct — item_type קובע מאיזו מפה לשלוף
+  const getAct = (cat, mk, itemType?: string) => {
+    if (itemType === 'income') return incomeMap[mk]?.[cat] || 0;
+    if (itemType === 'expense_fixed' || itemType === 'expense_variable') return expenseMap[mk]?.[cat] || 0;
+    return txMap[mk]?.[cat] || 0;
+  };
+  const getSum = (cat, itemType?: string) => activeMks.reduce((s, mk) => s + getAct(cat, mk, itemType), 0);
+  const getAvg = (cat, itemType?: string) => numActive > 0 ? getSum(cat, itemType) / numActive : 0;
   // remaining = cumulative budget up to current month − total spent
-  const getRem = (cat, bud)     => currentMonth * (bud || 0) - getSum(cat);
+  const getRem = (cat, bud, itemType?: string) => currentMonth * (bud || 0) - getSum(cat, itemType);
 
   const fmtAmt = (n)            => n ? `₪${Math.round(n).toLocaleString()}` : "";
   const fmtZ   = (n)            => `₪${Math.round(n).toLocaleString()}`;
 
-  const groupSum  = (grp, mk)   => grp.reduce((s, x) => s + getAct(x.category_name, mk), 0);
-  const groupTotal= (grp)       => grp.reduce((s, x) => s + getSum(x.category_name), 0);
+  const groupSum  = (grp, mk)   => grp.reduce((s, x) => s + getAct(x.category_name, mk, x.item_type), 0);
+  const groupTotal= (grp)       => grp.reduce((s, x) => s + getSum(x.category_name, x.item_type), 0);
   const groupBud  = (grp)       => grp.reduce((s, x) => s + (x.amount || 0), 0);
-  const groupAvg  = (grp)       => grp.reduce((s, x) => s + getAvg(x.category_name), 0);
-  const groupRem  = (grp)       => grp.reduce((s, x) => s + getRem(x.category_name, x.amount || 0), 0);
+  const groupAvg  = (grp)       => grp.reduce((s, x) => s + getAvg(x.category_name, x.item_type), 0);
+  const groupRem  = (grp)       => grp.reduce((s, x) => s + getRem(x.category_name, x.amount || 0, x.item_type), 0);
 
 
   const avgOverBudget = (avg, bud) => bud > 0 && avg > bud + Math.max(bud * 0.01, 50);
@@ -2432,9 +3110,9 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
         : b.category_name.localeCompare(a.category_name, "he");
       let va, vb;
       if (sortCol === "budget")   { va = a.amount||0; vb = b.amount||0; }
-      else if (sortCol === "avg") { va = getAvg(a.category_name); vb = getAvg(b.category_name); }
-      else if (sortCol === "rem") { va = getRem(a.category_name, a.amount||0); vb = getRem(b.category_name, b.amount||0); }
-      else { va = getAct(a.category_name, sortCol); vb = getAct(b.category_name, sortCol); }
+      else if (sortCol === "avg") { va = getAvg(a.category_name, a.item_type); vb = getAvg(b.category_name, b.item_type); }
+      else if (sortCol === "rem") { va = getRem(a.category_name, a.amount||0, a.item_type); vb = getRem(b.category_name, b.amount||0, b.item_type); }
+      else { va = getAct(a.category_name, sortCol, a.item_type); vb = getAct(b.category_name, sortCol, b.item_type); }
       return sortDir === "asc" ? va - vb : vb - va;
     });
   };
@@ -2474,7 +3152,7 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
   const allExp   = [...fixed, ...variable];
 
   // If "הכנסות מזדמנות" is not in the scenario but has manual transactions, add a synthetic row
-  const incomeDisplay = income.some(x => x.category_name === "הכנסות מזדמנות") || getSum("הכנסות מזדמנות") === 0
+  const incomeDisplay = income.some(x => x.category_name === "הכנסות מזדמנות") || getSum("הכנסות מזדמנות", "income") === 0
     ? income
     : [...income, { id: "__occasional__", category_name: "הכנסות מזדמנות", amount: 0, item_type: "income" }];
 
@@ -2485,16 +3163,16 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
 
   // ── Styles ────────────────────────────────────────────────────────────────
   const TH: React.CSSProperties = {
-    padding: "7px 8px", textAlign: "center", fontWeight: 700,
+    padding: "10px 8px", textAlign: "center", fontWeight: 700,
     borderBottom: "2px solid var(--border)", borderLeft: "1px solid var(--border)88",
-    whiteSpace: "nowrap", background: "var(--surface2)", color: "var(--text-mid)", fontSize: 11,
+    whiteSpace: "nowrap", background: "var(--surface2)", color: "var(--text-mid)", fontSize: 14,
     cursor: "pointer", userSelect: "none",
     position: "sticky", top: 0, zIndex: 2,
   };
   const TD: React.CSSProperties = {
-    padding: "5px 8px", textAlign: "center",
+    padding: "8px 8px", textAlign: "center",
     borderBottom: "1px solid var(--border)66", borderLeft: "1px solid var(--border)66",
-    fontSize: 12, color: "var(--text)",
+    fontSize: 14, color: "var(--text)",
   };
   const TDL: React.CSSProperties = {
     ...TD, textAlign: "right", paddingRight: 14, fontWeight: 500,
@@ -2511,9 +3189,10 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
   const renderSectionHeader = (label, key, bg) => (
     <tr onClick={() => setCollapsed(p => ({ ...p, [key]: !p[key] }))} style={{ cursor: "pointer" }}>
       <td colSpan={numCols} style={{
-        padding: "7px 14px", fontWeight: 700, fontSize: 12,
+        padding: "10px 14px", fontWeight: 700, fontSize: 15,
         background: bg, color: "var(--text)",
         borderBottom: "1px solid var(--border)", borderTop: "2px solid var(--border)",
+        letterSpacing: "0.01em",
       }}>
         {collapsed[key] ? "▶" : "▼"} {label}
       </td>
@@ -2522,9 +3201,10 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
 
   const renderItemRow = (item, isIncome = false, idx = 0) => {
     const bud = item.amount || 0;
-    const avg = getAvg(item.category_name);
-    const sum = getSum(item.category_name);
-    const rem = getRem(item.category_name, bud);
+    const itype = item.item_type;
+    const avg = getAvg(item.category_name, itype);
+    const sum = getSum(item.category_name, itype);
+    const rem = getRem(item.category_name, bud, itype);
     const hasActivity = sum > 0 || bud > 0;
     const stripe = idx % 2 === 1 ? "rgba(0,0,0,0.018)" : undefined;
     const avgColor = !isIncome && numActive > 0 && bud > 0
@@ -2541,14 +3221,14 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
         <td style={{ ...TD, color: "var(--text-dim)" }}>{bud ? fmtZ(bud) : ""}</td>
         {displayMonths.map(m => {
           const mk  = `${currentYear}-${String(m).padStart(2, '0')}`;
-          const val = getAct(item.category_name, mk);
+          const val = getAct(item.category_name, mk, itype);
           const isCur = m === currentMonth;
           const over  = !isIncome && bud > 0 && val > bud * 1.15;
           const inActive = activeMkSet.has(mk);
           return (
             <td key={m} style={{
               ...TD,
-              background: isCur ? "rgba(79,142,247,0.06)" : undefined,
+              background: isCur ? "rgba(45,106,79,0.05)" : undefined,
               color: over ? "var(--red)" : val === 0 && inActive ? "var(--text-dim)" : undefined,
               fontWeight: over ? 700 : undefined,
               ...(val > 0 ? { cursor: "pointer" } : {}),
@@ -2572,15 +3252,16 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
   const renderTotalRow = (label, grp, bold = false, isIncome = false) => {
     const bud = groupBud(grp);
     const rem = groupRem(grp);
+    const totalBg = bold ? "var(--green-pale)" : "var(--surface2)";
     return (
-      <tr style={{ background: "var(--surface2)", fontWeight: bold ? 800 : 700 }}>
-        <td style={{ ...TDL, fontWeight: bold ? 800 : 700, background: "var(--surface2)" }}>{label}</td>
+      <tr style={{ background: totalBg, fontWeight: bold ? 800 : 700, borderTop: bold ? "2px solid var(--green-mint)" : undefined }}>
+        <td style={{ ...TDL, fontWeight: bold ? 800 : 700, background: totalBg, fontSize: bold ? 13 : 12 }}>{label}</td>
         <td style={TD}>{fmtZ(bud)}</td>
         {displayMonths.map(m => {
           const mk  = `${currentYear}-${String(m).padStart(2, '0')}`;
           const tot = groupSum(grp, mk);
           return (
-            <td key={m} style={{ ...TD, background: m === currentMonth ? "rgba(79,142,247,0.09)" : undefined }}>
+            <td key={m} style={{ ...TD, background: m === currentMonth ? "rgba(45,106,79,0.07)" : undefined }}>
               {fmtAmt(tot)}
             </td>
           );
@@ -2595,76 +3276,73 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
 
   return (
     <>
-    {/* ── פאנל: קטגוריות לא מתוכננות ── */}
-    {missingCats.length > 0 && (
-      <div style={{
-        position: "fixed", left: 16, top: "50%", transform: "translateY(-50%)",
-        width: 220, zIndex: 500,
-        background: "var(--surface)", border: "1px solid var(--red)55",
-        borderRadius: 12, boxShadow: "0 4px 20px rgba(0,0,0,0.25)",
-        overflow: "hidden",
-      }}>
-        <div style={{
-          background: "rgba(247,92,92,0.12)", padding: "10px 14px",
-          borderBottom: "1px solid var(--red)33",
-          display: "flex", alignItems: "center", gap: 8,
-        }}>
-          <span style={{ fontSize: 15 }}>⚠️</span>
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--red)" }}>קטגוריות לא בתסריט</div>
-            <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 1 }}>יש הוצאות ללא תכנון</div>
-          </div>
-        </div>
-        <div style={{ maxHeight: 280, overflowY: "auto", padding: "8px 0" }}>
-          {missingCats.map(({ cat, total }) => (
-            <div key={cat} style={{
-              display: "flex", justifyContent: "space-between", alignItems: "center",
-              padding: "6px 14px", borderBottom: "1px solid var(--border)44", fontSize: 12,
-            }}>
-              <span style={{ color: "var(--text)", flex: 1, marginLeft: 8 }}>{cat}</span>
-              <span style={{ fontWeight: 700, color: "var(--red)", whiteSpace: "nowrap" }}>
-                ₪{Math.round(total).toLocaleString()}
-              </span>
-            </div>
-          ))}
-        </div>
-        <div style={{ padding: "8px 14px", fontSize: 10, color: "var(--text-dim)", borderTop: "1px solid var(--border)44", textAlign: "center" }}>
-          עבור למאזן מתוכנן להוסיף
-        </div>
-      </div>
-    )}
+    {/* ── באנר: קטגוריות לא מתוכננות ── */}
 
     <div>
+      {/* ── באנר: קטגוריות לא מתוכננות ── */}
+      {missingCats.length > 0 && (
+        <div style={{
+          marginBottom: 16,
+          background: "rgba(192,57,43,0.06)",
+          border: "1px solid rgba(192,57,43,0.2)",
+          borderRadius: 10,
+          padding: "12px 16px",
+          display: "flex", alignItems: "flex-start", gap: 12,
+        }}>
+          <span style={{ fontSize: 18, flexShrink: 0, marginTop: 1 }}>⚠️</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "var(--red)", marginBottom: 8 }}>
+              {missingCats.length} קטגוריות עם הוצאות אינן מוגדרות בתסריט
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+              {missingCats.map(({ cat, total }) => (
+                <span key={cat} style={{
+                  background: "rgba(192,57,43,0.1)", border: "1px solid rgba(192,57,43,0.25)",
+                  borderRadius: 20, padding: "3px 10px", fontSize: 14, color: "var(--red)",
+                  display: "inline-flex", alignItems: "center", gap: 5,
+                }}>
+                  {cat}
+                  <strong>₪{Math.round(total).toLocaleString()}</strong>
+                </span>
+              ))}
+            </div>
+            <div style={{ fontSize: 13, color: "var(--text-dim)" }}>
+              עבור לטאב <strong>מאזן מתוכנן</strong> כדי להוסיף קטגוריות אלו לתסריט
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── יום תחילת המחזור החודשי ── */}
       <Card style={{ marginBottom:16, padding:"12px 18px", background:"var(--surface2)", border:"1px solid var(--border)" }}>
         <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-          <span style={{ fontSize:13, color:"var(--text-mid)" }}>יום תחילת המחזור החודשי:</span>
+          <span style={{ fontSize: 15, color:"var(--text-mid)" }}>יום תחילת המחזור החודשי:</span>
           {editingCycleDay ? (
             <>
               <input type="number" min="1" max="28" value={tempDay}
                 onChange={e => setTempDay(e.target.value)}
-                style={{ width:60, padding:"5px 10px", borderRadius:8, border:"1.5px solid var(--green-mid)", fontSize:14,
+                style={{ width:60, padding:"5px 10px", borderRadius:8, border:"1.5px solid var(--green-mid)", fontSize: 16,
                   fontFamily:"inherit", background:"var(--surface)", color:"var(--text)", textAlign:"center" }} />
               <button onClick={saveCycleDay} disabled={savingDay}
-                style={{ padding:"5px 14px", borderRadius:8, fontSize:13, cursor:"pointer", fontFamily:"inherit",
+                style={{ padding:"5px 14px", borderRadius:8, fontSize: 15, cursor:"pointer", fontFamily:"inherit",
                   background:"var(--green-mid)", color:"#fff", border:"none", fontWeight:700 }}>
                 {savingDay ? "שומר..." : "שמור"}
               </button>
               <button onClick={() => { setEditingCycleDay(false); setTempDay(String(cycleStartDay)); }}
-                style={{ padding:"5px 12px", borderRadius:8, fontSize:13, cursor:"pointer", fontFamily:"inherit",
+                style={{ padding:"5px 12px", borderRadius:8, fontSize: 15, cursor:"pointer", fontFamily:"inherit",
                   background:"transparent", color:"var(--text-dim)", border:"1px solid var(--border)" }}>
                 ביטול
               </button>
             </>
           ) : (
             <>
-              <span style={{ fontWeight:700, fontSize:15, color:"var(--green-deep)" }}>{cycleStartDay}</span>
+              <span style={{ fontWeight:700, fontSize: 17, color:"var(--green-deep)" }}>{cycleStartDay}</span>
               <button onClick={() => { setEditingCycleDay(true); setTempDay(String(cycleStartDay)); }}
-                style={{ padding:"4px 12px", borderRadius:8, fontSize:12, cursor:"pointer", fontFamily:"inherit",
+                style={{ padding:"4px 12px", borderRadius:8, fontSize: 14, cursor:"pointer", fontFamily:"inherit",
                   background:"transparent", color:"var(--text-dim)", border:"1px solid var(--border)" }}>
                 ✏️ שנה
               </button>
-              <span style={{ fontSize:12, color:"var(--text-dim)" }}>(שינוי ישפיע על החלוקה מעכשיו ואילך)</span>
+              <span style={{ fontSize: 15, color:"var(--text-dim)" }}>(שינוי ישפיע על החלוקה מעכשיו ואילך)</span>
             </>
           )}
         </div>
@@ -2674,52 +3352,49 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
           <button onClick={() => setSelectedYear(y => y - 1)}
-            style={{ padding: "5px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text-mid)", fontSize: 16, cursor: "pointer", fontFamily: "inherit", lineHeight: 1 }}>
+            style={{ padding: "5px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text-mid)", fontSize: 18, cursor: "pointer", fontFamily: "inherit", lineHeight: 1 }}>
             ‹
           </button>
-          <div style={{ minWidth: 68, textAlign: "center", fontWeight: 700, fontSize: 16 }}>{selectedYear}</div>
+          <div style={{ minWidth: 68, textAlign: "center", fontWeight: 700, fontSize: 18 }}>{selectedYear}</div>
           <button onClick={() => setSelectedYear(y => Math.min(y + 1, NOW_YEAR))}
             disabled={selectedYear >= NOW_YEAR}
-            style={{ padding: "5px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: selectedYear >= NOW_YEAR ? "var(--text-dim)" : "var(--text-mid)", fontSize: 16, cursor: selectedYear >= NOW_YEAR ? "default" : "pointer", fontFamily: "inherit", lineHeight: 1, opacity: selectedYear >= NOW_YEAR ? 0.4 : 1 }}>
+            style={{ padding: "5px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: selectedYear >= NOW_YEAR ? "var(--text-dim)" : "var(--text-mid)", fontSize: 18, cursor: selectedYear >= NOW_YEAR ? "default" : "pointer", fontFamily: "inherit", lineHeight: 1, opacity: selectedYear >= NOW_YEAR ? 0.4 : 1 }}>
             ›
           </button>
         </div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
           {scenarioName ? (
-            <div style={{ padding: "5px 12px", background: "var(--green-pale)", borderRadius: 8, border: "1px solid var(--green-mint)", fontSize: 12, color: "var(--green-deep)" }}>
+            <div style={{ padding: "5px 12px", background: "var(--green-pale)", borderRadius: 8, border: "1px solid var(--green-mint)", fontSize: 14, color: "var(--green-deep)" }}>
               תסריט: <strong>{scenarioName}</strong>
               {numActive > 0 && <span style={{ color: "var(--text-dim)", marginRight: 8 }}>· {numActive} חודשים עם נתונים</span>}
             </div>
-          ) : (
-            <div style={{ padding: "5px 12px", background: "rgba(251,191,36,0.1)", borderRadius: 8, border: "1px solid rgba(251,191,36,0.4)", fontSize: 12, color: "var(--gold)", display: "flex", alignItems: "center", gap: 8 }}>
-              ⚠️ לא נבחר תסריט לשנה זו
-              <button onClick={() => { /* navigate to scenario tab */ const el = document.querySelector('[data-tab="scenarios"]') as HTMLElement; el?.click(); }}
-                style={{ padding: "2px 10px", borderRadius: 6, border: "1px solid rgba(251,191,36,0.5)", background: "rgba(251,191,36,0.15)", color: "var(--gold)", fontSize: 11, cursor: "pointer", fontFamily: "inherit", fontWeight: 700 }}>
-                בחר תסריט
-              </button>
+          ) : null}
+          {(cycleStartDay || 1) > 1 && (
+            <div style={{ padding: "4px 12px", background: "var(--surface2)", borderRadius: 20, border: "1px solid var(--border)", fontSize: 14, color: "var(--text-dim)" }}>
+              מחזור מה-<strong>{cycleStartDay}</strong> לחודש
             </div>
           )}
-          {(cycleStartDay || 1) > 1 && (
-            <div style={{ padding: "5px 12px", background: "var(--surface2)", borderRadius: 8, border: "1px solid var(--border)", fontSize: 12, color: "var(--text-dim)" }}>
-              מחזור מה-<strong>{cycleStartDay}</strong> לחודש · נותר מצטבר מחושב לפי {currentMonth} חודשים
+          {numActive > 0 && (
+            <div style={{ padding: "4px 12px", background: "var(--surface2)", borderRadius: 20, border: "1px solid var(--border)", fontSize: 14, color: "var(--text-dim)" }}>
+              <strong>{numActive}</strong> חודשים פעילים
             </div>
           )}
           <button onClick={() => setShowAllMonths(v => !v)}
-            style={{ padding: "5px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text-mid)", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+            style={{ padding: "5px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text-mid)", fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>
             {showAllMonths ? "‹ צמצם" : "הצג כל השנה ›"}
           </button>
         </div>
       </div>
 
       {noScenarioForYear && (
-        <div style={{ marginBottom: 12, padding: "10px 14px", background: "rgba(248,113,113,0.08)", borderRadius: 8, border: "1px solid var(--red)33", fontSize: 13, color: "var(--red)" }}>
-          לא הוגדר תסריט לשנת {selectedYear} — עבור ל"מאזן מתוכנן" והוסף תקופה
+        <div style={{ marginBottom: 12, padding: "10px 14px", background: "rgba(248,113,113,0.08)", borderRadius: 8, border: "1px solid rgba(248,113,113,0.33)", fontSize: 15, color: "var(--red)" }}>
+          לא הוגדר תסריט לשנת {selectedYear} — פנה ליועץ שלך להגדרת תסריט
         </div>
       )}
 
       {/* Table */}
       <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid var(--border)" }}>
-        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12, direction: "rtl" }}>
+        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 14, direction: "rtl" }}>
           <thead>
             <tr>
               <th style={{ ...THL, cursor: "pointer" }} onClick={() => handleSort("name")}>
@@ -2734,7 +3409,7 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
                   <th key={m} style={{
                     ...TH, minWidth: 50,
                     color:      m === currentMonth ? "var(--green-deep)"     : undefined,
-                    background: m === currentMonth ? "rgba(79,142,247,0.14)" : undefined,
+                    background: m === currentMonth ? "rgba(45,106,79,0.13)" : undefined,
                   }} onClick={() => handleSort(mk)}>
                     {MONTHS_HE[m - 1]}{sortIcon(mk)}
                   </th>
@@ -2779,7 +3454,7 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
                     const exp  = groupSum(allExp, mk);
                     const diff = inc - exp;
                     return (
-                      <td key={m} style={{ ...TD, background: m === currentMonth ? "rgba(79,142,247,0.09)" : undefined, color: (inc || exp) ? (diff >= 0 ? "var(--green-deep)" : "var(--red)") : undefined }}>
+                      <td key={m} style={{ ...TD, background: m === currentMonth ? "rgba(45,106,79,0.07)" : undefined, color: (inc || exp) ? (diff >= 0 ? "var(--green-deep)" : "var(--red)") : undefined }}>
                         {(inc || exp) ? fmtZ(diff) : ""}
                       </td>
                     );
@@ -2816,17 +3491,17 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
             direction:"rtl",
           }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
-              <div style={{ fontWeight:700, fontSize:16 }}>📋 {title}</div>
+              <div style={{ fontWeight:700, fontSize: 18 }}>📋 {title}</div>
               <button onClick={() => setDrillDown(null)}
-                style={{ background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"6px 16px", fontSize:13, cursor:"pointer", fontFamily:"inherit", fontWeight:700, color:"var(--text)" }}>
+                style={{ background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"6px 16px", fontSize: 15, cursor:"pointer", fontFamily:"inherit", fontWeight:700, color:"var(--text)" }}>
                 ← חזור
               </button>
             </div>
             {filtered.length === 0 ? (
-              <div style={{ color:"var(--text-dim)", fontSize:13, padding:"20px 0" }}>אין תנועות</div>
+              <div style={{ color:"var(--text-dim)", fontSize: 15, padding:"20px 0" }}>אין תנועות</div>
             ) : (
               <div style={{ overflowY:"auto", flex:1 }}>
-                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                <table style={{ width:"100%", borderCollapse:"collapse", fontSize: 15 }}>
                   <thead style={{ position:"sticky", top:0, background:"var(--surface2)" }}>
                     <tr>
                       {["חודש","פירוט","מקור","סכום"].map(h => (
@@ -2839,9 +3514,9 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
                       const [y, m] = (tx.mk || "").split('-').map(Number);
                       return (
                         <tr key={i} style={{ borderBottom:"1px solid var(--border)44", background: i%2===0?"transparent":"rgba(0,0,0,0.02)" }}>
-                          <td style={{ padding:"8px 10px", whiteSpace:"nowrap", color:"var(--text-dim)", fontSize:12 }}>{HEBREW_MONTHS[m-1]} {y}</td>
+                          <td style={{ padding:"8px 10px", whiteSpace:"nowrap", color:"var(--text-dim)", fontSize: 14 }}>{HEBREW_MONTHS[m-1]} {y}</td>
                           <td style={{ padding:"8px 10px" }}>{tx.name}</td>
-                          <td style={{ padding:"8px 10px", fontSize:11, color:"var(--text-dim)" }}>{tx.source}</td>
+                          <td style={{ padding:"8px 10px", fontSize: 13, color:"var(--text-dim)" }}>{tx.source}</td>
                           <td style={{ padding:"8px 10px", fontWeight:700, color:"var(--green-soft)", textAlign:"left", whiteSpace:"nowrap" }}>₪{tx.amount.toLocaleString()}</td>
                         </tr>
                       );
@@ -2869,7 +3544,7 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
 function RememberModal({ pendingRemember, onAlways, onThisSession, onJustHere }) {
   if (!pendingRemember) return null;
   const btnBase: React.CSSProperties = {
-    display:"block", width:"100%", borderRadius:10, padding:"11px 16px", fontSize:14,
+    display:"block", width:"100%", borderRadius:10, padding:"11px 16px", fontSize: 16,
     cursor:"pointer", fontFamily:"inherit", textAlign:"right", border:"1px solid var(--border)",
     background:"var(--surface2)", color:"var(--text)", transition:"background 0.1s",
   };
@@ -2879,8 +3554,8 @@ function RememberModal({ pendingRemember, onAlways, onThisSession, onJustHere })
       <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:`1px solid ${"var(--border)"}`, borderRadius:16, padding:"24px 28px", zIndex:9001, width:"min(400px,90vw)", boxShadow:"0 20px 60px rgba(0,0,0,0.6)" }}>
         <div style={{ textAlign:"center", marginBottom:16 }}>
           <div style={{ fontSize:32, marginBottom:8 }}>🧠</div>
-          <div style={{ fontWeight:700, fontSize:16, marginBottom:6 }}>לשנות את הסיווג של</div>
-          <div style={{ fontSize:15, color:"var(--text-dim)", lineHeight:1.5 }}>
+          <div style={{ fontWeight:700, fontSize: 18, marginBottom:6 }}>לשנות את הסיווג של</div>
+          <div style={{ fontSize: 17, color:"var(--text-dim)", lineHeight:1.5 }}>
             <strong style={{ color:"var(--text)" }}>"{pendingRemember.name}"</strong>
             {" "}→{" "}<strong style={{ color:"var(--green-mid)" }}>{pendingRemember.cat}</strong>
           </div>
@@ -2888,15 +3563,15 @@ function RememberModal({ pendingRemember, onAlways, onThisSession, onJustHere })
         <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
           <button onClick={onAlways} style={{ ...btnBase, borderColor:"var(--green-mid)", background:"var(--green-mint)", color:"var(--green-deep)", fontWeight:700 }}>
             🔄 שנה תמיד לעסק זה
-            <div style={{ fontSize:11, color:"var(--green-deep)", opacity:0.7, fontWeight:400, marginTop:2 }}>ישמר לתמיד — יחול גם על תנועות עתידיות</div>
+            <div style={{ fontSize: 13, color:"var(--green-deep)", opacity:0.7, fontWeight:400, marginTop:2 }}>ישמר לתמיד — יחול גם על תנועות עתידיות</div>
           </button>
           <button onClick={onThisSession} style={btnBase}>
             📋 שנה לכל התנועות בהעלאה הנוכחית
-            <div style={{ fontSize:11, color:"var(--text-dim)", marginTop:2 }}>עדכן את כל "{pendingRemember.name}" בסיווג הנוכחי בלבד</div>
+            <div style={{ fontSize: 13, color:"var(--text-dim)", marginTop:2 }}>עדכן את כל "{pendingRemember.name}" בסיווג הנוכחי בלבד</div>
           </button>
           <button onClick={onJustHere} style={{ ...btnBase, color:"var(--text-dim)" }}>
             ✎ שנה כאן בלבד
-            <div style={{ fontSize:11, color:"var(--text-dim)", marginTop:2 }}>רק תנועה זו — בלי לשנות שאר התנועות</div>
+            <div style={{ fontSize: 13, color:"var(--text-dim)", marginTop:2 }}>רק תנועה זו — בלי לשנות שאר התנועות</div>
           </button>
         </div>
       </div>
@@ -2924,6 +3599,8 @@ function normalizeAllTxs(portfolioSubs, importedTxs, rememberedMappings, cycleSt
         source_label: sub.source_label || sub.label || "קובץ",
         conf: tx.conf || "med",
         edited: tx.edited || false,
+        flow_type: tx.flow_type || null,
+        type: tx.type || null,
         _submissionId: sub.id,
         _txIndex: idx,
         _dbId: null,
@@ -2942,6 +3619,8 @@ function normalizeAllTxs(portfolioSubs, importedTxs, rememberedMappings, cycleSt
       source_label: tx.provider || "מקס",
       conf: "high",
       edited: false,
+      flow_type: tx.flow_type || null,
+      type: tx.type || null,
       _submissionId: null,
       _txIndex: null,
       _dbId: tx.id,
@@ -2974,7 +3653,7 @@ function normalizeAllTxs(portfolioSubs, importedTxs, rememberedMappings, cycleSt
 function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, rememberedMappings, onDataChange,
   onManualTxAdded, onManualTxDeleted,
   cycleStartDay, onCycleStartDayChange, onUpdatePortfolioTxCat, onDeletePortfolioSub, onNavigateToUpload,
-  categories, categoryRows = [], clientCats, onCategoryAdded, ignoredCats = IGNORED_CATEGORIES, categoryRules = [] as any[], hiddenCats = [] as string[], onHiddenCatsChange = undefined as any, scenarioCats = null as any }) {
+  categories, categoryRows = [], clientCats, onCategoryAdded, ignoredCats = IGNORED_CATEGORIES, incomeCats = new Set<string>(), categoryRules = [] as any[], hiddenCats = [] as string[], onHiddenCatsChange = undefined as any, scenarioCats = null as any }) {
   // ── Derived transaction list (useMemo keeps it in sync with props automatically) ──
   const [localEdits, setLocalEdits] = useState<Map<string, string>>(new Map());
   const [deletedUids, setDeletedUids] = useState<Set<string>>(new Set());
@@ -2989,6 +3668,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
   const [catSearch, setCatSearch] = useState("");
   const [pendingRemember, setPendingRemember] = useState(null);
   const [filterSource, setFilterSource] = useState("all"); // "all" | "file" | "ext" | "manual"
+  const filterBarRef = useRef<HTMLDivElement>(null);
   const [filterProvider, setFilterProvider] = useState("all");
   const [filterCat, setFilterCat] = useState("all");
   const [searchText, setSearchText] = useState("");
@@ -3032,8 +3712,36 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
     setSelectedUids(prev => { const next = new Set(prev); uids.forEach(uid => next.delete(uid)); return next; });
     onDataChange();
   };
+  const ignoreSelected = async () => {
+    const count = selectedUids.size;
+    if (!window.confirm(`להתעלם מ-${count} התנועות שבחרת?\nהן לא ייספרו בניתוח אך יישארו במערכת.`)) return;
+    const toIgnore = allTxs.filter(t => selectedUids.has(t._uid));
+    // עדכון מיידי ב-localEdits (ללא reload)
+    setLocalEdits(prev => {
+      const next = new Map(prev);
+      toIgnore.forEach(t => next.set(t._uid, "להתעלם"));
+      return next;
+    });
+    setSelectedUids(new Set());
+    // שמירה ב-DB ברקע
+    const fileTxs = toIgnore.filter(t => t.source === "file");
+    if (fileTxs.length > 0) {
+      const bySubmission: Record<string, number[]> = {};
+      fileTxs.forEach(t => { if (!bySubmission[t._submissionId]) bySubmission[t._submissionId] = []; bySubmission[t._submissionId].push(t._txIndex); });
+      for (const [subId, indices] of Object.entries(bySubmission)) {
+        const sub = portfolioSubs.find((s: any) => String(s.id) === String(subId));
+        if (!sub) continue;
+        const idxSet = new Set(indices);
+        const newTxs = (sub.transactions || []).map((tx: any, i: number) => idxSet.has(i) ? { ...tx, cat: "להתעלם", edited: true } : tx);
+        supabase.from("portfolio_submissions").update({ transactions: newTxs }).eq("id", sub.id);
+      }
+    }
+    const extTxs = toIgnore.filter(t => t.source === "ext");
+    extTxs.forEach(tx => { if (tx._dbId) supabase.from("imported_transactions").update({ cat: "להתעלם" }).eq("id", tx._dbId); });
+  };
   const deleteSelected = async () => {
-    if (!window.confirm(`מחק ${selectedUids.size} תנועות נבחרות?`)) return;
+    const count = selectedUids.size;
+    if (!window.confirm(`למחוק ${count} ${count === 1 ? "תנועה" : "תנועות"} שבחרת?\nפעולה זו אינה ניתנת לביטול.`)) return;
     const toDelete = allTxs.filter(t => selectedUids.has(t._uid));
     const extIds = toDelete.filter(t => t.source === "ext").map(t => t._dbId).filter(Boolean);
     const manIds = toDelete.filter(t => t.source === "manual").map(t => t._dbId).filter(Boolean);
@@ -3170,20 +3878,26 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
 
   function getCycleLabel(cycleKey, startDay) {
     const [y, m] = cycleKey.split("-").map(Number);
-    let endMonth, endYear, endDay;
-    if (startDay === 1) {
-      endMonth = m; endYear = y;
+    let startMonth: number, startYear: number, endMonth: number, endDay: number;
+    if (!startDay || startDay === 1) {
+      // חודש קלנדרי רגיל: 1.MM – אחרון.MM
+      startMonth = m; startYear = y;
+      endMonth = m;
       endDay = new Date(y, m, 0).getDate();
     } else {
-      endMonth = m + 1; endYear = y;
-      if (endMonth === 13) { endMonth = 1; endYear = y + 1; }
+      // מחזור: startDay של חודש קודם עד startDay-1 של חודש ה-key
+      // לדוגמה: key="2025-04", startDay=16 → 16.03 – 15.04
+      startMonth = m - 1; startYear = y;
+      if (startMonth === 0) { startMonth = 12; startYear = y - 1; }
+      endMonth = m;
       endDay = startDay - 1;
     }
-    return `${HEBREW_MONTHS_LOCAL[m-1]} (${String(startDay).padStart(2,"0")}.${String(m).padStart(2,"0")} – ${String(endDay).padStart(2,"0")}.${String(endMonth).padStart(2,"0")})`;
+    return `${HEBREW_MONTHS_LOCAL[m-1]} (${String(startDay).padStart(2,"0")}.${String(startMonth).padStart(2,"0")} – ${String(endDay).padStart(2,"0")}.${String(endMonth).padStart(2,"0")})`;
   }
 
   // ── קיבוץ לפי חודש חיוב ─────────────────────────────────────────────────────
   const filteredTxs = allTxs.filter(t => {
+    if (t.flow_type === 'credit_transfer') return false;
     if (filterSource !== "all" && t.source !== filterSource) return false;
     if (filterProvider !== "all" && t.source_label !== filterProvider) return false;
     if (filterCat !== "all" && t.cat !== filterCat) return false;
@@ -3199,7 +3913,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
   });
   const cycleKeys = Object.keys(byCycle).sort().reverse();
   const providerLabels = [...new Set(allTxs.map(t => t.source_label).filter(Boolean))];
-  const totalAmount = filteredTxs.filter(t => !ignoredCats.has(t.cat)).reduce((s,t) => s + Number(t.amount||0), 0);
+  const totalAmount = filteredTxs.filter(t => !ignoredCats.has(t.cat) && t.flow_type !== 'credit_transfer').reduce((s,t) => s + (incomeCats.has(t.cat)?-Number(t.amount||0):Number(t.amount||0)), 0);
 
   // ── ייצוא Excel ──────────────────────────────────────────────────────────────
   const exportToExcel = () => {
@@ -3210,7 +3924,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
     cycleKeys.forEach(key => {
       const label = getCycleLabel(key, cycleStartDay);
       const cycleTxs = byCycle[key] || [];
-      const cycleTotal = cycleTxs.filter(t => !ignoredCats.has(t.cat)).reduce((s,t) => s + Number(t.amount||0), 0);
+      const cycleTotal = cycleTxs.filter(t => !ignoredCats.has(t.cat)).reduce((s,t) => s + (incomeCats.has(t.cat)?-Number(t.amount||0):Number(t.amount||0)), 0);
       detailRows.push({ "חודש": label, "שם בית עסק": "", "מקור": "", "קטגוריה": "", "סכום": "", "סה\"כ חודש": Math.round(cycleTotal) });
       cycleTxs.forEach(t => {
         detailRows.push({ "חודש": label, "שם בית עסק": t.name, "מקור": t.source_label, "קטגוריה": t.cat || "לא מסווג", "סכום": Number(t.amount), "סה\"כ חודש": "" });
@@ -3230,7 +3944,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
     });
     const totalRow = { "קטגוריה": "סה\"כ" };
     cycleKeys.forEach(k => {
-      const sum = (byCycle[k]||[]).filter(t => !ignoredCats.has(t.cat)).reduce((s,t) => s + Number(t.amount||0), 0);
+      const sum = (byCycle[k]||[]).filter(t => !ignoredCats.has(t.cat)).reduce((s,t) => s + (incomeCats.has(t.cat)?-Number(t.amount||0):Number(t.amount||0)), 0);
       totalRow[getCycleLabel(k, cycleStartDay)] = Math.round(sum);
     });
     summaryRows.push(totalRow);
@@ -3253,18 +3967,21 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
           borderRadius: 10, padding: "12px 16px", marginBottom: 16,
           display: "flex", alignItems: "center", gap: 12,
         }}>
-          <span style={{ fontSize: 20 }}>🔴</span>
+          <span style={{ fontSize: 22 }}>🔴</span>
           <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 700, color: "var(--red)", fontSize: 14 }}>
+            <div style={{ fontWeight: 700, color: "var(--red)", fontSize: 16 }}>
               {pendingClassification.length} תנועות מזומן ממתינות לסיווג
             </div>
-            <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 2 }}>
+            <div style={{ fontSize: 14, color: "var(--text-dim)", marginTop: 2 }}>
               נרשמו דרך וואטסאפ ולא סווגו אוטומטית — יש לסווג אותן לפני סגירת החודש
             </div>
           </div>
           <button
-            onClick={() => setFilterSource("manual")}
-            style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--red)", background: "transparent", color: "var(--red)", fontSize: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}
+            onClick={() => {
+              setFilterSource("manual");
+              setTimeout(() => filterBarRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+            }}
+            style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--red)", background: "transparent", color: "var(--red)", fontSize: 14, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}
           >
             הצג →
           </button>
@@ -3277,14 +3994,14 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
           onClick={() => setConfirmDelete(null)}>
           <div style={{ background:"var(--surface)", borderRadius:14, padding:"28px 32px", maxWidth:360, width:"90%", textAlign:"center", boxShadow:"0 8px 32px rgba(0,0,0,0.18)" }}
             onClick={e => e.stopPropagation()}>
-            <div style={{ fontSize:28, marginBottom:12 }}>🗑️</div>
-            <div style={{ fontWeight:700, fontSize:16, marginBottom:8 }}>
+            <div style={{ fontSize: 30, marginBottom:12 }}>🗑️</div>
+            <div style={{ fontWeight:700, fontSize: 18, marginBottom:8 }}>
               {confirmDelete.type === "all-imported" ? "מחק את כל תנועות המקס?" :
                confirmDelete.type === "cycle" ? `מחק תנועות מקס מ-${confirmDelete.label}?` :
                confirmDelete.type === "submission" ? `מחק קובץ "${confirmDelete.label}"?` :
                `מחק את "${confirmDelete.label}"?`}
             </div>
-            <div style={{ fontSize:13, color:"var(--text-dim)", marginBottom:20 }}>
+            <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:20 }}>
               {confirmDelete.type === "all-imported" ? `${confirmDelete.count} תנועות יימחקו לצמיתות — ניתן לסנכרן מחדש` :
                confirmDelete.type === "cycle" ? `${confirmDelete.count} תנועות יימחקו לצמיתות` :
                confirmDelete.type === "submission" ? `${confirmDelete.count} תנועות יימחקו לצמיתות` :
@@ -3292,7 +4009,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
             </div>
             <div style={{ display:"flex", gap:10, justifyContent:"center" }}>
               <button onClick={() => setConfirmDelete(null)}
-                style={{ padding:"9px 20px", borderRadius:8, border:"1px solid var(--border)", background:"transparent", color:"var(--text-mid)", fontSize:14, cursor:"pointer", fontFamily:"inherit" }}>
+                style={{ padding:"9px 20px", borderRadius:8, border:"1px solid var(--border)", background:"transparent", color:"var(--text-mid)", fontSize: 16, cursor:"pointer", fontFamily:"inherit" }}>
                 ביטול
               </button>
               <button
@@ -3305,7 +4022,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                   else deleteTx(confirmDelete.uid, confirmDelete.dbId);
                 }}
                 disabled={!!deletingTxUid || !!deletingCycleKey}
-                style={{ padding:"9px 20px", borderRadius:8, border:"none", background:"#e53935", color:"#fff", fontSize:14, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
+                style={{ padding:"9px 20px", borderRadius:8, border:"none", background:"#e53935", color:"#fff", fontSize: 16, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
                 {(deletingTxUid || deletingCycleKey) ? "מוחק..." : "מחק"}
               </button>
             </div>
@@ -3316,36 +4033,21 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
       {/* Header */}
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16, flexWrap:"wrap", gap:10 }}>
         <div>
-          <div style={{ fontFamily:"'Fraunces', serif", fontSize:20, fontWeight:600, color:"var(--green-deep)" }}>
+          <div style={{ fontFamily:"'Frank Ruhl Libre', serif", fontSize: 28, fontWeight:700, color:"var(--green-deep)", lineHeight:1.1 }}>
             כל התנועות
           </div>
-          <div style={{ fontSize:13, color:"var(--text-dim)", marginTop:3 }}>
-            {filteredTxs.length}{filteredTxs.length !== allTxs.length ? ` מתוך ${allTxs.length}` : ""} תנועות · ₪{Math.round(totalAmount).toLocaleString()} סה"כ
+          <div style={{ fontSize: 15, color:"var(--text-dim)", marginTop:5 }}>
+            {filteredTxs.length}{filteredTxs.length !== allTxs.length ? ` מתוך ${allTxs.length}` : ""} תנועות · <span style={{direction:"ltr", unicodeBidi:"embed", color: totalAmount <= 0 ? "var(--green-mid)" : "inherit"}}>{totalAmount <= 0 ? `+₪${Math.abs(Math.round(totalAmount)).toLocaleString()}` : `₪−${Math.round(totalAmount).toLocaleString()}`}</span> סה"כ
           </div>
         </div>
         <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
-          {selectedUids.size > 0 && (
-            <div style={{ display:"flex", gap:6, alignItems:"center" }}>
-              <span style={{ fontSize:12, color:"var(--text-dim)" }}>{selectedUids.size} נבחרו</span>
-              <button onClick={() => setSelectedUids(new Set())}
-                style={{ padding:"5px 10px", borderRadius:7, fontSize:12, cursor:"pointer", fontFamily:"inherit",
-                  border:"1px solid var(--border)", background:"transparent", color:"var(--text-dim)" }}>
-                ✕ בטל
-              </button>
-              <button onClick={deleteSelected}
-                style={{ padding:"7px 16px", borderRadius:8, fontSize:13, cursor:"pointer", fontFamily:"inherit",
-                  border:"1.5px solid #e53935", background:"#e53935", color:"#fff", fontWeight:700, display:"flex", alignItems:"center", gap:5 }}>
-                🗑️ מחק {selectedUids.size}
-              </button>
-            </div>
-          )}
           <button onClick={onNavigateToUpload}
-            style={{ padding:"7px 14px", borderRadius:8, fontSize:13, cursor:"pointer", fontFamily:"inherit",
+            style={{ padding:"7px 14px", borderRadius:8, fontSize: 15, cursor:"pointer", fontFamily:"inherit",
               border:"1.5px solid var(--green-mid)", background:"var(--green-mint)", color:"var(--green-deep)", display:"flex", alignItems:"center", gap:5 }}>
             ⬆️ הוסף תנועות
           </button>
           <button onClick={exportToExcel}
-            style={{ padding:"7px 14px", borderRadius:8, fontSize:13, cursor:"pointer", fontFamily:"inherit",
+            style={{ padding:"7px 14px", borderRadius:8, fontSize: 15, cursor:"pointer", fontFamily:"inherit",
               border:"1.5px solid var(--border)", background:"var(--surface2)", color:"var(--text-mid)", display:"flex", alignItems:"center", gap:5 }}>
             📥 Excel
           </button>
@@ -3357,16 +4059,16 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
         <input
           value={searchText} onChange={e => setSearchText(e.target.value)}
           placeholder="🔍 חיפוש לפי שם עסק או קטגוריה..."
-          style={{ width:"100%", padding:"8px 14px", borderRadius:8, border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text)", fontSize:14, fontFamily:"inherit", boxSizing:"border-box" }}
+          style={{ width:"100%", padding:"8px 14px", borderRadius:8, border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text)", fontSize: 16, fontFamily:"inherit", boxSizing:"border-box" }}
         />
       </div>
 
       {/* Source filter */}
-      <div style={{ display:"flex", gap:8, marginBottom:8, flexWrap:"wrap", alignItems:"center" }}>
-        <span style={{ fontSize:12, color:"var(--text-dim)" }}>מקור:</span>
+      <div ref={filterBarRef} style={{ display:"flex", gap:8, marginBottom:8, flexWrap:"wrap", alignItems:"center" }}>
+        <span style={{ fontSize: 15, color:"var(--text-dim)" }}>מקור:</span>
         {[["all","הכל"], ["file","📁 קבצים"], ["ext","💳 מקס"], ["manual","✏️ ידני"]].map(([v,l]) => (
           <button key={v} onClick={() => { setFilterSource(v); setFilterProvider("all"); }}
-            style={{ padding:"4px 12px", borderRadius:20, fontSize:12, cursor:"pointer", fontFamily:"inherit",
+            style={{ padding:"4px 12px", borderRadius:20, fontSize: 14, cursor:"pointer", fontFamily:"inherit",
               border:`1px solid ${filterSource===v?"var(--green-mid)":"var(--border)"}`,
               background:filterSource===v?"var(--green-mint)":"transparent",
               color:filterSource===v?"var(--green-deep)":"var(--text-mid)" }}>
@@ -3381,15 +4083,15 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
         if (allCatOptions.length === 0) return null;
         return (
           <div style={{ display:"flex", gap:8, marginBottom:8, alignItems:"center", flexWrap:"wrap" }}>
-            <span style={{ fontSize:12, color:"var(--text-dim)" }}>קטגוריה:</span>
+            <span style={{ fontSize: 15, color:"var(--text-dim)" }}>קטגוריה:</span>
             <select value={filterCat} onChange={e => setFilterCat(e.target.value)}
-              style={{ padding:"4px 10px", borderRadius:8, border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text)", fontSize:12, fontFamily:"inherit" }}>
+              style={{ padding:"4px 10px", borderRadius:8, border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text)", fontSize: 14, fontFamily:"inherit" }}>
               <option value="all">הכל</option>
               {allCatOptions.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
             {(filterCat !== "all" || filterSource !== "all" || searchText.trim()) && (
               <button onClick={() => { setFilterCat("all"); setFilterSource("all"); setFilterProvider("all"); setSearchText(""); }}
-                style={{ padding:"3px 10px", borderRadius:8, fontSize:11, cursor:"pointer", fontFamily:"inherit", border:"1px solid var(--border)", background:"transparent", color:"var(--text-dim)" }}>
+                style={{ padding:"3px 10px", borderRadius:8, fontSize: 13, cursor:"pointer", fontFamily:"inherit", border:"1px solid var(--border)", background:"transparent", color:"var(--text-dim)" }}>
                 נקה פילטרים
               </button>
             )}
@@ -3401,7 +4103,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
         <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap" }}>
           {[["all","הכל"], ...providerLabels.map(p => [p, p])].map(([v,l]) => (
             <button key={v} onClick={() => setFilterProvider(v)}
-              style={{ padding:"4px 12px", borderRadius:20, fontSize:12, cursor:"pointer", fontFamily:"inherit",
+              style={{ padding:"4px 12px", borderRadius:20, fontSize: 14, cursor:"pointer", fontFamily:"inherit",
                 border:`1px solid ${filterProvider===v?"var(--green-mid)":"var(--border)"}`,
                 background:filterProvider===v?"var(--green-mint)":"transparent",
                 color:filterProvider===v?"var(--green-deep)":"var(--text-mid)" }}>
@@ -3414,25 +4116,41 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
       {/* ── Unified expandable month list ── */}
       <RememberModal pendingRemember={pendingRemember}
         onAlways={async () => {
-          const oldCat = rememberedMappings[pendingRemember.name] || null;
-          await supabase.from("remembered_mappings").upsert(
-            [{ client_id: clientId, business_name: pendingRemember.name, category: pendingRemember.cat }],
-            { onConflict: "client_id,business_name" }
-          );
-          await supabase.from("client_change_log").insert([{ client_id: clientId, event_type: "remap_business", details: { business_name: pendingRemember.name, from_cat: oldCat, to_cat: pendingRemember.cat } }]);
-          setPendingRemember(null);
-        }}
-        onThisSession={() => {
           const { name, cat } = pendingRemember;
-          const matching = allTxs.filter(t => t.name === name);
+          const oldCat = rememberedMappings[name] || null;
+          // עדכן כל ext txs עם אותו שם ב-DB + localEdits
+          await supabase.from("imported_transactions").update({ cat }).eq("client_id", clientId).eq("name", name);
           setLocalEdits(prev => {
             const next = new Map(prev);
-            matching.forEach(t => next.set(t._uid, cat));
+            allTxs.filter(t => t.source === "ext" && t.name === name).forEach(t => next.set(t._uid, cat));
+            return next;
+          });
+          await supabase.from("remembered_mappings").upsert(
+            [{ client_id: clientId, business_name: name, category: cat }],
+            { onConflict: "client_id,business_name" }
+          );
+          await supabase.from("client_change_log").insert([{ client_id: clientId, event_type: "remap_business", details: { business_name: name, from_cat: oldCat, to_cat: cat } }]);
+          setPendingRemember(null);
+          onDataChange();
+        }}
+        onThisSession={async () => {
+          const { name, cat } = pendingRemember;
+          await supabase.from("imported_transactions").update({ cat }).eq("client_id", clientId).eq("name", name);
+          setLocalEdits(prev => {
+            const next = new Map(prev);
+            allTxs.filter(t => t.source === "ext" && t.name === name).forEach(t => next.set(t._uid, cat));
             return next;
           });
           setPendingRemember(null);
+          onDataChange();
         }}
-        onJustHere={() => setPendingRemember(null)}
+        onJustHere={async () => {
+          const { singleUid, cat } = pendingRemember;
+          const tx = allTxs.find(t => t._uid === singleUid);
+          if (tx?._dbId) await supabase.from("imported_transactions").update({ cat }).eq("id", tx._dbId);
+          setPendingRemember(null);
+          onDataChange();
+        }}
       />
 
       {cycleKeys.map((key, idx) => {
@@ -3449,9 +4167,9 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
         });
         const activeTxs = sortedCycleTxs.filter(t => !ignoredCats.has(t.cat));
         const ignoredTxs = sortedCycleTxs.filter(t => ignoredCats.has(t.cat));
-        const cycleTotal = activeTxs.reduce((s,t) => s + Number(t.amount||0), 0);
+        const cycleTotal = activeTxs.filter(t => t.flow_type !== 'credit_transfer').reduce((s,t) => s + (incomeCats.has(t.cat)?-Number(t.amount||0):Number(t.amount||0)), 0);
         const catMap: Record<string, number> = {};
-        activeTxs.forEach(t => { catMap[t.cat] = (catMap[t.cat]||0) + Number(t.amount||0); });
+        activeTxs.forEach(t => { catMap[t.cat] = (catMap[t.cat]||0) + (incomeCats.has(t.cat)?-Number(t.amount||0):Number(t.amount||0)); });
         const top3 = Object.entries(catMap).sort((a,b) => b[1]-a[1]).slice(0,3);
         const label = getCycleLabel(key, cycleStartDay);
         const isOpen = openMonthKeys.has(key);
@@ -3463,17 +4181,18 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
         const renderTxRow = (tx, isIgnored) => {
           const needsClassification = tx.source === "manual" && tx.conf && tx.conf !== "high";
           return (
-          <Card key={tx._uid} style={{ marginBottom:6, padding:"10px 14px",
-            background: needsClassification ? "rgba(247,92,92,0.06)" : isIgnored ? "rgba(180,180,180,0.08)" : undefined,
-            borderRight: needsClassification ? "3px solid var(--red)" : isIgnored ? "3px solid var(--text-dim)" : undefined }}>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
+          <Card key={tx._uid} style={{ marginBottom:6, padding:"14px 18px",
+            background: needsClassification ? "rgba(247,92,92,0.04)" : isIgnored ? "rgba(180,180,180,0.06)" : "var(--surface)",
+            borderRight: needsClassification ? "3px solid var(--red)" : isIgnored ? "3px solid var(--text-dim)" : "none",
+            boxShadow: "0 1px 3px rgba(30,77,53,0.05)" }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:10 }}>
               <div style={{ flex:1 }}>
-                <div style={{ fontWeight:600, fontSize:14,
+                <div style={{ fontWeight:600, fontSize: 17, lineHeight:1.3,
                   textDecoration: isIgnored ? "line-through" : "none",
-                  color: isIgnored ? "var(--text-dim)" : undefined }}>{tx.name}</div>
-                <div style={{ fontSize:12, color:"var(--text-dim)", display:"flex", gap:6, alignItems:"center" }}>
+                  color: isIgnored ? "var(--text-dim)" : "var(--text)" }}>{tx.name}</div>
+                <div style={{ fontSize: 15, color:"var(--text-dim)", display:"flex", gap:6, alignItems:"center", marginTop:3 }}>
                   <span>{tx.date}</span>
-                  <span style={{ padding:"1px 6px", borderRadius:10, fontSize:11,
+                  <span style={{ padding:"1px 6px", borderRadius:10, fontSize: 13,
                     background: tx.source === "ext" ? "rgba(79,142,247,0.12)" : tx.source === "manual" ? "rgba(251,191,36,0.12)" : "rgba(46,204,138,0.12)",
                     color: tx.source === "ext" ? "var(--green-mid)" : tx.source === "manual" ? "var(--gold)" : "var(--green-deep)" }}>
                     {tx.source === "ext" ? "💳" : tx.source === "manual" ? "✏️" : "📁"} {tx.source_label}
@@ -3481,13 +4200,13 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                 </div>
               </div>
               <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                <span style={{ fontWeight:700, color: tx.type === "income" ? "var(--green-soft)" : "var(--red)", fontSize:14 }}>
-                  {tx.type === "income" ? "+" : ""}₪{Number(tx.amount).toLocaleString()}
+                <span style={{ fontFamily:"'Frank Ruhl Libre', serif", fontWeight:700, color: (tx.type === "income" || incomeCats.has(tx.cat)) ? "var(--green-mid)" : "var(--red)", fontSize: 19, letterSpacing:"-0.3px" }}>
+                  {(tx.type === "income" || incomeCats.has(tx.cat)) ? "+" : ""}₪{Number(tx.amount).toLocaleString()}
                 </span>
                 <button
                   onClick={() => { setActiveTxUid(tx._uid === activeTxUid ? null : tx._uid); setCatSearch(""); setPendingRemember(null); }}
-                  style={{ background:"var(--green-mint)", border:"1px solid var(--green-soft)", borderRadius:8, padding:"4px 12px",
-                    fontSize:12, color:"var(--green-deep)", cursor:"pointer", fontFamily:"inherit", fontWeight:600 }}>
+                  style={{ background:"var(--green-pale)", border:"1px solid var(--green-mint)", borderRadius:20, padding:"4px 14px",
+                    fontSize: 14, color:"var(--green-deep)", cursor:"pointer", fontFamily:"inherit", fontWeight:600, whiteSpace:"nowrap" }}>
                   {tx.cat || "לא מסווג"}
                 </button>
                 <input type="checkbox" checked={selectedUids.has(tx._uid)}
@@ -3501,7 +4220,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                     else setConfirmDelete({ type:"tx", uid:tx._uid, dbId:tx._dbId, label:tx.name });
                   }}
                   title="מחק תנועה"
-                  style={{ padding:"3px 7px", borderRadius:6, border:"1px solid #ffcdd2", background:"#fff8f8", color:"#e53935", fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>
+                  style={{ padding:"3px 7px", borderRadius:6, border:"1px solid #ffcdd2", background:"#fff8f8", color:"#e53935", fontSize: 14, cursor:"pointer", fontFamily:"inherit" }}>
                   🗑️
                 </button>
               </div>
@@ -3512,26 +4231,20 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                 hiddenCats={hiddenCats} onHiddenCatsChange={onHiddenCatsChange} scenarioCats={scenarioCats}
                 onSelect={async (cat) => {
                   if (tx.source === "ext") {
-                    // update ALL imported txs with same business name so they all persist
-                    await supabase.from("imported_transactions")
-                      .update({ cat })
-                      .eq("client_id", clientId)
-                      .eq("name", tx.name);
-                    // optimistically update all ext txs with same business name in UI
-                    setLocalEdits(prev => {
-                      const next = new Map(prev);
-                      allTxs.filter(t => t.source === "ext" && t.name === tx.name).forEach(t => next.set(t._uid, cat));
-                      return next;
-                    });
-                    setPendingRemember({ name: tx.name, cat });
+                    // קודם שנה רק את התנועה הבודדת ב-localEdits
+                    setLocalEdits(prev => { const next = new Map(prev); next.set(tx._uid, cat); return next; });
+                    // שאל את המשתמש מה לעשות — ה-modal יטפל בהמשך
+                    setPendingRemember({ name: tx.name, cat, singleUid: tx._uid });
                   } else if (tx.source === "manual") {
                     const oldCat = tx.cat;
                     await supabase.from("manual_transactions").update({ cat, conf: "high" }).eq("id", tx._dbId);
                     await supabase.from("client_change_log").insert([{ client_id: clientId, event_type: "remap_business", details: { business_name: tx.name, from_cat: oldCat, to_cat: cat } }]);
                     setLocalEdits(prev => { const next = new Map(prev); next.set(tx._uid, cat); return next; });
+                    onDataChange();
                   } else {
                     setLocalEdits(prev => { const next = new Map(prev); next.set(tx._uid, cat); return next; });
                     await onUpdatePortfolioTxCat(tx._submissionId, tx._txIndex, cat);
+                    onDataChange();
                   }
                   setActiveTxUid(null);
                 }}
@@ -3546,63 +4259,87 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
             {/* Month header — click to expand/collapse */}
             <div onClick={() => toggleMonth(key)}
               style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
-                background:"var(--surface2)", border:"1.5px solid var(--border)", borderRadius: isOpen ? "10px 10px 0 0" : 10,
-                padding:"12px 16px", cursor:"pointer" }}>
+                background: "linear-gradient(135deg, var(--green-pale) 0%, #e4f5e9 100%)",
+                border:"1.5px solid var(--green-mint)",
+                borderRadius: isOpen ? "12px 12px 0 0" : 12,
+                padding:"16px 20px", cursor:"pointer",
+                boxShadow: isOpen ? "none" : "0 2px 12px rgba(45,106,79,0.08)",
+                transition:"box-shadow 0.2s" }}>
               <div>
-                <div style={{ fontWeight:700, fontSize:15 }}>{label}</div>
+                <div style={{ fontFamily:"'Frank Ruhl Libre', serif", fontWeight:700, fontSize: 22, color:"var(--green-deep)", lineHeight:1.2 }}>{label}</div>
                 {!isOpen && (
-                  <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:6 }}>
+                  <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:8 }}>
                     {top3.map(([cat,amt]) => (
-                      <span key={cat} style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:8, padding:"2px 10px", fontSize:11 }}>
+                      <span key={cat} style={{ background:"rgba(45,106,79,0.08)", border:"1px solid rgba(45,106,79,0.15)", borderRadius:20, padding:"2px 10px", fontSize: 14, color:"var(--green-deep)" }}>
                         {cat}: ₪{Math.round(amt).toLocaleString()}
                       </span>
                     ))}
                     {ignoredTxs.length > 0 && (
-                      <span style={{ fontSize:11, color:"var(--text-dim)" }}>🚫 {ignoredTxs.length} מוסתרות</span>
+                      <span style={{ fontSize: 15, color:"var(--text-dim)", fontWeight:600 }}>🚫 {ignoredTxs.length} מוסתרות</span>
                     )}
                   </div>
                 )}
               </div>
-              <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-                <span style={{ fontSize:13, color:"var(--text-dim)" }}>{activeTxs.length} תנועות</span>
-                <span style={{ fontFamily:"'Fraunces', serif", fontSize:17, fontWeight:700, color:"var(--red)" }}>
-                  ₪{Math.round(cycleTotal).toLocaleString()}
+              <div style={{ display:"flex", alignItems:"center", gap:14 }}>
+                <span style={{ fontSize: 15, color:"var(--text-dim)" }}>{activeTxs.length} תנועות</span>
+                <span style={{ fontFamily:"'Frank Ruhl Libre', serif", fontSize: 28, fontWeight:700, color: cycleTotal <= 0 ? "var(--green-mid)" : "var(--red)", letterSpacing:"-0.5px", direction:"ltr", unicodeBidi:"embed" }}>
+                  {cycleTotal <= 0 ? "+" : "₪−"}{cycleTotal <= 0 ? `₪${Math.abs(Math.round(cycleTotal)).toLocaleString()}` : `${Math.round(cycleTotal).toLocaleString()}`}
                 </span>
                 {(() => {
                   if (cycleTxs.length === 0) return null;
                   const allSel = cycleTxs.every(t => selectedUids.has(t._uid));
+                  const monthSelectedCount = cycleTxs.filter(t => selectedUids.has(t._uid)).length;
                   return (
-                    <div style={{ display:"flex", gap:6 }} onClick={e => e.stopPropagation()}>
+                    <div style={{ display:"flex", gap:6, alignItems:"center" }} onClick={e => e.stopPropagation()}>
                       <button onClick={() => toggleSelectMonth(cycleTxs)}
-                        style={{ padding:"3px 10px", fontSize:11, borderRadius:6, fontFamily:"inherit", cursor:"pointer",
+                        style={{ padding:"4px 12px", fontSize: 14, borderRadius:7, fontFamily:"inherit", cursor:"pointer",
                           border:"1px solid var(--border)", background: allSel ? "rgba(229,57,53,0.08)" : "transparent",
                           color: allSel ? "#e53935" : "var(--text-dim)" }}>
                         {allSel ? "בטל בחירה" : "בחר הכל"}
                       </button>
-                      <button onClick={() => deleteMonth(cycleTxs)}
-                        title="מחק את כל תנועות החודש"
-                        style={{ padding:"3px 10px", fontSize:11, borderRadius:6, fontFamily:"inherit", cursor:"pointer",
-                          border:"1px solid rgba(229,57,53,0.4)", background:"rgba(229,57,53,0.06)", color:"#e53935" }}>
-                        🗑️ מחק חודש
-                      </button>
+                      {monthSelectedCount > 0 ? (
+                        <>
+                          <button onClick={ignoreSelected}
+                            style={{ padding:"6px 16px", fontSize: 15, borderRadius:8, fontFamily:"inherit", cursor:"pointer",
+                              border:"1.5px solid var(--border)", background:"var(--surface)", color:"var(--text-mid)", fontWeight:700,
+                              display:"flex", alignItems:"center", gap:5 }}>
+                            ⊘ התעלם ({monthSelectedCount})
+                          </button>
+                          <button onClick={deleteSelected}
+                            style={{ padding:"6px 16px", fontSize: 15, borderRadius:8, fontFamily:"inherit", cursor:"pointer",
+                              border:"1.5px solid #e53935", background:"#e53935", color:"#fff", fontWeight:700,
+                              display:"flex", alignItems:"center", gap:5 }}>
+                            🗑 מחק ({monthSelectedCount})
+                          </button>
+                          <button onClick={() => setSelectedUids(new Set())}
+                            style={{ background:"transparent", border:"none", color:"var(--text-dim)", cursor:"pointer", fontSize: 20, padding:"0 4px", lineHeight:1 }}>×</button>
+                        </>
+                      ) : (
+                        <button onClick={() => deleteMonth(cycleTxs)}
+                          title="מחק את כל תנועות החודש"
+                          style={{ padding:"4px 12px", fontSize: 14, borderRadius:7, fontFamily:"inherit", cursor:"pointer",
+                            border:"1px solid rgba(229,57,53,0.4)", background:"rgba(229,57,53,0.06)", color:"#e53935" }}>
+                          🗑 מחק חודש
+                        </button>
+                      )}
                     </div>
                   );
                 })()}
-                <span style={{ color:"var(--text-dim)", fontSize:16 }}>{isOpen ? "▲" : "▼"}</span>
+                <span style={{ color:"var(--text-dim)", fontSize: 18 }}>{isOpen ? "▲" : "▼"}</span>
               </div>
             </div>
 
             {/* Expanded content */}
             {isOpen && (
-              <div style={{ border:"1.5px solid var(--border)", borderTop:"none", borderRadius:"0 0 10px 10px", padding:"12px 12px 8px" }}>
+              <div style={{ border:"1.5px solid var(--green-mint)", borderTop:"none", borderRadius:"0 0 12px 12px", padding:"14px 14px 10px", background:"var(--surface)" }}>
                 {/* Sort controls */}
                 <div style={{ display:"flex", gap:6, marginBottom:10, alignItems:"center", flexWrap:"wrap" }}>
-                  <span style={{ fontSize:11, color:"var(--text-dim)" }}>מיון:</span>
+                  <span style={{ fontSize: 13, color:"var(--text-dim)" }}>מיון:</span>
                   {([["date","תאריך"], ["amount","סכום"], ["cat","קטגוריה"]] as const).map(([field, label]) => {
                     const active = sortConfig.field === field;
                     return (
                       <button key={field} onClick={() => setSortConfig(prev => ({ field, dir: prev.field === field && prev.dir === "asc" ? "desc" : "asc" }))}
-                        style={{ padding:"2px 10px", borderRadius:14, fontSize:11, cursor:"pointer", fontFamily:"inherit",
+                        style={{ padding:"2px 10px", borderRadius:14, fontSize: 13, cursor:"pointer", fontFamily:"inherit",
                           border:`1px solid ${active?"var(--green-mid)":"var(--border)"}`,
                           background:active?"var(--green-mint)":"transparent",
                           color:active?"var(--green-deep)":"var(--text-dim)" }}>
@@ -3620,35 +4357,78 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                     if (existing) existing.txs.push(tx);
                     else groups.push({ label: lbl, source: tx.source, txs: [tx] });
                   });
-                  return groups.map(g => (
+                  return groups.map(g => {
+                    const groupColor = g.source === "ext" ? "var(--green-mid)" : g.source === "manual" ? "var(--gold)" : "var(--green-deep)";
+                    const groupBg = g.source === "ext" ? "rgba(79,142,247,0.07)" : g.source === "manual" ? "rgba(251,191,36,0.07)" : "rgba(46,204,138,0.07)";
+                    const groupTotal = Math.round(g.txs.filter(t => t.flow_type !== 'credit_transfer').reduce((s,t) => s + (incomeCats.has(t.cat)?-1:1)*Number(t.amount||0), 0));
+                    const groupUids = g.txs.map(t => t._uid);
+                    const allGroupSel = groupUids.every(uid => selectedUids.has(uid));
+                    const deleteGroup = async () => {
+                      if (!window.confirm(`למחוק את כל ${g.txs.length} התנועות של המקור "${g.label}"?`)) return;
+                      const toDelete = g.txs;
+                      const extIds = toDelete.filter(t => t.source === "ext").map(t => t._dbId).filter(Boolean);
+                      const manIds = toDelete.filter(t => t.source === "manual").map(t => t._dbId).filter(Boolean);
+                      if (extIds.length > 0) await supabase.from("imported_transactions").delete().in("id", extIds).eq("client_id", clientId);
+                      if (manIds.length > 0) { await supabase.from("manual_transactions").delete().in("id", manIds).eq("client_id", clientId); manIds.forEach(id => onManualTxDeleted && onManualTxDeleted(id)); }
+                      const fileTxs = toDelete.filter(t => t.source === "file");
+                      if (fileTxs.length > 0) {
+                        const bySubmission: Record<string, number[]> = {};
+                        fileTxs.forEach(t => { if (!bySubmission[t._submissionId]) bySubmission[t._submissionId] = []; bySubmission[t._submissionId].push(t._txIndex); });
+                        for (const [subId, indices] of Object.entries(bySubmission)) {
+                          const sub = portfolioSubs.find((s: any) => String(s.id) === String(subId));
+                          if (!sub) continue;
+                          const idxSet = new Set(indices);
+                          const newTxs = (sub.transactions || []).filter((_: any, i: number) => !idxSet.has(i));
+                          await supabase.from("portfolio_submissions").update({ transactions: newTxs }).eq("id", sub.id);
+                        }
+                      }
+                      setDeletedUids(prev => { const next = new Set(prev); groupUids.forEach(uid => next.add(uid)); return next; });
+                      setSelectedUids(prev => { const next = new Set(prev); groupUids.forEach(uid => next.delete(uid)); return next; });
+                      onDataChange();
+                    };
+                    return (
                     <div key={g.label}>
-                      <div style={{ display:"flex", alignItems:"center", gap:8, margin:"10px 0 6px", padding:"4px 8px", borderRadius:8,
-                        background: g.source === "ext" ? "rgba(79,142,247,0.07)" : g.source === "manual" ? "rgba(251,191,36,0.07)" : "rgba(46,204,138,0.07)" }}>
-                        <span style={{ fontSize:13, fontWeight:700,
-                          color: g.source === "ext" ? "var(--green-mid)" : g.source === "manual" ? "var(--gold)" : "var(--green-deep)" }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:10, margin:"14px 0 8px", padding:"12px 16px", borderRadius:10,
+                        background: groupBg, border:`1.5px solid ${groupColor}33`, boxShadow:"0 1px 4px rgba(30,77,53,0.06)" }}>
+                        <span style={{ fontSize: 17, fontWeight:700, color: groupColor }}>
                           {g.source === "ext" ? "💳" : g.source === "manual" ? "✏️" : "📁"} {g.label}
                         </span>
-                        <span style={{ fontSize:11, color:"var(--text-dim)" }}>{g.txs.length} תנועות</span>
-                        <span style={{ fontSize:12, fontWeight:600, marginRight:"auto",
-                          color: g.source === "ext" ? "var(--green-mid)" : g.source === "manual" ? "var(--gold)" : "var(--green-deep)" }}>
-                          ₪{Math.round(g.txs.reduce((s,t) => s + (t.type==="income"?-1:1)*Number(t.amount||0), 0)).toLocaleString()}
+                        <span style={{ fontSize: 15, color:"var(--text-dim)", fontWeight:500 }}>{g.txs.length} תנועות</span>
+                        <span style={{ fontFamily:"'Frank Ruhl Libre', serif", fontSize: 20, fontWeight:700, marginRight:"auto", color: groupTotal <= 0 ? "var(--green-mid)" : "var(--red)", letterSpacing:"-0.3px", direction:"ltr", unicodeBidi:"embed" }}>
+                          {groupTotal <= 0 ? "+" : "₪−"}{groupTotal <= 0 ? `₪${Math.abs(groupTotal).toLocaleString()}` : `${groupTotal.toLocaleString()}`}
                         </span>
+                        <button onClick={() => setSelectedUids(prev => {
+                          const next = new Set(prev);
+                          if (allGroupSel) groupUids.forEach(uid => next.delete(uid));
+                          else groupUids.forEach(uid => next.add(uid));
+                          return next;
+                        })} style={{ padding:"4px 12px", fontSize: 14, borderRadius:7, fontFamily:"inherit", cursor:"pointer",
+                          border:"1px solid var(--border)", background: allGroupSel ? "rgba(229,57,53,0.08)" : "transparent",
+                          color: allGroupSel ? "#e53935" : "var(--text-dim)" }}>
+                          {allGroupSel ? "בטל בחירה" : "בחר הכל"}
+                        </button>
+                        <button onClick={deleteGroup}
+                          style={{ padding:"4px 12px", fontSize: 14, borderRadius:7, fontFamily:"inherit", cursor:"pointer",
+                            border:"1px solid rgba(229,57,53,0.4)", background:"rgba(229,57,53,0.06)", color:"#e53935", fontWeight:600 }}>
+                          🗑 מחק מקור
+                        </button>
                       </div>
                       {g.txs.map(tx => renderTxRow(tx, false))}
                     </div>
-                  ));
+                    );
+                  });
                 })()}
                 {/* Hidden transactions */}
                 {ignoredTxs.length > 0 && (
                   <>
-                    <div style={{ marginTop:8, marginBottom:4, display:"flex", alignItems:"center", gap:8 }}>
-                      <span style={{ fontSize:11, color:"var(--text-dim)" }} title={`קטגוריות מוסתרות: ${[...ignoredCats].join(", ")}`}>
+                    <div style={{ marginTop:12, marginBottom:6, display:"flex", alignItems:"center", gap:10, padding:"8px 12px", background:"var(--surface2)", borderRadius:8 }}>
+                      <span style={{ fontSize: 16, color:"var(--text-dim)", fontWeight:600 }} title={`קטגוריות מוסתרות: ${[...ignoredCats].join(", ")}`}>
                         🚫 {ignoredTxs.length} תנועות מוסתרות (קטגוריות מסוננות)
                       </span>
                       <button onClick={() => setIgnoredOpen(p => ({ ...p, [key]: !p[key] }))}
-                        style={{ padding:"2px 10px", borderRadius:10, fontSize:11, cursor:"pointer", fontFamily:"inherit",
-                          border:"1px solid var(--border)", background:"transparent", color:"var(--text-dim)" }}>
-                        {ignoredOpen[key] ? "הסתר" : "הצג"}
+                        style={{ padding:"4px 14px", borderRadius:10, fontSize: 15, cursor:"pointer", fontFamily:"inherit",
+                          border:"1px solid var(--border)", background:"transparent", color:"var(--text-dim)", fontWeight:600 }}>
+                        {ignoredOpen[key] ? "הסתר ▲" : "הצג ▼"}
                       </button>
                     </div>
                     {ignoredOpen[key] && ignoredTxs.map(tx => renderTxRow(tx, true))}
@@ -3660,13 +4440,13 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                   const mode = addingTx[key];
                   const form = addForm[key] || {};
                   const allCats = [...Object.values(categories || CATEGORIES).flat(), ...(clientCats || [])];
-                  const inputS = { border:"1px solid var(--border)", borderRadius:6, padding:"6px 10px", fontSize:13, fontFamily:"inherit", background:"var(--surface2)", color:"var(--text)", width:"100%" };
+                  const inputS = { border:"1px solid var(--border)", borderRadius:6, padding:"6px 10px", fontSize: 15, fontFamily:"inherit", background:"var(--surface2)", color:"var(--text)", width:"100%" };
                   const rowS: React.CSSProperties = { display:"flex", gap:8, flexWrap:"wrap", alignItems:"flex-end", marginBottom:8 };
 
                   if (!mode) return (
                     <div style={{ marginTop:10, marginBottom:4 }}>
                       <button onClick={() => setMonthAddMode(key, "menu")}
-                        style={{ padding:"5px 14px", fontSize:12, fontFamily:"inherit", borderRadius:8, border:"1.5px dashed var(--green-mid)", background:"var(--green-mint)", color:"var(--green-deep)", cursor:"pointer" }}>
+                        style={{ padding:"5px 14px", fontSize: 14, fontFamily:"inherit", borderRadius:8, border:"1.5px dashed var(--green-mid)", background:"var(--green-mint)", color:"var(--green-deep)", cursor:"pointer" }}>
                         ✏️ הוסף תנועה
                       </button>
                     </div>
@@ -3674,87 +4454,87 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
 
                   if (mode === "menu") return (
                     <div style={{ marginTop:10, display:"flex", gap:8, alignItems:"center" }}>
-                      <span style={{ fontSize:12, color:"var(--text-dim)" }}>סוג תנועה:</span>
+                      <span style={{ fontSize: 15, color:"var(--text-dim)" }}>סוג תנועה:</span>
                       <button onClick={() => setMonthAddMode(key, "income")}
-                        style={{ padding:"5px 14px", fontSize:12, fontFamily:"inherit", borderRadius:8, border:"1px solid var(--green-soft)", background:"var(--green-mint)", color:"var(--green-deep)", cursor:"pointer", fontWeight:600 }}>
+                        style={{ padding:"5px 14px", fontSize: 14, fontFamily:"inherit", borderRadius:8, border:"1px solid var(--green-soft)", background:"var(--green-mint)", color:"var(--green-deep)", cursor:"pointer", fontWeight:600 }}>
                         + הוסף הכנסה
                       </button>
                       <button onClick={() => setMonthAddMode(key, "expense-choice")}
-                        style={{ padding:"5px 14px", fontSize:12, fontFamily:"inherit", borderRadius:8, border:"1px solid #ffcdd2", background:"#fff8f8", color:"#e53935", cursor:"pointer", fontWeight:600 }}>
+                        style={{ padding:"5px 14px", fontSize: 14, fontFamily:"inherit", borderRadius:8, border:"1px solid #ffcdd2", background:"#fff8f8", color:"#e53935", cursor:"pointer", fontWeight:600 }}>
                         − הוסף הוצאה
                       </button>
                       <button onClick={() => resetAdd(key)}
-                        style={{ background:"none", border:"none", color:"var(--text-dim)", cursor:"pointer", fontSize:18, lineHeight:1 }}>×</button>
+                        style={{ background:"none", border:"none", color:"var(--text-dim)", cursor:"pointer", fontSize: 20, lineHeight:1 }}>×</button>
                     </div>
                   );
 
                   if (mode === "income") return (
                     <div style={{ marginTop:10, background:"rgba(46,204,138,0.05)", border:"1px solid rgba(46,204,138,0.2)", borderRadius:10, padding:"14px 14px 10px" }}>
-                      <div style={{ fontWeight:700, fontSize:13, marginBottom:10, color:"var(--green-deep)" }}>+ הכנסה מזדמנת</div>
+                      <div style={{ fontWeight:700, fontSize: 15, marginBottom:10, color:"var(--green-deep)" }}>+ הכנסה מזדמנת</div>
                       <div style={rowS}>
                         <div style={{ flex:2, minWidth:140 }}>
-                          <div style={{ fontSize:11, color:"var(--text-dim)", marginBottom:3 }}>פירוט *</div>
+                          <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:3 }}>פירוט *</div>
                           <input style={inputS} value={form.name||""} onChange={e=>updateForm(key,"name",e.target.value)} placeholder="תיאור ההכנסה" />
                         </div>
                         <div style={{ flex:1, minWidth:90 }}>
-                          <div style={{ fontSize:11, color:"var(--text-dim)", marginBottom:3 }}>סכום (₪) *</div>
+                          <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:3 }}>סכום (₪) *</div>
                           <input type="number" style={inputS} value={form.amount||""} onChange={e=>updateForm(key,"amount",e.target.value)} placeholder="0" />
                         </div>
                         <div style={{ flex:1, minWidth:110 }}>
-                          <div style={{ fontSize:11, color:"var(--text-dim)", marginBottom:3 }}>תאריך (אופציונלי)</div>
+                          <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:3 }}>תאריך (אופציונלי)</div>
                           <input type="date" style={inputS} value={form.date||""} onChange={e=>updateForm(key,"date",e.target.value)} />
                         </div>
                       </div>
                       <div style={{ display:"flex", gap:8 }}>
                         <button onClick={() => saveManualTx(key, "income")}
                           disabled={!form.name || !form.amount}
-                          style={{ padding:"6px 18px", borderRadius:8, border:"none", background:"var(--green-mid)", color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:"inherit", opacity:(!form.name||!form.amount)?0.5:1 }}>
+                          style={{ padding:"6px 18px", borderRadius:8, border:"none", background:"var(--green-mid)", color:"#fff", fontSize: 15, fontWeight:700, cursor:"pointer", fontFamily:"inherit", opacity:(!form.name||!form.amount)?0.5:1 }}>
                           שמור
                         </button>
-                        <button onClick={() => resetAdd(key)} style={{ padding:"6px 12px", borderRadius:8, border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text)", fontSize:13, cursor:"pointer", fontFamily:"inherit" }}>ביטול</button>
+                        <button onClick={() => resetAdd(key)} style={{ padding:"6px 12px", borderRadius:8, border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text)", fontSize: 15, cursor:"pointer", fontFamily:"inherit" }}>ביטול</button>
                       </div>
                     </div>
                   );
 
                   if (mode === "expense-choice") return (
                     <div style={{ marginTop:10, display:"flex", gap:8, alignItems:"center" }}>
-                      <span style={{ fontSize:12, color:"var(--text-dim)" }}>צורת תשלום:</span>
+                      <span style={{ fontSize: 15, color:"var(--text-dim)" }}>צורת תשלום:</span>
                       <button onClick={() => { setMonthAddMode(key, "expense-cash"); updateForm(key, "payment_method", "מזומן"); }}
-                        style={{ padding:"5px 14px", fontSize:12, fontFamily:"inherit", borderRadius:8, border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text)", cursor:"pointer" }}>
+                        style={{ padding:"5px 14px", fontSize: 14, fontFamily:"inherit", borderRadius:8, border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text)", cursor:"pointer" }}>
                         💵 מזומן
                       </button>
                       <button onClick={() => setMonthAddMode(key, "expense-other")}
-                        style={{ padding:"5px 14px", fontSize:12, fontFamily:"inherit", borderRadius:8, border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text)", cursor:"pointer" }}>
+                        style={{ padding:"5px 14px", fontSize: 14, fontFamily:"inherit", borderRadius:8, border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text)", cursor:"pointer" }}>
                         💳 אחר
                       </button>
-                      <button onClick={() => resetAdd(key)} style={{ background:"none", border:"none", color:"var(--text-dim)", cursor:"pointer", fontSize:18, lineHeight:1 }}>×</button>
+                      <button onClick={() => resetAdd(key)} style={{ background:"none", border:"none", color:"var(--text-dim)", cursor:"pointer", fontSize: 20, lineHeight:1 }}>×</button>
                     </div>
                   );
 
                   if (mode === "expense-cash" || mode === "expense-other") return (
                     <div style={{ marginTop:10, background:"rgba(247,92,92,0.04)", border:"1px solid rgba(247,92,92,0.18)", borderRadius:10, padding:"14px 14px 10px" }}>
-                      <div style={{ fontWeight:700, fontSize:13, marginBottom:10, color:"#e53935" }}>
+                      <div style={{ fontWeight:700, fontSize: 15, marginBottom:10, color:"#e53935" }}>
                         − הוצאה {mode === "expense-cash" ? "במזומן" : ""}
                       </div>
                       {mode === "expense-other" && (
                         <div style={{ ...rowS, marginBottom:8 }}>
                           <div style={{ flex:1, minWidth:140 }}>
-                            <div style={{ fontSize:11, color:"var(--text-dim)", marginBottom:3 }}>צורת תשלום</div>
+                            <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:3 }}>צורת תשלום</div>
                             <input style={inputS} value={form.payment_method||""} onChange={e=>updateForm(key,"payment_method",e.target.value)} placeholder="למשל: העברה בנקאית, צ׳ק..." />
                           </div>
                         </div>
                       )}
                       <div style={rowS}>
                         <div style={{ flex:2, minWidth:140 }}>
-                          <div style={{ fontSize:11, color:"var(--text-dim)", marginBottom:3 }}>פירוט *</div>
+                          <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:3 }}>פירוט *</div>
                           <input style={inputS} value={form.name||""} onChange={e=>updateForm(key,"name",e.target.value)} placeholder="תיאור ההוצאה" />
                         </div>
                         <div style={{ flex:1, minWidth:90 }}>
-                          <div style={{ fontSize:11, color:"var(--text-dim)", marginBottom:3 }}>סכום (₪) *</div>
+                          <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:3 }}>סכום (₪) *</div>
                           <input type="number" style={inputS} value={form.amount||""} onChange={e=>updateForm(key,"amount",e.target.value)} placeholder="0" />
                         </div>
                         <div style={{ flex:2, minWidth:140 }}>
-                          <div style={{ fontSize:11, color:"var(--text-dim)", marginBottom:3 }}>סיווג *</div>
+                          <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:3 }}>סיווג *</div>
                           <select style={inputS} value={form.cat||""} onChange={e=>updateForm(key,"cat",e.target.value)}>
                             <option value="">בחר קטגוריה...</option>
                             {Object.entries(categories || CATEGORIES).map(([section, cats]) => (
@@ -3770,17 +4550,17 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                           </select>
                         </div>
                         <div style={{ flex:1, minWidth:110 }}>
-                          <div style={{ fontSize:11, color:"var(--text-dim)", marginBottom:3 }}>תאריך (אופציונלי)</div>
+                          <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:3 }}>תאריך (אופציונלי)</div>
                           <input type="date" style={inputS} value={form.date||""} onChange={e=>updateForm(key,"date",e.target.value)} />
                         </div>
                       </div>
                       <div style={{ display:"flex", gap:8 }}>
                         <button onClick={() => saveManualTx(key, "expense")}
                           disabled={!form.name || !form.amount || !form.cat}
-                          style={{ padding:"6px 18px", borderRadius:8, border:"none", background:"#e53935", color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:"inherit", opacity:(!form.name||!form.amount||!form.cat)?0.5:1 }}>
+                          style={{ padding:"6px 18px", borderRadius:8, border:"none", background:"#e53935", color:"#fff", fontSize: 15, fontWeight:700, cursor:"pointer", fontFamily:"inherit", opacity:(!form.name||!form.amount||!form.cat)?0.5:1 }}>
                           שמור
                         </button>
-                        <button onClick={() => resetAdd(key)} style={{ padding:"6px 12px", borderRadius:8, border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text)", fontSize:13, cursor:"pointer", fontFamily:"inherit" }}>ביטול</button>
+                        <button onClick={() => resetAdd(key)} style={{ padding:"6px 12px", borderRadius:8, border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text)", fontSize: 15, cursor:"pointer", fontFamily:"inherit" }}>ביטול</button>
                       </div>
                     </div>
                   );
@@ -3790,7 +4570,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
 
                 {/* Per-source management */}
                 <div style={{ marginTop:12, padding:"10px 4px", borderTop:"1px solid var(--border)", display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>
-                  <span style={{ fontSize:12, color:"var(--text-dim)" }}>ניהול מקורות:</span>
+                  <span style={{ fontSize: 15, color:"var(--text-dim)" }}>ניהול מקורות:</span>
                   {submissionIds.map(subId => {
                     const subLabel = allTxs.find(t => t._submissionId === subId)?.source_label || "קובץ";
                     const subCount = allTxs.filter(t => t._submissionId === subId).length;
@@ -3798,12 +4578,12 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                       <span key={subId as string} style={{ display:"inline-flex", gap:4, alignItems:"center" }}>
                         <button onClick={onNavigateToUpload}
                           title="החלף קובץ — העלה קובץ חדש לחודש זה"
-                          style={{ padding:"4px 10px", borderRadius:8, fontSize:12, cursor:"pointer", fontFamily:"inherit",
+                          style={{ padding:"4px 10px", borderRadius:8, fontSize: 14, cursor:"pointer", fontFamily:"inherit",
                             border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text-mid)" }}>
                           📁 {subLabel} — החלף
                         </button>
                         <button onClick={() => setConfirmDelete({ type:"submission", submissionId:subId, label:subLabel, count:subCount })}
-                          style={{ padding:"4px 8px", borderRadius:8, fontSize:12, cursor:"pointer", fontFamily:"inherit",
+                          style={{ padding:"4px 8px", borderRadius:8, fontSize: 14, cursor:"pointer", fontFamily:"inherit",
                             border:"1px solid #ffcdd2", background:"#fff8f8", color:"#e53935" }}>
                           הסר
                         </button>
@@ -3812,26 +4592,26 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                   })}
                   {hasExtTxs && (
                     <button onClick={() => setConfirmDelete({ type:"cycle", cycleKey:key, label, count:cycleTxs.filter(t=>t.source==="ext").length })}
-                      style={{ padding:"4px 10px", borderRadius:8, fontSize:12, cursor:"pointer", fontFamily:"inherit",
+                      style={{ padding:"4px 10px", borderRadius:8, fontSize: 14, cursor:"pointer", fontFamily:"inherit",
                         border:"1px solid #ffcdd2", background:"#fff8f8", color:"#e53935" }}>
                       💳 מחק תנועות מקס מחודש זה
                     </button>
                   )}
                   <button onClick={onNavigateToUpload}
-                    style={{ padding:"4px 10px", borderRadius:8, fontSize:12, cursor:"pointer", fontFamily:"inherit",
+                    style={{ padding:"4px 10px", borderRadius:8, fontSize: 14, cursor:"pointer", fontFamily:"inherit",
                       border:"1px solid var(--green-mid)", background:"var(--green-mint)", color:"var(--green-deep)" }}>
                     ➕ הוסף מקור לחודש זה
                   </button>
                 </div>
 
-                <div style={{ textAlign:"left", padding:"6px 4px", fontSize:13, color:"var(--text-mid)", fontWeight:700 }}>
+                <div style={{ textAlign:"left", padding:"6px 4px", fontSize: 15, color:"var(--text-mid)", fontWeight:700 }}>
                   סה"כ {label}: ₪{Math.round(cycleTotal).toLocaleString()}
                 </div>
               </div>
             )}
 
             {!isOpen && idx < cycleKeys.length - 1 && (
-              <div style={{ textAlign:"center", padding:"4px 0 10px", fontSize:12, color:"var(--text-dim)", borderBottom:"1px dashed var(--border)", marginBottom:8 }}>
+              <div style={{ textAlign:"center", padding:"4px 0 10px", fontSize: 15, color:"var(--text-dim)", borderBottom:"1px dashed var(--border)", marginBottom:8 }}>
                 סה"כ עד כאן: ₪{Math.round(
                   cycleKeys.slice(0, idx+1).flatMap(k => (byCycle[k]||[]).filter(t => !ignoredCats.has(t.cat)))
                     .reduce((s,t) => s + Number(t.amount||0), 0)
@@ -3892,23 +4672,23 @@ function PayslipsScreen({ clientId, payslips, subsCount, clientName, onDone, onB
     <div style={{ maxWidth:700, margin:"0 auto", padding:"28px 20px" }}>
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:24 }}>
         <Btn variant="ghost" size="sm" onClick={onBack}>← חזור</Btn>
-        <div style={{ fontWeight:700, fontSize:18 }}>💼 תלושי משכורת</div>
+        <div style={{ fontWeight:700, fontSize: 20 }}>💼 תלושי משכורת</div>
       </div>
       <Card style={{ marginBottom:20, textAlign:"center", padding:"32px 24px" }}>
         <div style={{ fontSize:36, marginBottom:12 }}>📄</div>
-        <div style={{ fontWeight:700, fontSize:16, marginBottom:8 }}>העלה תלוש משכורת</div>
-        <div style={{ fontSize:13, color:"var(--text-dim)", marginBottom:20 }}>צריך {3 - payslips.length} תלוש{3 - payslips.length !== 1 ? "ים" : ""} נוספים</div>
+        <div style={{ fontWeight:700, fontSize: 18, marginBottom:8 }}>העלה תלוש משכורת</div>
+        <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:20 }}>צריך {3 - payslips.length} תלוש{3 - payslips.length !== 1 ? "ים" : ""} נוספים</div>
         <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display:"none" }} onChange={handleFile} />
         <Btn onClick={() => fileRef.current?.click()} disabled={payslips.length >= 3}>📎 בחר קובץ</Btn>
       </Card>
-      {msg && <div style={{ background:msg.startsWith("✅")?"rgba(46,204,138,0.1)":"rgba(247,92,92,0.1)", border:`1px solid ${msg.startsWith("✅")?"rgba(46,204,138,0.3)":"rgba(247,92,92,0.3)"}`, borderRadius:10, padding:"10px 16px", marginBottom:16, fontSize:13, color:msg.startsWith("✅")?"var(--green-soft)":"var(--red)" }}>{msg}</div>}
+      {msg && <div style={{ background:msg.startsWith("✅")?"rgba(46,204,138,0.1)":"rgba(247,92,92,0.1)", border:`1px solid ${msg.startsWith("✅")?"rgba(46,204,138,0.3)":"rgba(247,92,92,0.3)"}`, borderRadius:10, padding:"10px 16px", marginBottom:16, fontSize: 15, color:msg.startsWith("✅")?"var(--green-soft)":"var(--red)" }}>{msg}</div>}
       {payslips.length > 0 && (
         <div>
           <div style={{ fontWeight:700, marginBottom:12 }}>תלושים שהועלו</div>
           {payslips.map(p => (
             <Card key={p.id} style={{ marginBottom:10, padding:"14px 20px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-              <div><div style={{ fontWeight:600 }}>📄 {p.label}</div><div style={{ fontSize:11, color:"var(--text-dim)" }}>{p.filename} · {new Date(p.created_at).toLocaleDateString("he-IL")}</div></div>
-              <span style={{ background:"rgba(46,204,138,0.15)", color:"var(--green-soft)", borderRadius:20, padding:"3px 12px", fontSize:12, fontWeight:700 }}>✓</span>
+              <div><div style={{ fontWeight:600 }}>📄 {p.label}</div><div style={{ fontSize: 13, color:"var(--text-dim)" }}>{p.filename} · {new Date(p.created_at).toLocaleDateString("he-IL")}</div></div>
+              <span style={{ background:"rgba(46,204,138,0.15)", color:"var(--green-soft)", borderRadius:20, padding:"3px 12px", fontSize: 14, fontWeight:700 }}>✓</span>
             </Card>
           ))}
         </div>
@@ -3917,17 +4697,17 @@ function PayslipsScreen({ clientId, payslips, subsCount, clientName, onDone, onB
         <>
           <div onClick={() => setShowPicker(false)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", zIndex:9998 }} />
           <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:`1px solid ${"var(--border)"}`, borderRadius:16, padding:"28px 32px", zIndex:9999, minWidth:320, textAlign:"center" }}>
-            <div style={{ fontWeight:700, fontSize:16, marginBottom:6 }}>לאיזה חודש התלוש?</div>
-            <div style={{ fontSize:13, color:"var(--text-dim)", marginBottom:20 }}>{pendingFile?.name}</div>
+            <div style={{ fontWeight:700, fontSize: 18, marginBottom:6 }}>לאיזה חודש התלוש?</div>
+            <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:20 }}>{pendingFile?.name}</div>
             <div style={{ display:"flex", gap:10, marginBottom:20, justifyContent:"center" }}>
-              <select value={selectedMonth} onChange={e => setSelectedMonth(+e.target.value)} style={{ background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:8, padding:"8px 12px", color:"var(--text)", fontSize:13, fontFamily:"inherit", cursor:"pointer" }}>
+              <select value={selectedMonth} onChange={e => setSelectedMonth(+e.target.value)} style={{ background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:8, padding:"8px 12px", color:"var(--text)", fontSize: 15, fontFamily:"inherit", cursor:"pointer" }}>
                 {HEBREW_MONTHS.map((m,i) => <option key={i} value={i}>{m}</option>)}
               </select>
-              <select value={selectedYear} onChange={e => setSelectedYear(+e.target.value)} style={{ background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:8, padding:"8px 12px", color:"var(--text)", fontSize:13, fontFamily:"inherit", cursor:"pointer" }}>
+              <select value={selectedYear} onChange={e => setSelectedYear(+e.target.value)} style={{ background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:8, padding:"8px 12px", color:"var(--text)", fontSize: 15, fontFamily:"inherit", cursor:"pointer" }}>
                 {years.map(y => <option key={y} value={y}>{y}</option>)}
               </select>
             </div>
-            {alreadyUploaded && <div style={{ color:"var(--gold)", fontSize:12, marginBottom:12 }}>⚠️ כבר העלית תלוש לחודש זה</div>}
+            {alreadyUploaded && <div style={{ color:"var(--gold)", fontSize: 14, marginBottom:12 }}>⚠️ כבר העלית תלוש לחודש זה</div>}
             <div style={{ display:"flex", gap:10, justifyContent:"center" }}>
               <Btn onClick={savePayslip} disabled={alreadyUploaded || uploading}>שמור תלוש</Btn>
               <Btn variant="ghost" onClick={() => setShowPicker(false)}>ביטול</Btn>
@@ -3978,22 +4758,22 @@ function ClientPersonalTab({ session }) {
   return (
     <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))", gap:16 }}>
       <Card>
-        <div style={{ fontWeight:700, fontSize:14, marginBottom:16 }}>👤 הפרטים שלי</div>
+        <div style={{ fontWeight:700, fontSize: 18, marginBottom:16 }}>👤 הפרטים שלי</div>
         <Input label="שם מלא" value={editName} onChange={e => setEditName(e.target.value)} />
         <Input label="מייל" type="email" value={editEmail} onChange={e => setEditEmail(e.target.value)} placeholder="example@gmail.com" />
         <Input label="טלפון" value={editPhone} onChange={e => setEditPhone(e.target.value)} placeholder="050-0000000" />
-        <div style={{ background:"var(--surface2)", borderRadius:8, padding:"10px 12px", fontSize:12, color:"var(--text-dim)", marginBottom:14 }}>
+        <div style={{ background:"var(--surface2)", borderRadius:8, padding:"10px 12px", fontSize: 15, color:"var(--text-dim)", marginBottom:14 }}>
           <div style={{ marginBottom:4 }}>שם משתמש לכניסה</div>
           <div style={{ color:"var(--text)", fontWeight:600 }}>@{session.username}</div>
         </div>
-        {msg && <div style={{ fontSize:12, color:msg.startsWith("✅")?"var(--green-soft)":"var(--red)", marginBottom:12 }}>{msg}</div>}
+        {msg && <div style={{ fontSize: 14, color:msg.startsWith("✅")?"var(--green-soft)":"var(--red)", marginBottom:12 }}>{msg}</div>}
         <Btn onClick={saveDetails} disabled={loading}>שמור שינויים</Btn>
       </Card>
       <Card>
-        <div style={{ fontWeight:700, fontSize:14, marginBottom:16 }}>🔐 שינוי סיסמה</div>
+        <div style={{ fontWeight:700, fontSize: 18, marginBottom:16 }}>🔐 שינוי סיסמה</div>
         <Input label="סיסמה חדשה" type="password" value={newPass} onChange={e => setNewPass(e.target.value)} placeholder="לפחות 4 תווים" />
         <Input label="אימות סיסמה" type="password" value={confirmPass} onChange={e => setConfirmPass(e.target.value)} placeholder="הכנס שוב" />
-        {msg && <div style={{ fontSize:12, color:msg.startsWith("✅")?"var(--green-soft)":"var(--red)", marginBottom:12 }}>{msg}</div>}
+        {msg && <div style={{ fontSize: 14, color:msg.startsWith("✅")?"var(--green-soft)":"var(--red)", marginBottom:12 }}>{msg}</div>}
         <Btn onClick={changePassword} disabled={loading||!newPass||!confirmPass}>עדכן סיסמה</Btn>
       </Card>
     </div>
@@ -4087,8 +4867,8 @@ function CoachingQuestionnaire({ session, spousesCount = 1, onNavigateBack }) {
 
   return (
     <div>
-      <div style={{ fontWeight:700, fontSize:16, marginBottom:6 }}>📝 שאלון אישי</div>
-      <div style={{ fontSize:13, color:"var(--text-dim)", marginBottom:16 }}>
+      <div style={{ fontWeight:700, fontSize: 18, marginBottom:6 }}>📝 שאלון אישי</div>
+      <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:16 }}>
         ענה על השאלות הבאות — הן יעזרו לאלון להכיר אותך לעומק ולהתאים את התהליך עבורך אישית.
       </div>
 
@@ -4096,14 +4876,14 @@ function CoachingQuestionnaire({ session, spousesCount = 1, onNavigateBack }) {
         <div style={{ display:"inline-flex", background:"var(--surface2)", borderRadius:30, padding:4, gap:4, marginBottom:24 }}>
           {visibleSpouses.map(idx => (
             <button key={idx} onClick={() => setSpouseIndex(idx)} style={{
-              padding:"8px 22px", borderRadius:24, border:"none", fontFamily:"inherit", fontSize:13,
+              padding:"8px 22px", borderRadius:24, border:"none", fontFamily:"inherit", fontSize: 15,
               background: spouseIndex === idx ? "var(--green-mid)" : "transparent",
               color: spouseIndex === idx ? "white" : "var(--text-dim)",
               fontWeight: spouseIndex === idx ? 700 : 400,
               cursor:"pointer", transition:"all .15s",
             }}>
               {idx === 1 ? "בן/בת זוג ראשון" : "בן/בת זוג שני"}
-              {doneMap[idx] ? <span style={{ marginRight:6 }}>✅</span> : countFilled(idx) > 0 && <span style={{ marginRight:6, fontSize:11, opacity:.8 }}>({countFilled(idx)}/{QUESTIONNAIRE_QUESTIONS.length})</span>}
+              {doneMap[idx] ? <span style={{ marginRight:6 }}>✅</span> : countFilled(idx) > 0 && <span style={{ marginRight:6, fontSize: 13, opacity:.8 }}>({countFilled(idx)}/{QUESTIONNAIRE_QUESTIONS.length})</span>}
             </button>
           ))}
         </div>
@@ -4112,8 +4892,8 @@ function CoachingQuestionnaire({ session, spousesCount = 1, onNavigateBack }) {
       {doneMap[spouseIndex] ? (
         <div style={{ padding:"24px", background:"rgba(46,183,124,0.08)", borderRadius:12, border:"1px solid rgba(46,183,124,0.25)", textAlign:"center", marginBottom:16 }}>
           <div style={{ fontSize:36, marginBottom:10 }}>✅</div>
-          <div style={{ fontWeight:700, fontSize:16, color:"var(--green-deep)", marginBottom:6 }}>השאלון הושלם!</div>
-          <div style={{ fontSize:13, color:"var(--text-mid)", marginBottom:20 }}>סימנת "סיימתי" עבור בן/בת הזוג הזה</div>
+          <div style={{ fontWeight:700, fontSize: 18, color:"var(--green-deep)", marginBottom:6 }}>השאלון הושלם!</div>
+          <div style={{ fontSize: 15, color:"var(--text-mid)", marginBottom:20 }}>סימנת "סיימתי" עבור בן/בת הזוג הזה</div>
           <div style={{ display:"flex", gap:10, justifyContent:"center", flexWrap:"wrap" }}>
             {onNavigateBack && (
               <Btn onClick={onNavigateBack}>← חזור להגשת המסמכים</Btn>
@@ -4128,7 +4908,7 @@ function CoachingQuestionnaire({ session, spousesCount = 1, onNavigateBack }) {
               const isEmpty = !(answers[spouseIndex]?.[i] && answers[spouseIndex][i].trim());
               return (
                 <Card key={i} style={{ padding:"16px 18px", border: isEmpty ? "1px solid var(--border)" : "1px solid rgba(46,183,124,0.3)" }}>
-                  <div style={{ fontWeight:600, fontSize:13, marginBottom:10, lineHeight:1.5 }}>
+                  <div style={{ fontWeight:600, fontSize: 15, marginBottom:10, lineHeight:1.5 }}>
                     <span style={{ color:"var(--green-mid)", marginLeft:6 }}>{i + 1}.</span>{q}
                     <span style={{ color:"var(--red)", marginRight:4 }}>*</span>
                   </div>
@@ -4137,7 +4917,7 @@ function CoachingQuestionnaire({ session, spousesCount = 1, onNavigateBack }) {
                     onChange={e => { updateAnswer(i, e.target.value); setDoneError(""); }}
                     rows={3}
                     placeholder="כתוב/י את תשובתך כאן..."
-                    style={{ width:"100%", boxSizing:"border-box", background:"var(--surface2)", border:`1px solid ${isEmpty?"var(--border)":"rgba(46,183,124,0.3)"}`, borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:13, fontFamily:"inherit", resize:"vertical", outline:"none", lineHeight:1.6 }}
+                    style={{ width:"100%", boxSizing:"border-box", background:"var(--surface2)", border:`1px solid ${isEmpty?"var(--border)":"rgba(46,183,124,0.3)"}`, borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize: 15, fontFamily:"inherit", resize:"vertical", outline:"none", lineHeight:1.6 }}
                   />
                 </Card>
               );
@@ -4147,13 +4927,13 @@ function CoachingQuestionnaire({ session, spousesCount = 1, onNavigateBack }) {
           <div style={{ marginTop:20, display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
             <Btn onClick={save} disabled={saving} variant="ghost">{saving ? "שומר..." : "💾 שמור טיוטה"}</Btn>
             <Btn onClick={markDone} disabled={markingDone}>{markingDone ? "שומר..." : "✅ סיימתי"}</Btn>
-            {saved && <span style={{ fontSize:13, color:"var(--green-soft)" }}>נשמר בהצלחה</span>}
+            {saved && <span style={{ fontSize: 15, color:"var(--green-soft)" }}>נשמר בהצלחה</span>}
           </div>
-          {doneError && <div style={{ marginTop:10, fontSize:13, color:"var(--red)", fontWeight:600 }}>⚠️ {doneError}</div>}
+          {doneError && <div style={{ marginTop:10, fontSize: 15, color:"var(--red)", fontWeight:600 }}>⚠️ {doneError}</div>}
         </>
       )}
 
-      <div style={{ marginTop:28, padding:"12px 16px", background:"rgba(46,183,124,0.06)", borderRadius:10, border:"1px solid rgba(46,183,124,0.2)", fontSize:12, color:"var(--text-dim)", lineHeight:1.7 }}>
+      <div style={{ marginTop:28, padding:"12px 16px", background:"rgba(46,183,124,0.06)", borderRadius:10, border:"1px solid rgba(46,183,124,0.2)", fontSize: 15, color:"var(--text-dim)", lineHeight:1.7 }}>
         💡 <em>"הצלחה לא באה אליך — אתה הולך אליה"</em> — מריה קולינס
       </div>
     </div>

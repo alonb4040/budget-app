@@ -4,9 +4,10 @@
  */
 
 import { CATEGORIES, IGNORED_CATEGORIES, classifyTx, HEBREW_MONTHS, assignBillingMonth } from "../data";
+import type { CategoryRule } from "../data";
 
-// ── Income category set ───────────────────────────────────────────────────────
-export const INCOME_CATS = new Set<string>(CATEGORIES["💰 הכנסות"] ?? []);
+// ── Income category fallback (used when caller doesn't pass incomeCats from DB) ──
+const DEFAULT_INCOME_CATS = new Set<string>(CATEGORIES["💰 הכנסות"] ?? []);
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -184,7 +185,9 @@ export function buildTxMap(
   importedTxs: any[],
   manualTxs: any[],
   rememberedMappings: Record<string, string>,
-  cycleStartDay: number
+  cycleStartDay: number,
+  ignoredCats: Set<string> = IGNORED_CATEGORIES,
+  categoryRules: CategoryRule[] = [],
 ): TxMap {
   const map: TxMap = {};
 
@@ -198,8 +201,8 @@ export function buildTxMap(
     const mk = sub.month_key;
     if (!mk) return;
     (sub.transactions || []).forEach((tx: any) => {
-      if (IGNORED_CATEGORIES.has(tx.cat)) return;
-      add(mk, tx.cat || "אחר-משתנה", Number(tx.amount || 0));
+      if (ignoredCats.has(tx.cat)) return;
+      add(mk, tx.cat || "הוצאות לא מתוכננות", Number(tx.amount || 0));
     });
   });
 
@@ -207,8 +210,8 @@ export function buildTxMap(
     if ((tx.amount || 0) <= 0) return;
     const mk = tx.billing_month || assignBillingMonth(tx.date, cycleStartDay || 1);
     if (!mk) return;
-    const { cat } = classifyTx(tx.name, tx.max_category, rememberedMappings || {});
-    if (IGNORED_CATEGORIES.has(cat)) return;
+    const { cat } = classifyTx(tx.name, tx.max_category, rememberedMappings || {}, categoryRules);
+    if (ignoredCats.has(cat)) return;
     add(mk, cat, Number(tx.amount || 0));
   });
 
@@ -216,7 +219,7 @@ export function buildTxMap(
     if ((tx.amount || 0) <= 0) return;
     const mk = tx.billing_month;
     if (!mk) return;
-    if (IGNORED_CATEGORIES.has(tx.cat)) return;
+    if (ignoredCats.has(tx.cat)) return;
     add(mk, tx.cat, Number(tx.amount || 0));
   });
 
@@ -268,12 +271,13 @@ export function buildMonthSummary(
   mk: string,
   txMap: TxMap,
   allPeriods: any[],
-  scenarioItemsCache: Record<number, any[]>
+  scenarioItemsCache: Record<number, any[]>,
+  incomeCats: Set<string> = DEFAULT_INCOME_CATS,
 ): MonthSummary {
   const cats = txMap[mk] ?? {};
   let income = 0, expenses = 0;
   Object.entries(cats).forEach(([cat, amt]) => {
-    if (INCOME_CATS.has(cat)) income += amt;
+    if (incomeCats.has(cat)) income += amt;
     else expenses += amt;
   });
 
@@ -307,9 +311,10 @@ export function buildMonthSummaries(
   monthKeys: string[],
   txMap: TxMap,
   allPeriods: any[],
-  scenarioItemsCache: Record<number, any[]>
+  scenarioItemsCache: Record<number, any[]>,
+  incomeCats: Set<string> = DEFAULT_INCOME_CATS,
 ): MonthSummary[] {
-  return monthKeys.map(mk => buildMonthSummary(mk, txMap, allPeriods, scenarioItemsCache));
+  return monthKeys.map(mk => buildMonthSummary(mk, txMap, allPeriods, scenarioItemsCache, incomeCats));
 }
 
 // ── Scenario change detection ─────────────────────────────────────────────────
@@ -378,7 +383,8 @@ export function buildCatDetails(
   mk: string,
   summaries: MonthSummary[],
   txMap: TxMap,
-  scenarioItemsCache: Record<number, any[]>
+  scenarioItemsCache: Record<number, any[]>,
+  incomeCats: Set<string> = DEFAULT_INCOME_CATS,
 ): { over: CatDetail[]; under: CatDetail[] } {
   const cats = txMap[mk] ?? {};
   const idx = summaries.findIndex(s => s.mk === mk);
@@ -394,7 +400,7 @@ export function buildCatDetails(
   const under: CatDetail[] = [];
 
   Object.entries(cats).forEach(([cat, amount]) => {
-    if (INCOME_CATS.has(cat)) return;
+    if (incomeCats.has(cat)) return;
     const avg3 = prev3.length > 0
       ? prev3.reduce((s, s2) => s + (txMap[s2.mk]?.[cat] || 0), 0) / prev3.length
       : 0;
@@ -419,7 +425,9 @@ export function buildCurrentMonthForecast(
   cycleStartDay: number,
   txMap: TxMap,
   allPeriods: any[],
-  scenarioItemsCache: Record<number, any[]>
+  scenarioItemsCache: Record<number, any[]>,
+  incomeCats: Set<string> = DEFAULT_INCOME_CATS,
+  fixedCats: Set<string> = new Set(),
 ): CurrentMonthForecast {
   const { daysElapsed, daysTotal, daysRemaining } = getCycleDays(cycleStartDay);
   const cats = txMap[mk] ?? {};
@@ -428,16 +436,17 @@ export function buildCurrentMonthForecast(
   const sc     = getScenarioTotals(period, scenarioItemsCache);
   const items: any[] = period ? (scenarioItemsCache[period.scenario_id] ?? []) : [];
 
-  // Fixed cats = those appearing in expense_fixed scenario items
-  const fixedCatSet = new Set<string>(
+  // Fixed cats = scenario expense_fixed items; fallback to DB fixedCats if no scenario
+  const scenarioFixedCatSet = new Set<string>(
     items.filter(i => i.item_type === "expense_fixed").map(i => i.category_name as string)
   );
+  const fixedCatSet = scenarioFixedCatSet.size > 0 ? scenarioFixedCatSet : fixedCats;
   const budgetMap: Record<string, number> = {};
   items.forEach(i => { if (i.item_type !== "income") budgetMap[i.category_name] = Number(i.amount || 0); });
 
   let incomeActual = 0, expenseFixedActual = 0, expenseVariableActual = 0;
   Object.entries(cats).forEach(([cat, amt]) => {
-    if (INCOME_CATS.has(cat)) { incomeActual += amt; return; }
+    if (incomeCats.has(cat)) { incomeActual += amt; return; }
     if (fixedCatSet.has(cat)) expenseFixedActual += amt;
     else expenseVariableActual += amt;
   });
@@ -451,7 +460,7 @@ export function buildCurrentMonthForecast(
   // Alerts: variable categories projected to exceed budget
   const alerts: CatAlert[] = [];
   Object.entries(cats).forEach(([cat, actual]) => {
-    if (INCOME_CATS.has(cat) || fixedCatSet.has(cat)) return;
+    if (incomeCats.has(cat) || fixedCatSet.has(cat)) return;
     const projected = actual * ratio;
     const budget    = budgetMap[cat] ?? 0;
     if (budget > 0 && projected > budget * 1.1) {
@@ -487,7 +496,8 @@ export function buildYearForecast(
   txMap: TxMap,
   allPeriods: any[],
   scenarioItemsCache: Record<number, any[]>,
-  forecastCurrentMonthSavings: number // pre-computed from buildCurrentMonthForecast
+  forecastCurrentMonthSavings: number, // pre-computed from buildCurrentMonthForecast
+  incomeCats: Set<string> = DEFAULT_INCOME_CATS,
 ): YearForecastSummary {
   const monthKeys = getYearMonthKeys(year);
   let cumulativeActual   = 0;
@@ -507,7 +517,7 @@ export function buildYearForecast(
     let cumulativeForecastPoint: number | null = null;
 
     if (isPast) {
-      const s = buildMonthSummary(mk, txMap, allPeriods, scenarioItemsCache);
+      const s = buildMonthSummary(mk, txMap, allPeriods, scenarioItemsCache, incomeCats);
       cumulativeActual += s.savings;
       cumulativeActualPoint = cumulativeActual;
     } else if (isCurrent) {
@@ -551,7 +561,7 @@ export function buildYearForecast(
   // Savings rate forecast: use actual income for past + scenario income for future
   const pastSummaries = monthKeys
     .filter(mk => mk < currentMk)
-    .map(mk => buildMonthSummary(mk, txMap, allPeriods, scenarioItemsCache))
+    .map(mk => buildMonthSummary(mk, txMap, allPeriods, scenarioItemsCache, incomeCats))
     .filter(s => s.hasData);
   const futureIncomeSum = monthKeys
     .filter(mk => mk >= currentMk)

@@ -6,8 +6,15 @@
   <title>מאזן — ניהול פיננסי אישי</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,600;1,9..144,300;1,9..144,400&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700;900&display=swap" rel="stylesheet">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>
+    if (window.pdfjsLib) {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    }
+  </script>
   <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -31,10 +38,10 @@
       --red-light:    #fdf0ee;
     }
 
-    html { font-size: 16px; }
+    html { font-size: 17px; scrollbar-gutter: stable both-edges; }
 
     body {
-      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-family: 'Rubik', sans-serif;
       background: var(--bg);
       color: var(--text);
       direction: rtl;
@@ -50,7 +57,7 @@
     ::selection { background: var(--green-mint); color: var(--green-deep); }
 
     button, input, select, textarea {
-      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-family: 'Rubik', sans-serif;
     }
 
     /* Fade in */
@@ -61,8 +68,23 @@
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
+    @keyframes btnShimmer {
+      0%   { background-position: 0% center; }
+      100% { background-position: -200% center; }
+    }
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50%       { transform: translateY(-10px); }
+    }
 
     .fade-up { animation: fadeUp 0.4s ease forwards; }
+
+    /* Login page utilities */
+    .login-input:hover { border-color: #a8c0ac !important; }
+    .login-btn:active:not([disabled]) {
+      transform: scale(0.96) !important;
+      transition: transform 0.1s !important;
+    }
   </style>
 </head>
 <body>

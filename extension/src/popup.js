@@ -1,5 +1,5 @@
 const SUPABASE_URL = 'https://fygffuihotnkjmxmveyt.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ5Z2ZmdWlob3Rua2pteG12ZXl0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMyMjg1MjgsImV4cCI6MjA4ODgwNDUyOH0.ugyv1h4WQOzKFJMARLEbBLHq7k3i9LXSuQZuMjwfwmk';
+const SUPABASE_KEY = 'sb_publishable_vNW_Tq3wUr5iUeRAw_qjBA_k3qUsQV-';
 
 let currentUser = null;
 
@@ -100,16 +100,50 @@ document.getElementById('login-btn').addEventListener('click', async () => {
   if (!username || !password) { errorEl.textContent = 'נא למלא שם משתמש וסיסמה'; return; }
 
   try {
-    const res = await fetch(
-      SUPABASE_URL + '/rest/v1/clients?username=eq.' + encodeURIComponent(username) + '&select=*',
-      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY } }
+    const email = username + '@mazan.local';
+
+    // שלב 1: נסה signInWithPassword ישירות
+    let accessToken = null;
+    const authRes = await fetch(SUPABASE_URL + '/auth/v1/token?grant_type=password', {
+      method: 'POST',
+      headers: { 'apikey': SUPABASE_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const authData = await authRes.json();
+
+    if (authData.access_token) {
+      accessToken = authData.access_token;
+    } else {
+      // שלב 2: migrate_login דרך Edge Function
+      const migrateRes = await fetch(SUPABASE_URL + '/functions/v1/manage-auth', {
+        method: 'POST',
+        headers: { 'apikey': SUPABASE_KEY, 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SUPABASE_KEY },
+        body: JSON.stringify({ action: 'migrate_login', username, password }),
+      });
+      const migrateData = await migrateRes.json();
+      if (!migrateData.ok) { errorEl.textContent = 'שם משתמש או סיסמה שגויים'; return; }
+
+      // נסה שוב signInWithPassword
+      const authRes2 = await fetch(SUPABASE_URL + '/auth/v1/token?grant_type=password', {
+        method: 'POST',
+        headers: { 'apikey': SUPABASE_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      const authData2 = await authRes2.json();
+      if (!authData2.access_token) { errorEl.textContent = 'שגיאת התחברות'; return; }
+      accessToken = authData2.access_token;
+    }
+
+    // שלב 3: קבל client מה-DB עם ה-token
+    const clientRes = await fetch(
+      SUPABASE_URL + '/rest/v1/clients?username=eq.' + encodeURIComponent(username) + '&select=id,username,name,password',
+      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + accessToken } }
     );
-    const data = await res.json();
-    if (!data || data.length === 0) { errorEl.textContent = 'משתמש לא נמצא'; return; }
-    const user = data[0];
-    if (user.password !== password) { errorEl.textContent = 'סיסמה שגויה'; return; }
-    currentUser = user;
-    await chrome.storage.local.set({ user });
+    const clientData = await clientRes.json();
+    if (!clientData || clientData.length === 0) { errorEl.textContent = 'משתמש לא נמצא'; return; }
+
+    currentUser = { ...clientData[0], accessToken };
+    await chrome.storage.local.set({ user: currentUser });
     showMain();
     await checkMaxPageStatus();
   } catch(e) {
@@ -156,6 +190,7 @@ document.getElementById('btn-max').addEventListener('click', async () => {
     const result = await chrome.runtime.sendMessage({
       action: 'extractNow',
       userId: currentUser.id,
+      accessToken: currentUser.accessToken,
     });
 
     if (result && result.success) {

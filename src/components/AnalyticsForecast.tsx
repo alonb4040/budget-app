@@ -11,6 +11,7 @@ import {
   getPeriodForMk, getScenarioTotals,
   type CurrentMonthForecast, type YearForecastSummary,
 } from "../utils/analyticsUtils";
+import type { CategoryRule } from "../data";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -21,6 +22,10 @@ interface Props {
   manualTxs: any[];
   rememberedMappings: Record<string, string>;
   cycleStartDay: number;
+  ignoredCats?: Set<string>;
+  incomeCats?: Set<string>;
+  fixedCats?: Set<string>;
+  categoryRules?: CategoryRule[];
 }
 
 // ── Custom tooltip for the cumulative chart ───────────────────────────────────
@@ -32,7 +37,7 @@ function CumulativeTooltip({ active, payload, label }: any) {
   const forecast = payload.find((p: any) => p.dataKey === "cumulativeForecast")?.value;
   const target   = payload.find((p: any) => p.dataKey === "cumulativeTarget")?.value;
   return (
-    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 14px", fontSize: 12, fontFamily: "inherit", direction: "rtl" }}>
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 14px", fontSize: 14, fontFamily: "inherit", direction: "rtl" }}>
       <div style={{ fontWeight: 700, marginBottom: 6 }}>{label}</div>
       {actual   != null && <div style={{ color: "#6366f1", marginBottom: 2 }}>חיסכון בפועל: {fmt(actual)}</div>}
       {forecast != null && actual == null && <div style={{ color: "#a5b4fc", marginBottom: 2 }}>תחזית: {fmt(forecast)}</div>}
@@ -43,7 +48,7 @@ function CumulativeTooltip({ active, payload, label }: any) {
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function AnalyticsForecast({ clientId, portfolioSubs, importedTxs, manualTxs, rememberedMappings, cycleStartDay }: Props) {
+export default function AnalyticsForecast({ clientId, portfolioSubs, importedTxs, manualTxs, rememberedMappings, cycleStartDay, ignoredCats, incomeCats, fixedCats, categoryRules }: Props) {
   const [allPeriods, setAllPeriods]               = useState<any[]>([]);
   const [scenarioItemsCache, setScenarioItemsCache] = useState<Record<number, any[]>>({});
   const [loadingScenario, setLoadingScenario]     = useState(true);
@@ -76,8 +81,8 @@ export default function AnalyticsForecast({ clientId, portfolioSubs, importedTxs
 
   // ── Derived data ──────────────────────────────────────────────────────────
   const txMap = useMemo(() =>
-    buildTxMap(portfolioSubs, importedTxs, manualTxs, rememberedMappings, cycleStartDay),
-    [portfolioSubs, importedTxs, manualTxs, rememberedMappings, cycleStartDay]
+    buildTxMap(portfolioSubs, importedTxs, manualTxs, rememberedMappings, cycleStartDay, ignoredCats, categoryRules),
+    [portfolioSubs, importedTxs, manualTxs, rememberedMappings, cycleStartDay, ignoredCats, categoryRules]
   );
 
   const currentMk    = useMemo(() => currentBillingMk(cycleStartDay), [cycleStartDay]);
@@ -86,8 +91,8 @@ export default function AnalyticsForecast({ clientId, portfolioSubs, importedTxs
 
   const currentMonthForecast: CurrentMonthForecast | null = useMemo(() => {
     if (loadingScenario) return null;
-    return buildCurrentMonthForecast(currentMk, cycleStartDay, txMap, allPeriods, scenarioItemsCache);
-  }, [currentMk, cycleStartDay, txMap, allPeriods, scenarioItemsCache, loadingScenario]);
+    return buildCurrentMonthForecast(currentMk, cycleStartDay, txMap, allPeriods, scenarioItemsCache, incomeCats, fixedCats);
+  }, [currentMk, cycleStartDay, txMap, allPeriods, scenarioItemsCache, loadingScenario, incomeCats, fixedCats]);
 
   const yearForecast: YearForecastSummary | null = useMemo(() => {
     if (loadingScenario || !currentMonthForecast) return null;
@@ -97,9 +102,9 @@ export default function AnalyticsForecast({ clientId, portfolioSubs, importedTxs
       - currentMonthForecast.expenseVariableProjected;
     return buildYearForecast(
       currentYear, currentMk, txMap, allPeriods, scenarioItemsCache,
-      forecastCurrentSavings
+      forecastCurrentSavings, incomeCats
     );
-  }, [currentYear, currentMk, txMap, allPeriods, scenarioItemsCache, currentMonthForecast, loadingScenario]);
+  }, [currentYear, currentMk, txMap, allPeriods, scenarioItemsCache, currentMonthForecast, loadingScenario, incomeCats]);
 
   const fmt    = (n: number)               => `₪${Math.round(n).toLocaleString("he-IL")}`;
   const fmtPct = (n: number)               => `${Math.round(n)}%`;
@@ -117,13 +122,13 @@ export default function AnalyticsForecast({ clientId, portfolioSubs, importedTxs
 
       {/* ── Current month ── */}
       <Card style={{ marginBottom: 16, padding: "20px 22px" }}>
-        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 14 }}>
+        <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 14 }}>
           📅 {f.label} — {f.daysElapsed} מתוך {f.daysTotal} ימים
         </div>
 
         {/* Progress bar */}
         <div style={{ marginBottom: 16 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--text-dim)", marginBottom: 4 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--text-dim)", marginBottom: 4 }}>
             <span>יום {f.daysElapsed}</span>
             <span>{cyclePct}% מהחודש עבר</span>
             <span>נותרו {f.daysRemaining} ימים</span>
@@ -136,20 +141,20 @@ export default function AnalyticsForecast({ clientId, portfolioSubs, importedTxs
         {/* The one big number */}
         {!noScenario && f.daysRemaining > 0 && (
           <div style={{ background: "var(--green-pale,rgba(52,211,153,0.08))", border: "1px solid var(--green-mint,rgba(52,211,153,0.25))", borderRadius: 12, padding: "14px 18px", marginBottom: 16 }}>
-            <div style={{ fontSize: 13, color: "var(--green-deep,#065f46)", marginBottom: 4 }}>
+            <div style={{ fontSize: 15, color: "var(--green-deep,#065f46)", marginBottom: 4 }}>
               💡 נותרו לך להוצאות משתנות
             </div>
-            <div style={{ fontWeight: 800, fontSize: 22, color: f.expenseVariableRemaining >= 0 ? "var(--green-deep,#065f46)" : "var(--red)" }}>
+            <div style={{ fontWeight: 800, fontSize: 24, color: f.expenseVariableRemaining >= 0 ? "var(--green-deep,#065f46)" : "var(--red)" }}>
               {fmt(f.expenseVariableRemaining)}
             </div>
-            <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 4 }}>
+            <div style={{ fontSize: 14, color: "var(--text-dim)", marginTop: 4 }}>
               ב-{f.daysRemaining} ימים הנותרים · {fmt(f.dailyBudgetRemaining)} ליום
             </div>
           </div>
         )}
 
         {noScenario && (
-          <div style={{ background: "var(--surface2)", borderRadius: 10, padding: "12px 14px", marginBottom: 16, fontSize: 13, color: "var(--text-dim)" }}>
+          <div style={{ background: "var(--surface2)", borderRadius: 10, padding: "12px 14px", marginBottom: 16, fontSize: 15, color: "var(--text-dim)" }}>
             אין תסריט פעיל לחודש זה — עבור ל"מאזן מתוכנן" והגדר תסריט
           </div>
         )}
@@ -160,11 +165,11 @@ export default function AnalyticsForecast({ clientId, portfolioSubs, importedTxs
           {/* Fixed */}
           <div style={{ background: "var(--surface2)", borderRadius: 10, padding: "12px 14px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>הוצאות קבועות</span>
+              <span style={{ fontSize: 15, fontWeight: 600 }}>הוצאות קבועות</span>
               <span>
                 <span style={{ fontWeight: 700 }}>{fmt(f.expenseFixedActual)}</span>
                 {f.expenseFixedScenario > 0 && (
-                  <span style={{ fontSize: 11, color: "var(--text-dim)", marginRight: 6 }}>
+                  <span style={{ fontSize: 13, color: "var(--text-dim)", marginRight: 6 }}>
                     מתוך {fmt(f.expenseFixedScenario)}
                     <span style={{ marginRight: 4, color: f.expenseFixedActual <= f.expenseFixedScenario ? "var(--green-soft)" : "var(--red)" }}>
                       {f.expenseFixedActual <= f.expenseFixedScenario ? " ✅" : " ⚠️"}
@@ -184,15 +189,15 @@ export default function AnalyticsForecast({ clientId, portfolioSubs, importedTxs
           {/* Variable */}
           <div style={{ background: "var(--surface2)", borderRadius: 10, padding: "12px 14px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>הוצאות משתנות</span>
+              <span style={{ fontSize: 15, fontWeight: 600 }}>הוצאות משתנות</span>
               <span>
                 <span style={{ fontWeight: 700 }}>{fmt(f.expenseVariableActual)}</span>
-                <span style={{ fontSize: 11, color: "var(--text-dim)", marginRight: 6 }}>בפועל</span>
+                <span style={{ fontSize: 13, color: "var(--text-dim)", marginRight: 6 }}>בפועל</span>
               </span>
             </div>
             {f.expenseVariableScenario > 0 && (
               <>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--text-dim)", marginBottom: 4 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--text-dim)", marginBottom: 4 }}>
                   <span>תחזית לסוף חודש: <strong style={{ color: f.expenseVariableProjected > f.expenseVariableScenario ? "var(--red)" : "var(--text)" }}>{fmt(f.expenseVariableProjected)}</strong></span>
                   <span>תקציב: {fmt(f.expenseVariableScenario)}</span>
                 </div>
@@ -208,9 +213,9 @@ export default function AnalyticsForecast({ clientId, portfolioSubs, importedTxs
         {/* Category alerts */}
         {f.alerts.length > 0 && (
           <div style={{ marginTop: 14 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--red)", marginBottom: 8 }}>⚠️ קטגוריות בסיכון לחריגה</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "var(--red)", marginBottom: 8 }}>⚠️ קטגוריות בסיכון לחריגה</div>
             {f.alerts.map(a => (
-              <div key={a.cat} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 5, background: "rgba(248,113,113,0.06)", borderRadius: 8, padding: "6px 10px" }}>
+              <div key={a.cat} style={{ display: "flex", justifyContent: "space-between", fontSize: 14, marginBottom: 5, background: "rgba(248,113,113,0.06)", borderRadius: 8, padding: "6px 10px" }}>
                 <span style={{ fontWeight: 600 }}>{a.cat}</span>
                 <span>
                   <span style={{ color: "var(--text-dim)", marginLeft: 6 }}>עד היום: {fmt(a.actual)}</span>
@@ -226,13 +231,13 @@ export default function AnalyticsForecast({ clientId, portfolioSubs, importedTxs
       {/* ── Year forecast chart ── */}
       {yearForecast && (
         <Card style={{ padding: "20px 16px 12px" }}>
-          <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 16 }}>📈 מסלול חיסכון {currentYear}</div>
+          <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 16 }}>📈 מסלול חיסכון {currentYear}</div>
 
           <ResponsiveContainer width="100%" height={220}>
             <ComposedChart data={yearForecast.points} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-              <XAxis dataKey="labelShort" tick={{ fill: "var(--text-dim)", fontSize: 11 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fill: "var(--text-dim)", fontSize: 10 }} tickFormatter={v => `${Math.round(v / 1000)}k`} axisLine={false} tickLine={false} width={36} />
+              <XAxis dataKey="labelShort" tick={{ fill: "var(--text-dim)", fontSize: 13 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: "var(--text-dim)", fontSize: 12 }} tickFormatter={v => `${Math.round(v / 1000)}k`} axisLine={false} tickLine={false} width={36} />
               <Tooltip content={<CumulativeTooltip />} />
 
               {/* Current month reference line */}
@@ -259,7 +264,7 @@ export default function AnalyticsForecast({ clientId, portfolioSubs, importedTxs
               { color: "#a5b4fc",       label: "תחזית", dashed: true },
               { color: "var(--gold)",   label: "יעד תסריט", dashed: true },
             ].map(l => (
-              <div key={l.label} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--text-dim)" }}>
+              <div key={l.label} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 13, color: "var(--text-dim)" }}>
                 <div style={{ width: 18, height: 3, background: l.dashed ? "transparent" : l.color,
                   borderTop: l.dashed ? `2px dashed ${l.color}` : "none" }} />
                 {l.label}
@@ -285,9 +290,9 @@ export default function AnalyticsForecast({ clientId, portfolioSubs, importedTxs
               },
             ].map(k => (
               <div key={k.label} style={{ background: "var(--surface2)", borderRadius: 10, padding: "10px 12px" }}>
-                <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 3 }}>{k.label}</div>
-                <div style={{ fontWeight: 700, fontSize: 14, color: (k as any).color }}>{k.value}</div>
-                {(k as any).sub && <div style={{ fontSize: 10, color: (k as any).color, marginTop: 2 }}>{(k as any).sub}</div>}
+                <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 3 }}>{k.label}</div>
+                <div style={{ fontWeight: 700, fontSize: 16, color: (k as any).color }}>{k.value}</div>
+                {(k as any).sub && <div style={{ fontSize: 12, color: (k as any).color, marginTop: 2 }}>{(k as any).sub}</div>}
               </div>
             ))}
           </div>

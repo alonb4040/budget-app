@@ -1,6 +1,6 @@
 // v2
 const SUPABASE_URL = 'https://fygffuihotnkjmxmveyt.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ5Z2ZmdWlob3Rua2pteG12ZXl0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMyMjg1MjgsImV4cCI6MjA4ODgwNDUyOH0.ugyv1h4WQOzKFJMARLEbBLHq7k3i9LXSuQZuMjwfwmk';
+const SUPABASE_KEY = 'sb_publishable_vNW_Tq3wUr5iUeRAw_qjBA_k3qUsQV-';
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
@@ -295,7 +295,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return;
         }
 
-        const saveResult = await saveTransactions(txs, msg.userId, 'max', null, billingMonthKey, maxBillingTotal);
+        const saveResult = await saveTransactions(txs, msg.userId, msg.accessToken, 'max', null, billingMonthKey, maxBillingTotal);
         sendResponse(saveResult);
 
       } catch(e) {
@@ -307,28 +307,32 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 // ── שמירה ל-Supabase ──────────────────────────────────────────────────────────
-async function saveTransactions(transactions, userId, provider, cardLast4, billingMonthKey, maxBillingTotal) {
+async function saveTransactions(transactions, userId, accessToken, provider, cardLast4, billingMonthKey, maxBillingTotal) {
   if (!transactions || transactions.length === 0) {
     return { success: true, added: 0, duplicates: 0 };
   }
 
-  const batchRes = await fetch(SUPABASE_URL + '/rest/v1/import_batches', {
-    method: 'POST',
-    headers: {
-      'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY,
-      'Content-Type': 'application/json', 'Prefer': 'return=representation',
-    },
-    body: JSON.stringify({
-      client_id: userId, source_type: 'extension', provider,
-      card_last4: cardLast4 || null, total_received: transactions.length,
-      billing_month: billingMonthKey || null,
-      max_billing_total: maxBillingTotal || null,
-      status: 'processing', created_at: new Date().toISOString(),
-    }),
-  });
+  const authHeader = 'Bearer ' + (accessToken || SUPABASE_KEY);
 
-  const batchData = await batchRes.json();
-  const batchId = batchData[0]?.id;
+  let batchId = null;
+  try {
+    const batchRes = await fetch(SUPABASE_URL + '/rest/v1/import_batches', {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_KEY, 'Authorization': authHeader,
+        'Content-Type': 'application/json', 'Prefer': 'return=representation',
+      },
+      body: JSON.stringify({
+        client_id: userId, source_type: 'extension', provider,
+        card_last4: cardLast4 || null, total_received: transactions.length,
+        billing_month: billingMonthKey || null,
+        max_billing_total: maxBillingTotal || null,
+        status: 'processing', created_at: new Date().toISOString(),
+      }),
+    });
+    const batchData = await batchRes.json();
+    batchId = Array.isArray(batchData) ? batchData[0]?.id : null;
+  } catch(e) { /* batch creation is optional — continue without it */ }
   let added = 0, duplicates = 0;
 
   for (const tx of transactions) {
@@ -336,16 +340,17 @@ async function saveTransactions(transactions, userId, provider, cardLast4, billi
 
     const checkRes = await fetch(
       SUPABASE_URL + '/rest/v1/imported_transactions?tx_hash=eq.' + hash + '&client_id=eq.' + userId + '&select=id',
-      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY } }
+      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': authHeader } }
     );
     const existing = await checkRes.json();
     if (existing && existing.length > 0) { duplicates++; continue; }
 
-    await fetch(SUPABASE_URL + '/rest/v1/imported_transactions', {
+    const insertRes = await fetch(SUPABASE_URL + '/rest/v1/imported_transactions', {
       method: 'POST',
       headers: {
-        'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY,
+        'apikey': SUPABASE_KEY, 'Authorization': authHeader,
         'Content-Type': 'application/json',
+        'Prefer': 'return=minimal',
       },
       body: JSON.stringify({
         client_id: userId, import_batch_id: batchId, source_type: 'extension',
@@ -355,14 +360,19 @@ async function saveTransactions(transactions, userId, provider, cardLast4, billi
         created_at: new Date().toISOString(),
       }),
     });
-    added++;
+    if (insertRes.ok) {
+      added++;
+    } else {
+      const errText = await insertRes.text();
+      console.error('[mazan] INSERT failed:', insertRes.status, errText);
+    }
   }
 
   if (batchId) {
     await fetch(SUPABASE_URL + '/rest/v1/import_batches?id=eq.' + batchId, {
       method: 'PATCH',
       headers: {
-        'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY,
+        'apikey': SUPABASE_KEY, 'Authorization': authHeader,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ added, duplicates, status: 'done' }),

@@ -21,13 +21,13 @@ export function OnboardingProgress({ subsCount, payslipsCount, total }) {
   return (
     <div style={{ background:"var(--surface2)", borderRadius:12, padding:"16px 20px", marginBottom:20, border:`1px solid ${"var(--border)"}` }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
-        <div style={{ fontWeight:700, fontSize:14 }}>📋 השלמת נתונים ראשוניים</div>
-        <div style={{ fontSize:12, color:done?"var(--green-soft)":"var(--text-dim)" }}>{done?"✅ הכל הושלם!":`${completedSteps}/${totalSteps} שלבים`}</div>
+        <div style={{ fontWeight:700, fontSize: 17, color:"var(--green-deep)" }}>השלמת נתונים ראשוניים</div>
+        <div style={{ fontSize: 14, color:done?"var(--green-soft)":"var(--text-dim)" }}>{done?"✅ הכל הושלם!":`${completedSteps}/${totalSteps} שלבים`}</div>
       </div>
       <div style={{ background:"var(--surface)", borderRadius:20, height:8, overflow:"hidden" }}>
         <div style={{ width:`${(completedSteps/totalSteps)*100}%`, height:"100%", background:`linear-gradient(90deg,${"var(--green-mid)"},${"var(--green-soft)"})`, borderRadius:20, transition:"width .4s" }} />
       </div>
-      <div style={{ display:"flex", gap:16, marginTop:10, fontSize:12 }}>
+      <div style={{ display:"flex", gap:16, marginTop:10, fontSize: 14 }}>
         <span style={{ color:subsCount>=total?"var(--green-soft)":"var(--text-dim)" }}>{subsCount>=total?"✓":"○"} בסיס חומרים לבניית התיק הכלכלי {subsCount}/{total}</span>
         <span style={{ color:payslipsCount>=total?"var(--green-soft)":"var(--text-dim)" }}>{payslipsCount>=total?"✓":"○"} תלושי משכורת {payslipsCount}/{total}</span>
       </div>
@@ -230,14 +230,14 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
 
   const SectionHeader = ({ id, icon, label, required = false, done, partial, onClick }) => (
     <div onClick={onClick} style={{ display:"flex", alignItems:"center", gap:12, padding:"14px 18px", background: done?"rgba(46,204,138,0.06)":"var(--surface2)", borderRadius: expanded===id?"10px 10px 0 0":10, border:`1px solid ${done?"rgba(46,204,138,0.3)":partial?"rgba(79,142,247,0.3)":"var(--border)"}`, cursor:"pointer", userSelect:"none" }}>
-      <span style={{ fontSize:20 }}>{icon}</span>
+      <span style={{ fontSize: 22 }}>{icon}</span>
       <div style={{ flex:1 }}>
-        <div style={{ fontWeight:600, fontSize:14 }}>{label}</div>
-        {required && <div style={{ fontSize:11, color:"var(--text-dim)" }}>חובה</div>}
+        <div style={{ fontWeight:600, fontSize: 16 }}>{label}</div>
+        {required && <div style={{ fontSize: 13, color:"var(--text-dim)" }}>חובה</div>}
       </div>
-      {done && <span style={{ background:"rgba(46,204,138,0.15)", color:"#22c55e", borderRadius:20, padding:"3px 12px", fontSize:12, fontWeight:700 }}>✓ הושלם</span>}
-      {!done && partial && <span style={{ background:"rgba(79,142,247,0.12)", color:"var(--green-mid)", borderRadius:20, padding:"3px 12px", fontSize:12 }}>בתהליך</span>}
-      <span style={{ color:"var(--text-dim)", fontSize:14, marginRight:4 }}>{expanded===id?"▲":"▼"}</span>
+      {done && <span style={{ background:"rgba(46,204,138,0.15)", color:"#22c55e", borderRadius:20, padding:"3px 12px", fontSize: 14, fontWeight:700 }}>✓ הושלם</span>}
+      {!done && partial && <span style={{ background:"rgba(79,142,247,0.12)", color:"var(--green-mid)", borderRadius:20, padding:"3px 12px", fontSize: 14 }}>בתהליך</span>}
+      <span style={{ color:"var(--text-dim)", fontSize: 16, marginRight:4 }}>{expanded===id?"▲":"▼"}</span>
     </div>
   );
 
@@ -256,14 +256,14 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
     return (
       <div style={{ marginTop:8, marginBottom:4 }}>
         {saved.map((f,i) => (
-          <div key={i} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, color:"var(--text)", padding:"3px 0" }}>
+          <div key={i} style={{ display:"flex", alignItems:"center", gap:8, fontSize: 14, color:"var(--text)", padding:"3px 0" }}>
             <span>📎 {f.filename}</span>
-            {f.path && <button onClick={() => openFile(f.path)} style={{ background:"none", border:"none", color:"var(--green-mid)", cursor:"pointer", fontSize:11, padding:"0 2px" }} title="צפה">👁</button>}
-            <button onClick={() => deleteFile(cat, i)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize:11, padding:"0 2px" }} title="מחק">✕</button>
+            {f.path && <button onClick={() => openFile(f.path)} style={{ background:"none", border:"none", color:"var(--green-mid)", cursor:"pointer", fontSize: 13, padding:"0 2px" }} title="צפה">👁</button>}
+            <button onClick={() => deleteFile(cat, i)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize: 13, padding:"0 2px" }} title="מחק">✕</button>
           </div>
         ))}
         {pend.map((f,i) => (
-          <div key={i} style={{ fontSize:12, color:"var(--green-mid)", padding:"3px 0" }}>📎 {f.name} <span style={{ color:"var(--text-dim)" }}>(ממתין לשמירה)</span></div>
+          <div key={i} style={{ fontSize: 14, color:"var(--green-mid)", padding:"3px 0" }}>📎 {f.name} <span style={{ color:"var(--text-dim)" }}>(ממתין לשמירה)</span></div>
         ))}
       </div>
     );
@@ -277,9 +277,9 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
     </div>
   );
 
-  const fldStyle = { width:"100%", boxSizing:"border-box", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"8px 10px", color:"var(--text)", fontSize:12, fontFamily:"inherit", outline:"none" };
+  const fldStyle = { width:"100%", boxSizing:"border-box", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"8px 10px", color:"var(--text)", fontSize: 14, fontFamily:"inherit", outline:"none" };
   const bodyStyle = { border:"1px solid var(--border)", borderTop:"none", borderRadius:"0 0 10px 10px", padding:"16px 18px", background:"var(--surface)", marginBottom:2 };
-  const descStyle = { fontSize:13, color:"var(--text)", opacity:0.8, marginBottom:12 };
+  const descStyle = { fontSize: 15, color:"var(--text)", opacity:0.8, marginBottom:12 };
 
   return (
     <div style={{ marginBottom:28 }}>
@@ -288,20 +288,20 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
         <>
           <div onClick={() => setEditMonthEntry(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:9000 }} />
           <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:16, padding:28, zIndex:9001, width:300, boxShadow:"0 20px 60px rgba(0,0,0,0.5)" }}>
-            <div style={{ fontWeight:700, fontSize:15, marginBottom:16 }}>✏️ ערוך חודש</div>
+            <div style={{ fontWeight:700, fontSize: 17, marginBottom:16 }}>✏️ ערוך חודש</div>
             <div style={{ marginBottom:12 }}>
-              <div style={{ fontSize:12, color:"var(--text-mid)", marginBottom:5, fontWeight:600 }}>חודש</div>
-              <select value={editMonthVal.month} onChange={e => { setEditMonthVal(p => ({...p, month: Number(e.target.value)})); setEditMonthErr(""); }} style={{ width:"100%", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"9px 12px", color:"var(--text)", fontFamily:"inherit", fontSize:13, direction:"rtl" }}>
+              <div style={{ fontSize: 14, color:"var(--text-mid)", marginBottom:5, fontWeight:600 }}>חודש</div>
+              <select value={editMonthVal.month} onChange={e => { setEditMonthVal(p => ({...p, month: Number(e.target.value)})); setEditMonthErr(""); }} style={{ width:"100%", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"9px 12px", color:"var(--text)", fontFamily:"inherit", fontSize: 15, direction:"rtl" }}>
                 {HEBREW_MONTHS.map((m,i) => <option key={i} value={i}>{m}</option>)}
               </select>
             </div>
             <div style={{ marginBottom:16 }}>
-              <div style={{ fontSize:12, color:"var(--text-mid)", marginBottom:5, fontWeight:600 }}>שנה</div>
-              <select value={editMonthVal.year} onChange={e => { setEditMonthVal(p => ({...p, year: Number(e.target.value)})); setEditMonthErr(""); }} style={{ width:"100%", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"9px 12px", color:"var(--text)", fontFamily:"inherit", fontSize:13, direction:"rtl" }}>
+              <div style={{ fontSize: 14, color:"var(--text-mid)", marginBottom:5, fontWeight:600 }}>שנה</div>
+              <select value={editMonthVal.year} onChange={e => { setEditMonthVal(p => ({...p, year: Number(e.target.value)})); setEditMonthErr(""); }} style={{ width:"100%", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"9px 12px", color:"var(--text)", fontFamily:"inherit", fontSize: 15, direction:"rtl" }}>
                 {[2023,2024,2025,2026,2027].map(y => <option key={y} value={y}>{y}</option>)}
               </select>
             </div>
-            {editMonthErr && <div style={{ fontSize:12, color:"var(--red)", marginBottom:10 }}>⚠️ {editMonthErr}</div>}
+            {editMonthErr && <div style={{ fontSize: 14, color:"var(--red)", marginBottom:10 }}>⚠️ {editMonthErr}</div>}
             <div style={{ display:"flex", gap:8 }}>
               <Btn onClick={saveEditMonth} disabled={editMonthSaving} style={{ flex:1, justifyContent:"center" }}>{editMonthSaving ? "שומר..." : "שמור"}</Btn>
               <Btn variant="ghost" onClick={() => setEditMonthEntry(null)} style={{ flex:1, justifyContent:"center" }}>ביטול</Btn>
@@ -312,7 +312,7 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
 
       {/* Progress bar */}
       <div style={{ marginBottom:20 }}>
-        <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:"var(--text-dim)", marginBottom:6 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", fontSize: 14, color:"var(--text-dim)", marginBottom:6 }}>
           <span>התקדמות כללית</span>
           <span style={{ fontWeight:700, color: progressPct===100?"#22c55e":"var(--text-dim)" }}>{progressPct}%</span>
         </div>
@@ -321,7 +321,7 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
         </div>
       </div>
 
-      <div style={{ fontWeight:700, fontSize:16, marginBottom:16 }}>📋 מסמכים נדרשים</div>
+      <div style={{ fontWeight:700, fontSize: 18, marginBottom:16, color:"var(--green-deep)", letterSpacing:"-0.2px" }}>מסמכים נדרשים</div>
 
       {/* 1. פירוט תנועות */}
       <div style={{ marginBottom:8 }}>
@@ -330,9 +330,9 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
         {expanded==="txs" && (
           <div style={bodyStyle}>
             {finalizedMonths.map(m => (
-              <div key={m.id} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", fontSize:13, color:"var(--text)", padding:"3px 0" }}>
+              <div key={m.id} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", fontSize: 15, color:"var(--text)", padding:"3px 0" }}>
                 <span>✓ {m.label}</span>
-                <button onClick={() => openEditMonth(m)} style={{ background:"none", border:"none", color:"var(--text-mid)", cursor:"pointer", fontSize:12, padding:"2px 6px" }} title="ערוך שם חודש">✏️</button>
+                <button onClick={() => openEditMonth(m)} style={{ background:"none", border:"none", color:"var(--text-mid)", cursor:"pointer", fontSize: 14, padding:"2px 6px" }} title="ערוך שם חודש">✏️</button>
               </div>
             ))}
             <div style={{ ...descStyle, marginTop:6 }}>{txsDone ? "3 חודשי פירוט הושלמו ✓" : `הושלמו ${finalizedMonths.length} מתוך 3 חודשים`}</div>
@@ -347,7 +347,7 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
         <DoneLine done={payslipsDone} />
         {expanded==="pays" && (
           <div style={bodyStyle}>
-            {payslips.map(p => <div key={p.id} style={{ fontSize:13, color:"var(--text)", padding:"3px 0" }}>✓ {p.month_label || p.label || new Date(p.created_at).toLocaleDateString("he-IL",{month:"long",year:"numeric"})}</div>)}
+            {payslips.map(p => <div key={p.id} style={{ fontSize: 15, color:"var(--text)", padding:"3px 0" }}>✓ {p.month_label || p.label || new Date(p.created_at).toLocaleDateString("he-IL",{month:"long",year:"numeric"})}</div>)}
             <div style={{ ...descStyle, marginTop:6 }}>{payslipsDone ? "3 תלושים הועלו ✓" : `הועלו ${payslips.length} מתוך 3 תלושים`}</div>
             {!payslipsDone && <Btn size="sm" variant="secondary" onClick={()=>{setExpanded(null);onNavigatePayslips();}}>💼 העלה תלוש →</Btn>}
           </div>
@@ -370,17 +370,17 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
                 const pend     = pendingFiles[cat] || [];
                 return (
                   <div key={cat} style={{ marginBottom:14, padding:"12px 14px", background:"var(--surface2)", borderRadius:8, border:"1px solid var(--border)" }}>
-                    <div style={{ fontWeight:600, fontSize:13, marginBottom:8 }}>{lt.icon} {lt.label}</div>
-                    {lt.fileLabel && <div style={{ fontSize:12, color:"var(--text)", opacity:.7, marginBottom:8 }}>נדרש: {lt.fileLabel}</div>}
+                    <div style={{ fontWeight:600, fontSize: 15, marginBottom:8 }}>{lt.icon} {lt.label}</div>
+                    {lt.fileLabel && <div style={{ fontSize: 14, color:"var(--text)", opacity:.7, marginBottom:8 }}>נדרש: {lt.fileLabel}</div>}
                     {(isFields||isBoth) && <LoanFieldForm cat={cat} fields={loanFields[cat]} onChange={(c,k,v) => setLoanFields(prev => ({ ...prev, [c]: { ...(prev[c]||{}), [k]:v } }))} />}
                     {!isFields && (
                       <>
                         <input ref={el=>fileRefs.current[cat]=el} type="file" multiple accept=".pdf,.jpg,.jpeg,.png" style={{ display:"none" }} onChange={e=>onFileChange(cat,e)} />
                         {[...saved.map((f,i)=>({...f,_i:i})), ...pend.map(f=>({filename:f.name,_pending:true}))].map((f,i) => (
-                          <div key={i} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, color:f._pending?"var(--green-mid)":"var(--text)", padding:"2px 0" }}>
+                          <div key={i} style={{ display:"flex", alignItems:"center", gap:8, fontSize: 14, color:f._pending?"var(--green-mid)":"var(--text)", padding:"2px 0" }}>
                             <span>📎 {f.filename}{f._pending&&" (ממתין)"}</span>
-                            {!f._pending && f.path && <button onClick={()=>openFile(f.path)} style={{ background:"none", border:"none", color:"var(--green-mid)", cursor:"pointer", fontSize:11 }}>👁</button>}
-                            {!f._pending && <button onClick={()=>deleteFile(cat,f._i)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize:11 }}>✕</button>}
+                            {!f._pending && f.path && <button onClick={()=>openFile(f.path)} style={{ background:"none", border:"none", color:"var(--green-mid)", cursor:"pointer", fontSize: 13 }}>👁</button>}
+                            {!f._pending && <button onClick={()=>deleteFile(cat,f._i)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize: 13 }}>✕</button>}
                           </div>
                         ))}
                         <div style={{ display:"flex", gap:8, marginTop:8 }}>
@@ -398,13 +398,13 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
               {!showLoanPicker
                 ? <Btn size="sm" variant="secondary" onClick={()=>setShowLoanPicker(true)} style={{ marginBottom:14 }}>+ הוסף הלוואה</Btn>
                 : <div style={{ marginBottom:14, padding:12, background:"var(--surface2)", borderRadius:8, border:"1px solid var(--border)" }}>
-                    <div style={{ fontWeight:600, fontSize:13, marginBottom:10 }}>בחר סוג הלוואה:</div>
+                    <div style={{ fontWeight:600, fontSize: 15, marginBottom:10 }}>בחר סוג הלוואה:</div>
                     <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
                       {LOAN_TYPES.filter(lt=>!activeLoanTypes.includes(lt.id)).map(lt => (
-                        <button key={lt.id} onClick={()=>{setActiveLoanTypes(p=>[...p,lt.id]);setShowLoanPicker(false);}} style={{ padding:"6px 14px", borderRadius:20, border:"1px solid var(--border)", background:"var(--surface)", fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>{lt.icon} {lt.label}</button>
+                        <button key={lt.id} onClick={()=>{setActiveLoanTypes(p=>[...p,lt.id]);setShowLoanPicker(false);}} style={{ padding:"6px 14px", borderRadius:20, border:"1px solid var(--border)", background:"var(--surface)", fontSize: 14, cursor:"pointer", fontFamily:"inherit" }}>{lt.icon} {lt.label}</button>
                       ))}
                     </div>
-                    <button onClick={()=>setShowLoanPicker(false)} style={{ marginTop:10, fontSize:12, color:"var(--text-dim)", background:"none", border:"none", cursor:"pointer" }}>ביטול</button>
+                    <button onClick={()=>setShowLoanPicker(false)} style={{ marginTop:10, fontSize: 14, color:"var(--text-dim)", background:"none", border:"none", cursor:"pointer" }}>ביטול</button>
                   </div>
               }
               <Btn onClick={markLoansDone} disabled={!loansHasAny||saving==="loans_section"} style={{ width:"100%" }}>{saving==="loans_section"?"שומר...":"✓ סיימתי להוסיף הלוואות"}</Btn>
@@ -471,14 +471,14 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
       {needsQuestionnaire && (
         <div style={{ marginBottom:8 }}>
           <div onClick={onNavigateQuestionnaire} style={{ display:"flex", alignItems:"center", gap:12, padding:"14px 18px", background: questDone?"rgba(46,204,138,0.06)":"var(--surface2)", borderRadius:10, border:`1px solid ${questDone?"rgba(46,204,138,0.3)":"var(--border)"}`, cursor:"pointer", userSelect:"none" }}>
-            <span style={{ fontSize:20 }}>📝</span>
+            <span style={{ fontSize: 22 }}>📝</span>
             <div style={{ flex:1 }}>
-              <div style={{ fontWeight:600, fontSize:14 }}>שאלון אישי</div>
-              <div style={{ fontSize:11, color:"var(--text-dim)" }}>לחץ כדי למלא את השאלון</div>
+              <div style={{ fontWeight:600, fontSize: 16 }}>שאלון אישי</div>
+              <div style={{ fontSize: 13, color:"var(--text-dim)" }}>לחץ כדי למלא את השאלון</div>
             </div>
             {questDone
-              ? <span style={{ background:"rgba(46,204,138,0.15)", color:"#22c55e", borderRadius:20, padding:"3px 12px", fontSize:12, fontWeight:700 }}>✓ הושלם</span>
-              : <span style={{ color:"var(--text-dim)", fontSize:13 }}>←</span>
+              ? <span style={{ background:"rgba(46,204,138,0.15)", color:"#22c55e", borderRadius:20, padding:"3px 12px", fontSize: 14, fontWeight:700 }}>✓ הושלם</span>
+              : <span style={{ color:"var(--text-dim)", fontSize: 15 }}>←</span>
             }
           </div>
         </div>
@@ -487,7 +487,7 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
       {/* הגשה */}
       <div style={{ marginTop:24, padding:"18px 20px", background:requiredDone?"rgba(46,204,138,0.06)":"var(--surface2)", borderRadius:12, border:`1px solid ${requiredDone?"rgba(46,204,138,0.3)":"var(--border)"}` }}>
         {!requiredDone && (
-          <div style={{ fontSize:12, color:"var(--text-dim)", marginBottom:10, textAlign:"center", lineHeight:1.6 }}>
+          <div style={{ fontSize: 14, color:"var(--text-dim)", marginBottom:10, textAlign:"center", lineHeight:1.6 }}>
             להגשה יש להשלים קודם:
             {!txsDone && <span> · פירוט תנועות</span>}
             {!payslipsDone && <span> · תלושי שכר</span>}
@@ -495,7 +495,7 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
             {!questDone && <span> · שאלון אישי</span>}
           </div>
         )}
-        <Btn onClick={handleSubmit} disabled={!requiredDone||submitting} style={{ width:"100%", padding:"14px", fontSize:15, fontWeight:700, opacity:requiredDone?1:0.45 }}>{submitting?"מגיש...":"✅ הגש לאלון"}</Btn>
+        <Btn onClick={handleSubmit} disabled={!requiredDone||submitting} style={{ width:"100%", padding:"14px", fontSize: 17, fontWeight:700, opacity:requiredDone?1:0.45 }}>{submitting?"מגיש...":"✅ הגש לאלון"}</Btn>
       </div>
     </div>
   );

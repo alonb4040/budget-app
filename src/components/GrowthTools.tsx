@@ -40,10 +40,10 @@ function CompoundInterestCalc() {
 
   const inputStyle: React.CSSProperties = {
     border: "1px solid var(--border)", borderRadius: 6, padding: "7px 10px",
-    fontSize: 14, fontFamily: "inherit", background: "var(--surface2)", color: "var(--text)",
+    fontSize: 16, fontFamily: "inherit", background: "var(--surface2)", color: "var(--text)",
     width: 110, textAlign: "right",
   };
-  const labelStyle: React.CSSProperties = { fontSize: 13, color: "var(--text-dim)", marginBottom: 4, display: "block" };
+  const labelStyle: React.CSSProperties = { fontSize: 15, color: "var(--text-dim)", marginBottom: 4, display: "block" };
 
   const last = rows[rows.length - 1];
 
@@ -65,26 +65,26 @@ function CompoundInterestCalc() {
       </Card>
 
       <Card style={{ marginBottom: 16, padding: "20px 24px" }}>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14 }}>תקופות הפקדה</div>
+        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 14 }}>תקופות הפקדה</div>
         {periods.map((p, i) => (
           <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <input type="number" min="1" max="50" value={p.years} onChange={e => updatePeriod(i, "years", e.target.value)}
                 style={{ ...inputStyle, width: 60 }} />
-              <span style={{ fontSize: 13, color: "var(--text-dim)" }}>שנים</span>
+              <span style={{ fontSize: 15, color: "var(--text-dim)" }}>שנים</span>
             </div>
             <span style={{ color: "var(--text-dim)" }}>×</span>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <input type="number" min="0" value={p.monthly} onChange={e => updatePeriod(i, "monthly", e.target.value)}
                 style={{ ...inputStyle, width: 90 }} />
-              <span style={{ fontSize: 13, color: "var(--text-dim)" }}>₪/חודש</span>
+              <span style={{ fontSize: 15, color: "var(--text-dim)" }}>₪/חודש</span>
             </div>
             {periods.length > 1 && (
-              <button onClick={() => removePeriod(i)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "var(--text-dim)", padding: "2px 6px" }}>🗑</button>
+              <button onClick={() => removePeriod(i)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--text-dim)", padding: "2px 6px" }}>🗑</button>
             )}
           </div>
         ))}
-        <button onClick={addPeriod} style={{ marginTop: 6, padding: "7px 14px", fontSize: 13, fontFamily: "inherit", background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer", color: "var(--text)" }}>
+        <button onClick={addPeriod} style={{ marginTop: 6, padding: "7px 14px", fontSize: 15, fontFamily: "inherit", background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer", color: "var(--text)" }}>
           + הוסף תקופה
         </button>
       </Card>
@@ -92,11 +92,11 @@ function CompoundInterestCalc() {
       {rows.length > 0 ? (
         <Card style={{ padding: 0, overflow: "hidden" }}>
           <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, direction: "rtl" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15, direction: "rtl" }}>
               <thead>
                 <tr style={{ background: "var(--surface2)", borderBottom: "2px solid var(--border)" }}>
                   {["שנה", "הפקדה/חודש", 'סה"כ הופקד', "ריבית שנצברה", "יתרה"].map(h => (
-                    <th key={h} style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, fontSize: 12, color: "var(--text-dim)", whiteSpace: "nowrap" }}>{h}</th>
+                    <th key={h} style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, fontSize: 14, color: "var(--text-dim)", whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -118,7 +118,7 @@ function CompoundInterestCalc() {
                     <td />
                     <td style={{ padding: "10px 14px", fontWeight: 700 }}>{fmt(last.totalDeposited)}</td>
                     <td style={{ padding: "10px 14px", fontWeight: 700, color: "var(--green-soft)" }}>{fmt(last.interest)}</td>
-                    <td style={{ padding: "10px 14px", fontWeight: 700, fontSize: 15 }}>{fmt(last.balance)}</td>
+                    <td style={{ padding: "10px 14px", fontWeight: 700, fontSize: 17 }}>{fmt(last.balance)}</td>
                   </tr>
                 </tfoot>
               )}
@@ -126,7 +126,7 @@ function CompoundInterestCalc() {
           </div>
         </Card>
       ) : (
-        <Card style={{ textAlign: "center", padding: "32px", color: "var(--text-dim)", fontSize: 14 }}>
+        <Card style={{ textAlign: "center", padding: "32px", color: "var(--text-dim)", fontSize: 16 }}>
           הזן ריבית ותקופת הפקדה כדי לראות את הגרף
         </Card>
       )}
@@ -148,11 +148,11 @@ function LoanCalc() {
 
   const inputStyle: React.CSSProperties = {
     border: "1px solid var(--border)", borderRadius: 6, padding: "7px 10px",
-    fontSize: 14, fontFamily: "inherit", background: "var(--surface2)", color: "var(--text)",
+    fontSize: 16, fontFamily: "inherit", background: "var(--surface2)", color: "var(--text)",
     width: 120, textAlign: "right",
   };
   const toggleBtn = (active: boolean): React.CSSProperties => ({
-    padding: "7px 16px", fontSize: 13, fontFamily: "inherit", cursor: "pointer", borderRadius: 6,
+    padding: "7px 16px", fontSize: 15, fontFamily: "inherit", cursor: "pointer", borderRadius: 6,
     border: "1px solid var(--border)",
     fontWeight: active ? 700 : 400,
     background: active ? "var(--green-mid)" : "var(--surface2)",
@@ -218,7 +218,7 @@ function LoanCalc() {
   const fmtD = (n: number) => n.toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const rowStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 16, marginBottom: 14, flexWrap: "wrap" };
-  const labelStyle: React.CSSProperties = { minWidth: 170, fontSize: 13, color: "var(--text)", fontWeight: 500 };
+  const labelStyle: React.CSSProperties = { minWidth: 170, fontSize: 15, color: "var(--text)", fontWeight: 500 };
 
   return (
     <div style={{ direction: "rtl", maxWidth: 760 }}>
@@ -248,7 +248,7 @@ function LoanCalc() {
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <input type="number" min="0" max="20" step="0.1" value={cpiRate} onChange={e => setCpiRate(e.target.value)}
                   style={{ ...inputStyle, width: 70 }} />
-                <span style={{ fontSize: 13, color: "var(--text-dim)" }}>% עלייה שנתית</span>
+                <span style={{ fontSize: 15, color: "var(--text-dim)" }}>% עלייה שנתית</span>
               </div>
             )}
           </div>
@@ -264,7 +264,7 @@ function LoanCalc() {
                 onChange={e => setLoanAmt(e.target.value)} style={{ flex: 1, minWidth: 120, accentColor: "var(--green-mid)" }} />
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <input type="number" value={loanAmt} onChange={e => setLoanAmt(e.target.value)} style={inputStyle} />
-                <span style={{ fontSize: 13, color: "var(--text-dim)" }}>₪</span>
+                <span style={{ fontSize: 15, color: "var(--text-dim)" }}>₪</span>
               </div>
             </div>
           </div>
@@ -278,7 +278,7 @@ function LoanCalc() {
                 onChange={e => setMonthlyPmt(e.target.value)} style={{ flex: 1, minWidth: 120, accentColor: "var(--green-mid)" }} />
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <input type="number" value={monthlyPmt} onChange={e => setMonthlyPmt(e.target.value)} style={inputStyle} />
-                <span style={{ fontSize: 13, color: "var(--text-dim)" }}>₪</span>
+                <span style={{ fontSize: 15, color: "var(--text-dim)" }}>₪</span>
               </div>
             </div>
           </div>
@@ -291,7 +291,7 @@ function LoanCalc() {
               onChange={e => setMonths(e.target.value)} style={{ flex: 1, minWidth: 120, accentColor: "var(--green-mid)" }} />
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <input type="number" value={months} onChange={e => setMonths(e.target.value)} style={inputStyle} />
-              <span style={{ fontSize: 13, color: "var(--text-dim)" }}>חודשים</span>
+              <span style={{ fontSize: 15, color: "var(--text-dim)" }}>חודשים</span>
             </div>
           </div>
         </div>
@@ -303,7 +303,7 @@ function LoanCalc() {
               onChange={e => setRate(e.target.value)} style={{ flex: 1, minWidth: 120, accentColor: "var(--green-mid)" }} />
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <input type="number" value={rate} onChange={e => setRate(e.target.value)} style={inputStyle} />
-              <span style={{ fontSize: 13, color: "var(--text-dim)" }}>%</span>
+              <span style={{ fontSize: 15, color: "var(--text-dim)" }}>%</span>
             </div>
           </div>
         </div>
@@ -312,12 +312,12 @@ function LoanCalc() {
           {calcBy === "payment" ? (
             <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
               <span style={{ ...labelStyle, fontWeight: 700 }}>ההחזר החודשי</span>
-              <span style={{ fontSize: 22, fontWeight: 800, color: "var(--green-mid)" }}>₪ {fmtD(monthlyPayment)}</span>
+              <span style={{ fontSize: 24, fontWeight: 800, color: "var(--green-mid)" }}>₪ {fmtD(monthlyPayment)}</span>
             </div>
           ) : (
             <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
               <span style={{ ...labelStyle, fontWeight: 700 }}>סכום ההלוואה האפשרי</span>
-              <span style={{ fontSize: 22, fontWeight: 800, color: "var(--green-mid)" }}>₪ {fmt(derivedAmount)}</span>
+              <span style={{ fontSize: 24, fontWeight: 800, color: "var(--green-mid)" }}>₪ {fmt(derivedAmount)}</span>
             </div>
           )}
         </div>
@@ -326,11 +326,11 @@ function LoanCalc() {
       {rows.length > 0 && (
         <Card style={{ padding: 0, overflow: "hidden" }}>
           <div style={{ maxHeight: 420, overflowY: "auto", overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, direction: "rtl" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15, direction: "rtl" }}>
               <thead style={{ position: "sticky", top: 0, zIndex: 1 }}>
                 <tr style={{ background: "var(--surface2)", borderBottom: "2px solid var(--border)" }}>
                   {["חודש", "יתרת ההלוואה", "קרן", "ריבית", "החזר חודשי"].map(h => (
-                    <th key={h} style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, fontSize: 12, color: "var(--text-dim)", whiteSpace: "nowrap" }}>{h}</th>
+                    <th key={h} style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, fontSize: 14, color: "var(--text-dim)", whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -376,12 +376,12 @@ export default function GrowthTools() {
   };
   return (
     <div>
-      <div style={{ fontWeight: 700, fontSize: 20, marginBottom: 16, textAlign: "center" }}>
+      <div style={{ fontWeight: 700, fontSize: 22, marginBottom: 16, textAlign: "center" }}>
         {titles[tool]}
       </div>
       <div style={{ display:"flex", gap:4, marginBottom:20, flexWrap:"wrap" }}>
         {tools.map(t => (
-          <button key={t.id} onClick={() => setTool(t.id)} style={{ padding:"8px 16px", fontSize:12, fontFamily:"inherit", fontWeight:tool===t.id?700:400, color:tool===t.id?"var(--text)":"var(--text-dim)", background:tool===t.id?"var(--surface2)":"transparent", border:`1px solid ${tool===t.id?"var(--border)":"transparent"}`, borderRadius:8, cursor:"pointer" }}>{t.label}</button>
+          <button key={t.id} onClick={() => setTool(t.id)} style={{ padding:"8px 16px", fontSize: 14, fontFamily:"inherit", fontWeight:tool===t.id?700:400, color:tool===t.id?"var(--text)":"var(--text-dim)", background:tool===t.id?"var(--surface2)":"transparent", border:`1px solid ${tool===t.id?"var(--border)":"transparent"}`, borderRadius:8, cursor:"pointer" }}>{t.label}</button>
         ))}
       </div>
       {tool === "calc" && <CompoundInterestCalc />}

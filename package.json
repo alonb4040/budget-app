@@ -23,7 +23,7 @@
     "puppeteer": "^24.40.0"
   },
   "scripts": {
-    "start": "concurrently \"react-scripts start\" \"node extension/dev-watch.js\"",
+    "start": "concurrently \"react-scripts start\" \"node extension/dev-watch.js\" \"node dev-server.js\"",
     "build": "react-scripts build",
     "backup": "node tests/backup.js",
     "test": "npx playwright test --config=tests/playwright.config.js",

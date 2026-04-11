@@ -43,35 +43,35 @@ function ForcePasswordReset({ session, onDone, onLogout }: { session: Session; o
     <div style={{ minHeight: "100vh", background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Plus Jakarta Sans', sans-serif", padding: 16 }}>
       <div style={{ background: "var(--surface)", borderRadius: 16, padding: "36px 32px", maxWidth: 400, width: "100%", boxShadow: "0 4px 24px rgba(0,0,0,0.15)" }}>
         <div style={{ fontSize: 36, textAlign: "center", marginBottom: 12 }}>🔐</div>
-        <div style={{ fontWeight: 700, fontSize: 20, textAlign: "center", marginBottom: 8, color: "var(--text)" }}>הגדר סיסמה אישית</div>
-        <div style={{ fontSize: 14, color: "var(--text-dim)", textAlign: "center", marginBottom: 28, lineHeight: 1.6 }}>
+        <div style={{ fontWeight: 700, fontSize: 22, textAlign: "center", marginBottom: 8, color: "var(--text)" }}>הגדר סיסמה אישית</div>
+        <div style={{ fontSize: 16, color: "var(--text-dim)", textAlign: "center", marginBottom: 28, lineHeight: 1.6 }}>
           זו הכניסה הראשונה שלך — אנא הגדר סיסמה חדשה כדי להמשיך
         </div>
         <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 13, color: "var(--text-mid)", marginBottom: 6 }}>סיסמה חדשה</div>
+          <div style={{ fontSize: 15, color: "var(--text-mid)", marginBottom: 6 }}>סיסמה חדשה</div>
           <input
             type="password" value={password} onChange={e => setPassword(e.target.value)}
             placeholder="לפחות 6 תווים"
-            style={{ width: "100%", padding: "10px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: 15, boxSizing: "border-box", fontFamily: "inherit" }}
+            style={{ width: "100%", padding: "10px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: 17, boxSizing: "border-box", fontFamily: "inherit" }}
           />
         </div>
         <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 13, color: "var(--text-mid)", marginBottom: 6 }}>אימות סיסמה</div>
+          <div style={{ fontSize: 15, color: "var(--text-mid)", marginBottom: 6 }}>אימות סיסמה</div>
           <input
             type="password" value={confirm} onChange={e => setConfirm(e.target.value)}
             placeholder="הזן שוב"
-            style={{ width: "100%", padding: "10px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: 15, boxSizing: "border-box", fontFamily: "inherit" }}
+            style={{ width: "100%", padding: "10px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: 17, boxSizing: "border-box", fontFamily: "inherit" }}
             onKeyDown={e => e.key === "Enter" && handleSubmit()}
           />
         </div>
-        {errMsg && <div style={{ fontSize: 13, color: "var(--red)", marginBottom: 12, textAlign: "center" }}>{errMsg}</div>}
+        {errMsg && <div style={{ fontSize: 15, color: "var(--red)", marginBottom: 12, textAlign: "center" }}>{errMsg}</div>}
         <button
           onClick={handleSubmit} disabled={status === "saving"}
-          style={{ width: "100%", padding: "12px", borderRadius: 10, background: "var(--green-mid)", color: "white", border: "none", fontSize: 15, fontWeight: 700, cursor: status === "saving" ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
+          style={{ width: "100%", padding: "12px", borderRadius: 10, background: "var(--green-mid)", color: "white", border: "none", fontSize: 17, fontWeight: 700, cursor: status === "saving" ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
           {status === "saving" ? "שומר..." : "אפס סיסמה והמשך"}
         </button>
         <div style={{ textAlign: "center", marginTop: 16 }}>
-          <button onClick={onLogout} style={{ background: "none", border: "none", color: "var(--text-dim)", fontSize: 13, cursor: "pointer", textDecoration: "underline", fontFamily: "inherit" }}>
+          <button onClick={onLogout} style={{ background: "none", border: "none", color: "var(--text-dim)", fontSize: 15, cursor: "pointer", textDecoration: "underline", fontFamily: "inherit" }}>
             התנתק
           </button>
         </div>

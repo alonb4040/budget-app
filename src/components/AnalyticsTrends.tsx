@@ -8,9 +8,10 @@ import {
 import {
   buildTxMap, buildMonthSummaries, detectScenarioChanges, computeKpis,
   buildCatDetails, getLast12MonthKeys, getYearMonthKeys, mkLabel,
-  currentBillingMk, INCOME_CATS,
+  currentBillingMk,
   type MonthSummary, type ScenarioChange,
 } from "../utils/analyticsUtils";
+import type { CategoryRule } from "../data";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -21,6 +22,9 @@ interface Props {
   manualTxs: any[];
   rememberedMappings: Record<string, string>;
   cycleStartDay: number;
+  ignoredCats?: Set<string>;
+  incomeCats?: Set<string>;
+  categoryRules?: CategoryRule[];
 }
 
 // ── Custom Tooltip ────────────────────────────────────────────────────────────
@@ -32,7 +36,7 @@ function ChartTooltip({ active, payload, label }: any) {
   const savings  = income - expenses;
   const fmt = (n: number) => `₪${Math.round(n).toLocaleString("he-IL")}`;
   return (
-    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 14px", fontSize: 13, fontFamily: "inherit", direction: "rtl", minWidth: 160 }}>
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 14px", fontSize: 15, fontFamily: "inherit", direction: "rtl", minWidth: 160 }}>
       <div style={{ fontWeight: 700, marginBottom: 6 }}>{label}</div>
       <div style={{ color: "var(--green-mid)", marginBottom: 2 }}>הכנסות: {fmt(income)}</div>
       <div style={{ color: "var(--red)", marginBottom: 2 }}>הוצאות: {fmt(expenses)}</div>
@@ -45,7 +49,7 @@ function ChartTooltip({ active, payload, label }: any) {
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function AnalyticsTrends({ clientId, portfolioSubs, importedTxs, manualTxs, rememberedMappings, cycleStartDay }: Props) {
+export default function AnalyticsTrends({ clientId, portfolioSubs, importedTxs, manualTxs, rememberedMappings, cycleStartDay, ignoredCats, incomeCats, categoryRules }: Props) {
   // Scenario data fetched internally
   const [allPeriods, setAllPeriods]               = useState<any[]>([]);
   const [scenarioItemsCache, setScenarioItemsCache] = useState<Record<number, any[]>>({});
@@ -86,8 +90,8 @@ export default function AnalyticsTrends({ clientId, portfolioSubs, importedTxs, 
 
   // ── Build txMap ──────────────────────────────────────────────────────────
   const txMap = useMemo(() =>
-    buildTxMap(portfolioSubs, importedTxs, manualTxs, rememberedMappings, cycleStartDay),
-    [portfolioSubs, importedTxs, manualTxs, rememberedMappings, cycleStartDay]
+    buildTxMap(portfolioSubs, importedTxs, manualTxs, rememberedMappings, cycleStartDay, ignoredCats, categoryRules),
+    [portfolioSubs, importedTxs, manualTxs, rememberedMappings, cycleStartDay, ignoredCats, categoryRules]
   );
 
   // ── Month keys for current view ──────────────────────────────────────────
@@ -100,8 +104,8 @@ export default function AnalyticsTrends({ clientId, portfolioSubs, importedTxs, 
 
   // ── Summaries ─────────────────────────────────────────────────────────────
   const summaries: MonthSummary[] = useMemo(() =>
-    buildMonthSummaries(monthKeys, txMap, allPeriods, scenarioItemsCache),
-    [monthKeys, txMap, allPeriods, scenarioItemsCache]
+    buildMonthSummaries(monthKeys, txMap, allPeriods, scenarioItemsCache, incomeCats),
+    [monthKeys, txMap, allPeriods, scenarioItemsCache, incomeCats]
   );
 
   const scenarioChanges: ScenarioChange[] = useMemo(() =>
@@ -132,8 +136,8 @@ export default function AnalyticsTrends({ clientId, portfolioSubs, importedTxs, 
 
   const selectedSummary = summaries.find(s => s.mk === selectedMk) ?? null;
   const catDetails = useMemo(() =>
-    selectedMk ? buildCatDetails(selectedMk, summaries, txMap, scenarioItemsCache) : { over: [], under: [] },
-    [selectedMk, summaries, txMap, scenarioItemsCache]
+    selectedMk ? buildCatDetails(selectedMk, summaries, txMap, scenarioItemsCache, incomeCats) : { over: [], under: [] },
+    [selectedMk, summaries, txMap, scenarioItemsCache, incomeCats]
   );
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -172,9 +176,9 @@ export default function AnalyticsTrends({ clientId, portfolioSubs, importedTxs, 
           },
         ].map(k => (
           <Card key={k.label} style={{ padding: "14px 16px" }}>
-            <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 4 }}>{k.label}</div>
-            <div style={{ fontWeight: 800, fontSize: 18, color: k.color }}>{k.value}</div>
-            {k.sub && <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2 }}>{k.sub}</div>}
+            <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 4 }}>{k.label}</div>
+            <div style={{ fontWeight: 800, fontSize: 20, color: k.color }}>{k.value}</div>
+            {k.sub && <div style={{ fontSize: 13, color: "var(--text-dim)", marginTop: 2 }}>{k.sub}</div>}
           </Card>
         ))}
       </div>
@@ -187,7 +191,7 @@ export default function AnalyticsTrends({ clientId, portfolioSubs, importedTxs, 
             { id: "year" as const,      label: "שנה קלנדרית" },
           ].map(v => (
             <button key={v.id} onClick={() => setViewMode(v.id)} style={{
-              padding: "7px 14px", fontSize: 12, fontFamily: "inherit", cursor: "pointer", border: "none",
+              padding: "7px 14px", fontSize: 14, fontFamily: "inherit", cursor: "pointer", border: "none",
               background: viewMode === v.id ? "var(--green-mid)" : "var(--surface2)",
               color: viewMode === v.id ? "#fff" : "var(--text-dim)", fontWeight: viewMode === v.id ? 700 : 400,
             }}>{v.label}</button>
@@ -195,10 +199,10 @@ export default function AnalyticsTrends({ clientId, portfolioSubs, importedTxs, 
         </div>
         {viewMode === "year" && (
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <button onClick={() => setSelectedYear(y => y - 1)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface2)", cursor: "pointer", fontSize: 14 }}>‹</button>
-            <span style={{ fontWeight: 700, fontSize: 14, minWidth: 50, textAlign: "center" }}>{selectedYear}</span>
+            <button onClick={() => setSelectedYear(y => y - 1)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface2)", cursor: "pointer", fontSize: 16 }}>‹</button>
+            <span style={{ fontWeight: 700, fontSize: 16, minWidth: 50, textAlign: "center" }}>{selectedYear}</span>
             <button onClick={() => setSelectedYear(y => Math.min(y + 1, NOW_YEAR))} disabled={selectedYear >= NOW_YEAR}
-              style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface2)", cursor: selectedYear >= NOW_YEAR ? "default" : "pointer", fontSize: 14, opacity: selectedYear >= NOW_YEAR ? 0.4 : 1 }}>›</button>
+              style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface2)", cursor: selectedYear >= NOW_YEAR ? "default" : "pointer", fontSize: 16, opacity: selectedYear >= NOW_YEAR ? 0.4 : 1 }}>›</button>
           </div>
         )}
       </div>
@@ -206,7 +210,7 @@ export default function AnalyticsTrends({ clientId, portfolioSubs, importedTxs, 
       {/* ── Chart ── */}
       <Card style={{ marginBottom: 16, padding: "20px 16px 12px" }}>
         {noData ? (
-          <div style={{ textAlign: "center", padding: "40px 0", color: "var(--text-dim)", fontSize: 14 }}>
+          <div style={{ textAlign: "center", padding: "40px 0", color: "var(--text-dim)", fontSize: 16 }}>
             אין נתונים לתקופה זו — העלה חודשים בטאב "תיק כלכלי"
           </div>
         ) : (
@@ -217,15 +221,15 @@ export default function AnalyticsTrends({ clientId, portfolioSubs, importedTxs, 
                 style={{ cursor: "pointer" }}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                <XAxis dataKey="label" tick={{ fill: "var(--text-dim)", fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fill: "var(--text-dim)", fontSize: 10 }} tickFormatter={v => `${Math.round(v / 1000)}k`} axisLine={false} tickLine={false} width={36} />
+                <XAxis dataKey="label" tick={{ fill: "var(--text-dim)", fontSize: 13 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: "var(--text-dim)", fontSize: 12 }} tickFormatter={v => `${Math.round(v / 1000)}k`} axisLine={false} tickLine={false} width={36} />
                 <Tooltip content={<ChartTooltip />} />
 
                 {/* Scenario change reference lines */}
                 {scenarioChanges.map(sc => (
                   <ReferenceLine key={sc.mk} x={mkLabelShort(sc.mk)}
                     stroke="var(--gold)" strokeDasharray="4 2" strokeWidth={1.5}
-                    label={{ value: `תסריט: ${sc.toName}`, position: "top", fontSize: 9, fill: "var(--gold)", offset: 4 }}
+                    label={{ value: `תסריט: ${sc.toName}`, position: "top", fontSize: 11, fill: "var(--gold)", offset: 4 }}
                   />
                 ))}
 
@@ -260,14 +264,14 @@ export default function AnalyticsTrends({ clientId, portfolioSubs, importedTxs, 
                 { color: "#6366f1",          label: "חיסכון" },
                 { color: "var(--gold)",      label: "יעד תסריט", dashed: true },
               ].map(l => (
-                <div key={l.label} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--text-dim)" }}>
+                <div key={l.label} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 13, color: "var(--text-dim)" }}>
                   <div style={{ width: l.dashed ? 18 : 10, height: 3, background: l.dashed ? "transparent" : l.color,
                     borderTop: l.dashed ? `2px dashed ${l.color}` : "none", borderRadius: 2 }} />
                   {l.label}
                 </div>
               ))}
             </div>
-            <div style={{ fontSize: 10, color: "var(--text-dim)", textAlign: "center", marginTop: 4 }}>
+            <div style={{ fontSize: 12, color: "var(--text-dim)", textAlign: "center", marginTop: 4 }}>
               לחץ על חודש לפירוט
             </div>
           </>
@@ -277,7 +281,7 @@ export default function AnalyticsTrends({ clientId, portfolioSubs, importedTxs, 
       {/* ── Selected month detail ── */}
       {selectedSummary && selectedSummary.hasData && (
         <Card style={{ padding: "18px 20px" }}>
-          <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 14 }}>{selectedSummary.label}</div>
+          <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 14 }}>{selectedSummary.label}</div>
 
           {/* KPIs */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10, marginBottom: 16 }}>
@@ -297,9 +301,9 @@ export default function AnalyticsTrends({ clientId, portfolioSubs, importedTxs, 
               } : null,
             ].filter(Boolean).map((k: any) => (
               <div key={k.label} style={{ background: "var(--surface2)", borderRadius: 10, padding: "10px 12px" }}>
-                <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 3 }}>{k.label}</div>
-                <div style={{ fontWeight: 700, fontSize: 14, color: k.color }}>{k.value}</div>
-                {k.sub && <div style={{ fontSize: 10, color: k.color, marginTop: 2 }}>{k.sub}</div>}
+                <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 3 }}>{k.label}</div>
+                <div style={{ fontWeight: 700, fontSize: 16, color: k.color }}>{k.value}</div>
+                {k.sub && <div style={{ fontSize: 12, color: k.color, marginTop: 2 }}>{k.sub}</div>}
               </div>
             ))}
           </div>
@@ -309,9 +313,9 @@ export default function AnalyticsTrends({ clientId, portfolioSubs, importedTxs, 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               {catDetails.over.length > 0 && (
                 <div>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "var(--red)", marginBottom: 8 }}>🔴 חרגו מהממוצע</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "var(--red)", marginBottom: 8 }}>🔴 חרגו מהממוצע</div>
                   {catDetails.over.map(c => (
-                    <div key={c.cat} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, fontSize: 12 }}>
+                    <div key={c.cat} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, fontSize: 14 }}>
                       <span style={{ color: "var(--text)" }}>{c.cat}</span>
                       <span>
                         <span style={{ fontWeight: 700, color: "var(--red)" }}>{fmt(c.amount)}</span>
@@ -326,9 +330,9 @@ export default function AnalyticsTrends({ clientId, portfolioSubs, importedTxs, 
               )}
               {catDetails.under.length > 0 && (
                 <div>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "var(--green-soft)", marginBottom: 8 }}>🟢 השתפרו</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "var(--green-soft)", marginBottom: 8 }}>🟢 השתפרו</div>
                   {catDetails.under.map(c => (
-                    <div key={c.cat} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, fontSize: 12 }}>
+                    <div key={c.cat} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, fontSize: 14 }}>
                       <span style={{ color: "var(--text)" }}>{c.cat}</span>
                       <span>
                         <span style={{ fontWeight: 700, color: "var(--green-soft)" }}>{fmt(c.amount)}</span>
@@ -344,7 +348,7 @@ export default function AnalyticsTrends({ clientId, portfolioSubs, importedTxs, 
       )}
 
       {selectedSummary && !selectedSummary.hasData && (
-        <Card style={{ padding: "28px 20px", textAlign: "center", color: "var(--text-dim)", fontSize: 13 }}>
+        <Card style={{ padding: "28px 20px", textAlign: "center", color: "var(--text-dim)", fontSize: 15 }}>
           אין נתונים ל{selectedSummary.label}
         </Card>
       )}

@@ -64,9 +64,9 @@ interface BtnProps {
 
 export const Btn = ({ children, onClick, disabled, variant = "primary", size = "md", style }: BtnProps) => {
   const sizes: Record<BtnSize, CSSProperties> = {
-    sm: { padding: "7px 16px", fontSize: 13 },
-    md: { padding: "11px 24px", fontSize: 15 },
-    lg: { padding: "14px 32px", fontSize: 16 },
+    sm: { padding: "7px 16px", fontSize: 15 },
+    md: { padding: "11px 24px", fontSize: 17 },
+    lg: { padding: "14px 32px", fontSize: 18 },
   };
   const variants: Record<BtnVariant, CSSProperties> = {
     primary: {
@@ -101,7 +101,7 @@ export const Btn = ({ children, onClick, disabled, variant = "primary", size = "
       onClick={onClick}
       disabled={disabled}
       style={{
-        fontFamily: "'Plus Jakarta Sans', sans-serif",
+        fontFamily: "'Heebo', sans-serif",
         borderRadius: 10,
         cursor: disabled ? "not-allowed" : "pointer",
         display: "inline-flex",
@@ -130,7 +130,7 @@ export const Input = ({ label, error, ...props }: InputProps) => (
   <div style={{ marginBottom: 16 }}>
     {label && (
       <div style={{
-        fontSize: 13,
+        fontSize: 15,
         color: "var(--text-mid)",
         marginBottom: 6,
         fontWeight: 600,
@@ -145,8 +145,8 @@ export const Input = ({ label, error, ...props }: InputProps) => (
         borderRadius: 10,
         padding: "11px 14px",
         color: "var(--text)",
-        fontFamily: "'Plus Jakarta Sans', sans-serif",
-        fontSize: 15,
+        fontFamily: "'Heebo', sans-serif",
+        fontSize: 17,
         direction: "rtl",
         boxSizing: "border-box",
         outline: "none",
@@ -157,7 +157,7 @@ export const Input = ({ label, error, ...props }: InputProps) => (
       {...props}
     />
     {error && (
-      <div style={{ fontSize: 12, color: "var(--red)", marginTop: 4 }}>{error}</div>
+      <div style={{ fontSize: 14, color: "var(--red)", marginTop: 4 }}>{error}</div>
     )}
   </div>
 );
@@ -180,7 +180,7 @@ export const Badge = ({ conf }: BadgeProps) => {
       border: `1px solid ${s.dot}44`,
       borderRadius: 20,
       padding: "3px 10px",
-      fontSize: 12,
+      fontSize: 14,
       fontWeight: 600,
       display: "inline-flex",
       alignItems: "center",
@@ -224,15 +224,15 @@ export const KpiCard = ({ icon, label, value, color }: KpiCardProps) => (
     boxShadow: "0 1px 4px rgba(30,77,53,0.06)",
     borderTop: `3px solid var(--green-mint)`,
   }}>
-    <div style={{ fontSize: 22, marginBottom: 10 }}>{icon}</div>
+    <div style={{ marginBottom: 10, display:"flex", alignItems:"center" }}>{icon}</div>
     <div style={{
-      fontFamily: "'Fraunces', serif",
-      fontSize: 28,
+      fontFamily: "'Frank Ruhl Libre', serif",
+      fontSize: 30,
       fontWeight: 600,
       color: color || "var(--green-deep)",
       lineHeight: 1,
       marginBottom: 6,
     }}>{value}</div>
-    <div style={{ fontSize: 13, color: "var(--text-dim)", fontWeight: 500 }}>{label}</div>
+    <div style={{ fontSize: 15, color: "var(--text-dim)", fontWeight: 500 }}>{label}</div>
   </div>
 );

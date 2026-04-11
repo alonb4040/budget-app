@@ -96,7 +96,7 @@ export default function DebtManager({ clientId }: Props) {
 
   const inpS: React.CSSProperties = {
     border:"1px solid var(--border)", borderRadius:6, padding:"6px 10px",
-    fontSize:13, fontFamily:"inherit", background:"var(--surface2)", color:"var(--text)",
+    fontSize: 15, fontFamily:"inherit", background:"var(--surface2)", color:"var(--text)",
     width:"100%", boxSizing:"border-box",
   };
 
@@ -155,9 +155,9 @@ export default function DebtManager({ clientId }: Props) {
       {/* Header */}
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
         <div>
-          <div style={{ fontWeight:700, fontSize:18 }}>💳 מנהל חובות</div>
+          <div style={{ fontWeight:700, fontSize: 20 }}>💳 מנהל חובות</div>
           {debts.length > 0 && (
-            <div style={{ color:"var(--text-dim)", fontSize:13, marginTop:4 }}>
+            <div style={{ color:"var(--text-dim)", fontSize: 15, marginTop:4 }}>
               {debts.length} חובות · יתרה כוללת: <strong style={{ color:"var(--red)" }}>₪{Math.round(totalDebt).toLocaleString()}</strong>
             </div>
           )}
@@ -179,13 +179,13 @@ export default function DebtManager({ clientId }: Props) {
               { label:"יום חיוב בחודש", key:"due_day", type:"number", ph:"15" },
             ].map(f => (
               <div key={f.key}>
-                <div style={{ fontSize:12, color:"var(--text-dim)", marginBottom:4 }}>{f.label}</div>
+                <div style={{ fontSize: 14, color:"var(--text-dim)", marginBottom:4 }}>{f.label}</div>
                 <input type={f.type} value={form[f.key] || ""} placeholder={f.ph}
                   onChange={e => setForm((p: any) => ({...p, [f.key]: e.target.value}))} style={inpS} />
               </div>
             ))}
             <div>
-              <div style={{ fontSize:12, color:"var(--text-dim)", marginBottom:4 }}>סוג</div>
+              <div style={{ fontSize: 14, color:"var(--text-dim)", marginBottom:4 }}>סוג</div>
               <select value={form.type||"loan"} onChange={e => setForm((p: any) =>({...p,type:e.target.value}))} style={inpS}>
                 <option value="loan">הלוואה</option>
                 <option value="mortgage">משכנתה</option>
@@ -196,7 +196,7 @@ export default function DebtManager({ clientId }: Props) {
             </div>
           </div>
           <div style={{ marginBottom:14 }}>
-            <div style={{ fontSize:12, color:"var(--text-dim)", marginBottom:4 }}>הערות (אופציונלי)</div>
+            <div style={{ fontSize: 14, color:"var(--text-dim)", marginBottom:4 }}>הערות (אופציונלי)</div>
             <input value={form.notes||""} onChange={e=>setForm((p: any)=>({...p,notes:e.target.value}))} style={inpS} placeholder="פרטים נוספים..." />
           </div>
           <div style={{ display:"flex", gap:8 }}>
@@ -210,8 +210,8 @@ export default function DebtManager({ clientId }: Props) {
       {debts.length === 0 && !form ? (
         <Card style={{ textAlign:"center", padding:"56px 32px", color:"var(--text-dim)" }}>
           <div style={{ fontSize:52, marginBottom:16 }}>💳</div>
-          <div style={{ fontWeight:700, fontSize:16, marginBottom:8, color:"var(--text)" }}>אין חובות רשומים</div>
-          <div style={{ fontSize:13, marginBottom:20 }}>הוסף הלוואות, משכנתה, או אשראי כדי לראות תוכנית פירעון</div>
+          <div style={{ fontWeight:700, fontSize: 18, marginBottom:8, color:"var(--text)" }}>אין חובות רשומים</div>
+          <div style={{ fontSize: 15, marginBottom:20 }}>הוסף הלוואות, משכנתה, או אשראי כדי לראות תוכנית פירעון</div>
           <Btn onClick={openNew}>+ הוסף חוב ראשון</Btn>
         </Card>
       ) : debts.length > 0 && (
@@ -226,44 +226,44 @@ export default function DebtManager({ clientId }: Props) {
                 <Card key={d.id} style={{ padding:"16px 18px" }}>
                   <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10 }}>
                     <div>
-                      <div style={{ fontWeight:700, fontSize:15, marginBottom:4 }}>{d.name}</div>
-                      <span style={{ background:`${color}22`, color, borderRadius:20, padding:"2px 10px", fontSize:11, fontWeight:600 }}>
+                      <div style={{ fontWeight:700, fontSize: 17, marginBottom:4 }}>{d.name}</div>
+                      <span style={{ background:`${color}22`, color, borderRadius:20, padding:"2px 10px", fontSize: 13, fontWeight:600 }}>
                         {DEBT_TYPE_LABEL[d.type]||"אחר"}
                       </span>
                     </div>
                     <div style={{ display:"flex", gap:6 }}>
-                      <button onClick={() => openEdit(d)} style={{ background:"none", border:"1px solid var(--border)", borderRadius:6, padding:"3px 8px", fontSize:11, cursor:"pointer", color:"var(--text-dim)", fontFamily:"inherit" }}>✏️</button>
-                      <button onClick={() => deleteDebt(d.id)} style={{ background:"none", border:"1px solid rgba(247,92,92,0.4)", borderRadius:6, padding:"3px 8px", fontSize:11, cursor:"pointer", color:"var(--red)", fontFamily:"inherit" }}>🗑</button>
+                      <button onClick={() => openEdit(d)} style={{ background:"none", border:"1px solid var(--border)", borderRadius:6, padding:"3px 8px", fontSize: 13, cursor:"pointer", color:"var(--text-dim)", fontFamily:"inherit" }}>✏️</button>
+                      <button onClick={() => deleteDebt(d.id)} style={{ background:"none", border:"1px solid rgba(247,92,92,0.4)", borderRadius:6, padding:"3px 8px", fontSize: 13, cursor:"pointer", color:"var(--red)", fontFamily:"inherit" }}>🗑</button>
                     </div>
                   </div>
-                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:12, fontSize:13 }}>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:12, fontSize: 15 }}>
                     <div>
-                      <div style={{ color:"var(--text-dim)", fontSize:11 }}>יתרה {isAutoCalc ? "מחושבת" : "נוכחית"}</div>
-                      <div style={{ fontWeight:700, color:"var(--red)", fontSize:16 }}>₪{Math.round(d.currentBalance).toLocaleString()}</div>
+                      <div style={{ color:"var(--text-dim)", fontSize: 13 }}>יתרה {isAutoCalc ? "מחושבת" : "נוכחית"}</div>
+                      <div style={{ fontWeight:700, color:"var(--red)", fontSize: 18 }}>₪{Math.round(d.currentBalance).toLocaleString()}</div>
                     </div>
                     <div>
-                      <div style={{ color:"var(--text-dim)", fontSize:11 }}>תשלום חודשי</div>
+                      <div style={{ color:"var(--text-dim)", fontSize: 13 }}>תשלום חודשי</div>
                       <div style={{ fontWeight:600 }}>₪{Number(d.min_payment).toLocaleString()}</div>
                     </div>
                     <div>
-                      <div style={{ color:"var(--text-dim)", fontSize:11 }}>ריבית שנתית</div>
+                      <div style={{ color:"var(--text-dim)", fontSize: 13 }}>ריבית שנתית</div>
                       <div style={{ fontWeight:600 }}>{d.interest_rate}%</div>
                     </div>
                     {d.due_day && (
                       <div>
-                        <div style={{ color:"var(--text-dim)", fontSize:11 }}>יום חיוב</div>
+                        <div style={{ color:"var(--text-dim)", fontSize: 13 }}>יום חיוב</div>
                         <div style={{ fontWeight:600 }}>{d.due_day} לחודש</div>
                       </div>
                     )}
                   </div>
-                  <div style={{ fontSize:11, color:"var(--text-dim)", display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                  <div style={{ fontSize: 13, color:"var(--text-dim)", display:"flex", justifyContent:"space-between", marginBottom:4 }}>
                     <span>שולם {pct}%</span>
                     <span>מתוך ₪{Math.round(d.original_balance).toLocaleString()}</span>
                   </div>
                   <div style={{ height:6, background:"var(--surface2)", borderRadius:3, overflow:"hidden" }}>
                     <div style={{ height:"100%", width:`${pct}%`, background:"var(--green-soft)", borderRadius:3, transition:"width 0.5s" }} />
                   </div>
-                  {isAutoCalc && <div style={{ fontSize:10, color:"var(--text-dim)", marginTop:6 }}>✦ יתרה מחושבת אוטומטית מתאריך תחילה</div>}
+                  {isAutoCalc && <div style={{ fontSize: 12, color:"var(--text-dim)", marginTop:6 }}>✦ יתרה מחושבת אוטומטית מתאריך תחילה</div>}
                 </Card>
               );
             })}
@@ -271,9 +271,9 @@ export default function DebtManager({ clientId }: Props) {
 
           {/* Payoff strategy */}
           <Card style={{ padding:"20px 24px" }}>
-            <div style={{ fontWeight:700, fontSize:15, marginBottom:16 }}>📅 תוכנית פירעון</div>
+            <div style={{ fontWeight:700, fontSize: 17, marginBottom:16 }}>📅 תוכנית פירעון</div>
             <div style={{ display:"flex", alignItems:"center", gap:16, flexWrap:"wrap", marginBottom:16 }}>
-              <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:13 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:8, fontSize: 15 }}>
                 <span style={{ color:"var(--text-dim)" }}>תשלום נוסף מעל המינימום:</span>
                 <input type="number" value={extra} onChange={e => setExtra(e.target.value)}
                   style={{ ...inpS, width:90 }} />
@@ -285,14 +285,14 @@ export default function DebtManager({ clientId }: Props) {
                   { id:"snowball",  label:"❄️ כדור שלג", sub:"קל פסיכולוגית", color:"var(--green-mid)", bg:"rgba(79,142,247,0.12)" },
                 ].map(s => (
                   <button key={s.id} onClick={() => setStrategy(s.id)} style={{
-                    padding:"7px 14px", borderRadius:8, fontSize:12, fontFamily:"inherit", cursor:"pointer",
+                    padding:"7px 14px", borderRadius:8, fontSize: 14, fontFamily:"inherit", cursor:"pointer",
                     background: strategy===s.id ? s.bg : "var(--surface2)",
                     border:`1px solid ${strategy===s.id ? s.color : "var(--border)"}`,
                     color: strategy===s.id ? s.color : "var(--text-dim)", fontWeight: strategy===s.id ? 700 : 400,
                     lineHeight:1.3,
                   }}>
                     <div>{s.label}</div>
-                    <div style={{ fontSize:10, fontWeight:400, opacity:0.8 }}>{s.sub}</div>
+                    <div style={{ fontSize: 12, fontWeight:400, opacity:0.8 }}>{s.sub}</div>
                   </button>
                 ))}
               </div>
@@ -307,14 +307,14 @@ export default function DebtManager({ clientId }: Props) {
                     { label:"תשלום חודשי כולל", val: `₪${(debtsWB.reduce((s,d)=>s+Number(d.min_payment),0)+(Number(extra)||0)).toLocaleString()}`, color:"var(--text)" },
                   ].map(k => (
                     <div key={k.label} style={{ background:"var(--surface2)", borderRadius:10, padding:"12px 14px" }}>
-                      <div style={{ fontSize:11, color:"var(--text-dim)", marginBottom:4 }}>{k.label}</div>
-                      <div style={{ fontWeight:700, fontSize:15, color:k.color }}>{k.val}</div>
+                      <div style={{ fontSize: 13, color:"var(--text-dim)", marginBottom:4 }}>{k.label}</div>
+                      <div style={{ fontWeight:700, fontSize: 17, color:k.color }}>{k.val}</div>
                     </div>
                   ))}
                 </div>
 
                 <div style={{ overflowX:"auto", marginBottom:20 }}>
-                  <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13, direction:"rtl" }}>
+                  <table style={{ width:"100%", borderCollapse:"collapse", fontSize: 15, direction:"rtl" }}>
                     <thead>
                       <tr style={{ background:"var(--surface2)" }}>
                         {["#","חוב","יתרה","ריבית","תשלום/חודש","תאריך כיבוי",'סה"כ ריבית'].map(h => (
@@ -325,11 +325,11 @@ export default function DebtManager({ clientId }: Props) {
                     <tbody>
                       {plan.debts.map((d, i) => (
                         <tr key={d.id} style={{ borderBottom:"1px solid var(--border)44", background:i%2===0?"transparent":"rgba(0,0,0,0.02)" }}>
-                          <td style={{ padding:"8px 12px", color:"var(--text-dim)", fontSize:11 }}>{i+1}</td>
+                          <td style={{ padding:"8px 12px", color:"var(--text-dim)", fontSize: 13 }}>{i+1}</td>
                           <td style={{ padding:"8px 12px", fontWeight:600 }}>{d.name}</td>
                           <td style={{ padding:"8px 12px", color:"var(--red)" }}>₪{Math.round(d.currentBalance).toLocaleString()}</td>
                           <td style={{ padding:"8px 12px" }}>{d.interest_rate}%</td>
-                          <td style={{ padding:"8px 12px" }}>₪{Number(d.min_payment).toLocaleString()}{i===0&&Number(extra)>0?<span style={{color:"var(--green-soft)",fontSize:10}}> +₪{Number(extra).toLocaleString()}</span>:""}</td>
+                          <td style={{ padding:"8px 12px" }}>₪{Number(d.min_payment).toLocaleString()}{i===0&&Number(extra)>0?<span style={{color:"var(--green-soft)",fontSize: 12}}> +₪{Number(extra).toLocaleString()}</span>:""}</td>
                           <td style={{ padding:"8px 12px", color:"var(--green-soft)", fontWeight:600 }}>{payoffDateLabel(d.payoffMonth)}</td>
                           <td style={{ padding:"8px 12px", color:"var(--text-dim)" }}>₪{Math.round(d.totalInterestPaid).toLocaleString()}</td>
                         </tr>
@@ -345,12 +345,12 @@ export default function DebtManager({ clientId }: Props) {
                     .map(p => ({ ...p, label: p.month === 0 ? "עכשיו" : `${p.month}m` }));
                   return (
                     <div>
-                      <div style={{ fontSize:12, color:"var(--text-dim)", marginBottom:8 }}>יתרת חוב כוללת לאורך הזמן</div>
+                      <div style={{ fontSize: 14, color:"var(--text-dim)", marginBottom:8 }}>יתרת חוב כוללת לאורך הזמן</div>
                       <ResponsiveContainer width="100%" height={170}>
                         <LineChart data={chartData}>
                           <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                          <XAxis dataKey="label" tick={{ fill:"var(--text-dim)", fontSize:10 }} />
-                          <YAxis tick={{ fill:"var(--text-dim)", fontSize:10 }} tickFormatter={v => `₪${Math.round(v/1000)}k`} />
+                          <XAxis dataKey="label" tick={{ fill:"var(--text-dim)", fontSize: 12 }} />
+                          <YAxis tick={{ fill:"var(--text-dim)", fontSize: 12 }} tickFormatter={v => `₪${Math.round(v/1000)}k`} />
                           <Tooltip contentStyle={{ background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, fontFamily:"inherit" }}
                             formatter={(v: number) => [`₪${Math.round(v).toLocaleString()}`, "יתרה"]} />
                           <Line type="monotone" dataKey="total" stroke="var(--red)" strokeWidth={2} dot={false} />

@@ -91,9 +91,8 @@ function parseScenarioExcel(arrayBuffer: ArrayBuffer): ParseResult {
     let name = String(r[1]).trim();
     if (!name || name.startsWith('סה"כ') || name.startsWith('שורה תחתונה') || name.startsWith('כל הזכויות')) continue;
     const NORMALIZE: Record<string, string> = {
-      'וועד בית': 'ועד בית',
-      'תשתית אינטרנט': 'ספק אינטרנט',
-      'תשתית אנטרנט': 'ספק אינטרנט',
+      'ועד בית': 'וועד בית',
+      'תשתית אנטרנט': 'תשתית אינטרנט',
       'בי"ס- תשלומים קבועים': 'בי"ס - תשלומים קבועים',
       'subscriptions - מנוי': 'מנויים',
       'מנויים (subscriptions)': 'מנויים',
@@ -155,12 +154,16 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
   const showMsg = (m: string) => { setMsg(m); setTimeout(() => setMsg(""), 4000); };
 
   const loadCategories = useCallback(async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("categories")
       .select("name")
       .eq("is_active", true)
       .or(`client_id.is.null,client_id.eq.${client.id}`)
       .order("sort_order", { ascending: true });
+    if (error) {
+      console.error("loadCategories error:", error);
+      return; // אל תאפס את הרשימה — עדיף רשימה ישנה מרשימה ריקה שתגרום לכפילויות
+    }
     setKnownCategories((data || []).map((r: any) => r.name));
   }, [client.id]);
 
@@ -255,6 +258,7 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
   // ── הפעלת תסריט ────────────────────────────────────────────────────────────
   const activateScenario = async () => {
     if (!selectedScenario || !activeFrom) return;
+    await supabase.from("active_scenario").delete().eq("client_id", client.id);
     await supabase.from("active_scenario").insert([{
       client_id: client.id,
       scenario_id: selectedScenario.id,
@@ -272,6 +276,8 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
   const deleteScenario = async (sc: ScenarioRow) => {
     if (!window.confirm(`למחוק את התסריט "${sc.name}"?`)) return;
     await supabase.from("scenario_items").delete().eq("scenario_id", sc.id);
+    // נקה גם active_scenario שמצביע לתסריט זה
+    await supabase.from("active_scenario").delete().eq("scenario_id", sc.id);
     await supabase.from("scenarios").delete().eq("id", sc.id);
     showMsg("✅ תסריט נמחק");
     await loadData();
@@ -291,8 +297,8 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div style={{ background: "var(--surface)", borderRadius: 16, padding: 32, minWidth: 360, maxWidth: 440, boxShadow: "0 8px 40px rgba(0,0,0,0.35)", textAlign: "center" }}>
             <div style={{ fontSize: 40, marginBottom: 12 }}>⚠️</div>
-            <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 10 }}>חובה לבחור תסריט פעיל</div>
-            <div style={{ fontSize: 14, color: "var(--text-dim)", marginBottom: 24, lineHeight: 1.6 }}>
+            <div style={{ fontWeight: 700, fontSize: 20, marginBottom: 10 }}>חובה לבחור תסריט פעיל</div>
+            <div style={{ fontSize: 16, color: "var(--text-dim)", marginBottom: 24, lineHeight: 1.6 }}>
               התסריטים יובאו בהצלחה.<br/>
               כדי שהנתונים יופיעו בבקרת התיק הכלכלי יש לבחור תסריט פעיל.
             </div>
@@ -305,12 +311,12 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
       {showActivateReminder && !activeScenarioValid && (
         <div style={{ marginBottom: 16, background: "rgba(251,191,36,0.12)", border: "2px solid rgba(251,191,36,0.5)", borderRadius: 12, padding: "14px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
           <div>
-            <div style={{ fontWeight: 700, fontSize: 15, color: "var(--gold)", marginBottom: 4 }}>⚠️ חשוב — יש לבחור תסריט פעיל</div>
-            <div style={{ fontSize: 13, color: "var(--text-dim)" }}>התסריטים יובאו בהצלחה. כדי שהנתונים יופיעו בבקרת התיק הכלכלי יש לבחור תסריט פעיל.</div>
+            <div style={{ fontWeight: 700, fontSize: 17, color: "var(--gold)", marginBottom: 4 }}>⚠️ חשוב — יש לבחור תסריט פעיל</div>
+            <div style={{ fontSize: 15, color: "var(--text-dim)" }}>התסריטים יובאו בהצלחה. כדי שהנתונים יופיעו בבקרת התיק הכלכלי יש לבחור תסריט פעיל.</div>
           </div>
           <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
             <Btn size="sm" onClick={() => { setShowActivateReminder(false); setView("activate"); }}>בחר תסריט עכשיו</Btn>
-            <button onClick={() => setShowActivateReminder(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--text-dim)" }}>✕</button>
+            <button onClick={() => setShowActivateReminder(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: "var(--text-dim)" }}>✕</button>
           </div>
         </div>
       )}
@@ -318,7 +324,7 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           {activeScenarioValid && (
-            <div style={{ fontSize: 13, color: "var(--text-dim)" }}>
+            <div style={{ fontSize: 15, color: "var(--text-dim)" }}>
               פעיל: <strong style={{ color: "var(--green-deep)" }}>{activeScenario!.scenarios?.name}</strong>
               <span style={{ marginRight: 6 }}>מ-{activeScenario!.active_from}</span>
             </div>
@@ -353,6 +359,7 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
             if (!window.confirm(`למחוק ${ids.length} תסריטים?`)) return;
             for (const id of ids) {
               await supabase.from("scenario_items").delete().eq("scenario_id", id);
+              await supabase.from("active_scenario").delete().eq("scenario_id", id);
               await supabase.from("scenarios").delete().eq("id", id);
             }
             showMsg(`✅ ${ids.length} תסריטים נמחקו`);
@@ -368,7 +375,7 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24 }}>
         <Btn variant="ghost" size="sm" onClick={() => setView("list")}>← חזור</Btn>
-        <div style={{ fontWeight: 700, fontSize: 16 }}>בחר תסריט פעיל</div>
+        <div style={{ fontWeight: 700, fontSize: 18 }}>בחר תסריט פעיל</div>
       </div>
 
       <Card style={{ marginBottom: 16 }}>
@@ -381,25 +388,25 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
               style={{ padding: "12px 16px", borderRadius: 10, border: `2px solid ${selectedScenario?.id === sc.id ? "var(--green-mid)" : "var(--border)"}`, background: selectedScenario?.id === sc.id ? "var(--green-mint)" : "var(--surface2)", cursor: "pointer" }}
             >
               <div style={{ fontWeight: 600 }}>{sc.name}</div>
-              <div style={{ fontSize: 12, color: "var(--text-dim)" }}>{new Date(sc.uploaded_at).toLocaleDateString("he-IL")}</div>
+              <div style={{ fontSize: 14, color: "var(--text-dim)" }}>{new Date(sc.uploaded_at).toLocaleDateString("he-IL")}</div>
             </div>
           ))}
         </div>
 
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 8 }}>
           <div style={{ flex: 1, minWidth: 160 }}>
-            <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 6, fontWeight: 600 }}>מתאריך *</div>
+            <div style={{ fontSize: 15, color: "var(--text-dim)", marginBottom: 6, fontWeight: 600 }}>מתאריך *</div>
             <input type="date" value={activeFrom} onChange={e => setActiveFrom(e.target.value)}
-              style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontFamily: "inherit", fontSize: 14, boxSizing: "border-box" }} />
+              style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontFamily: "inherit", fontSize: 16, boxSizing: "border-box" }} />
           </div>
           <div style={{ flex: 1, minWidth: 160 }}>
-            <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 6, fontWeight: 600 }}>עד תאריך <span style={{ fontWeight: 400 }}>(אופציונלי)</span></div>
+            <div style={{ fontSize: 15, color: "var(--text-dim)", marginBottom: 6, fontWeight: 600 }}>עד תאריך <span style={{ fontWeight: 400 }}>(אופציונלי)</span></div>
             <input type="date" value={activeTo} min={activeFrom || undefined} onChange={e => setActiveTo(e.target.value)}
-              style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontFamily: "inherit", fontSize: 14, boxSizing: "border-box" }} />
+              style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontFamily: "inherit", fontSize: 16, boxSizing: "border-box" }} />
           </div>
         </div>
 
-        <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 20 }}>
+        <div style={{ fontSize: 14, color: "var(--text-dim)", marginBottom: 20 }}>
           החודשים הקודמים ישמרו לפי התסריט הישן. אם לא תוגדר תאריך סיום התסריט יהיה פעיל ללא הגבלה.
         </div>
 
@@ -455,18 +462,29 @@ function ScenarioTableView({ scenarios, activeScenarioId, clientId, onDelete, on
   const handleActivate = async () => {
     if (!activateModal) return;
     setActivating(true);
-    // מחק רשומות ישנות ואז הכנס חדשה
-    await supabase.from("active_scenario").delete().eq("client_id", clientId);
-    await supabase.from("active_scenario").insert([{
-      client_id: clientId,
-      scenario_id: activateModal.id,
-      active_from: activeFrom,
-      active_until: null,
-      activated_at: new Date().toISOString(),
-    }]);
-    setActivating(false);
-    setActivateModal(null);
-    await onActivated();
+    try {
+      // שמור גיבוי של הרשומות הקיימות למקרה שה-INSERT ייכשל
+      const { data: existing } = await supabase
+        .from("active_scenario").select("*").eq("client_id", clientId);
+      await supabase.from("active_scenario").delete().eq("client_id", clientId);
+      const { error } = await supabase.from("active_scenario").insert([{
+        client_id: clientId,
+        scenario_id: activateModal.id,
+        active_from: activeFrom,
+        active_until: null,
+        activated_at: new Date().toISOString(),
+      }]);
+      if (error) {
+        // rollback — החזר את הרשומות הקודמות
+        if (existing?.length) await supabase.from("active_scenario").insert(existing);
+        alert("❌ שגיאה בהפעלת תסריט — הנתונים הוחזרו למצב הקודם");
+        return;
+      }
+      setActivateModal(null);
+      await onActivated();
+    } finally {
+      setActivating(false);
+    }
   };
 
   return (
@@ -477,14 +495,14 @@ function ScenarioTableView({ scenarios, activeScenarioId, clientId, onDelete, on
           onClick={() => setActivateModal(null)}>
           <div style={{ background: "var(--surface)", borderRadius: 16, padding: 32, minWidth: 340, maxWidth: 420, boxShadow: "0 8px 40px rgba(0,0,0,0.3)" }}
             onClick={e => e.stopPropagation()}>
-            <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8 }}>הפעל תסריט</div>
-            <div style={{ fontSize: 14, color: "var(--text-dim)", marginBottom: 20 }}>
+            <div style={{ fontWeight: 700, fontSize: 20, marginBottom: 8 }}>הפעל תסריט</div>
+            <div style={{ fontSize: 16, color: "var(--text-dim)", marginBottom: 20 }}>
               האם להפוך את <strong style={{ color: "var(--text)" }}>{activateModal.name}</strong> לתסריט הפעיל?
             </div>
             <div style={{ marginBottom: 20 }}>
-              <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 6, fontWeight: 600 }}>מתאריך</div>
+              <div style={{ fontSize: 15, color: "var(--text-dim)", marginBottom: 6, fontWeight: 600 }}>מתאריך</div>
               <input type="date" value={activeFrom} onChange={e => setActiveFrom(e.target.value)}
-                style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontFamily: "inherit", fontSize: 14, boxSizing: "border-box" }} />
+                style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontFamily: "inherit", fontSize: 16, boxSizing: "border-box" }} />
             </div>
             <div style={{ display: "flex", gap: 10 }}>
               <Btn onClick={handleActivate} disabled={activating || !activeFrom}>
@@ -499,7 +517,7 @@ function ScenarioTableView({ scenarios, activeScenarioId, clientId, onDelete, on
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
         {deleteMode ? (
           <>
-            <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "var(--text-dim)", cursor: "pointer", userSelect: "none" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 14, color: "var(--text-dim)", cursor: "pointer", userSelect: "none" }}>
               <input type="checkbox" checked={allChecked}
                 onChange={() => {
                   if (allChecked) setChecked({});
@@ -508,7 +526,7 @@ function ScenarioTableView({ scenarios, activeScenarioId, clientId, onDelete, on
               בחר הכל
             </label>
             {scenarios.map(sc => (
-              <label key={sc.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 20, fontSize: 13, cursor: "pointer", userSelect: "none", fontFamily: "inherit", border: `2px solid ${checked[sc.id] ? "var(--red)" : "var(--border)"}`, background: checked[sc.id] ? "rgba(192,57,43,0.08)" : "var(--surface2)", color: checked[sc.id] ? "var(--red)" : "var(--text-mid)" }}>
+              <label key={sc.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 20, fontSize: 15, cursor: "pointer", userSelect: "none", fontFamily: "inherit", border: `2px solid ${checked[sc.id] ? "var(--red)" : "var(--border)"}`, background: checked[sc.id] ? "rgba(192,57,43,0.08)" : "var(--surface2)", color: checked[sc.id] ? "var(--red)" : "var(--text-mid)" }}>
                 <input type="checkbox" style={{ accentColor: "var(--red)" }} checked={!!checked[sc.id]} onChange={() => toggleCheck(sc.id)} />
                 {sc.name}
               </label>
@@ -516,17 +534,17 @@ function ScenarioTableView({ scenarios, activeScenarioId, clientId, onDelete, on
             <button
               disabled={checkedIds.length === 0}
               onClick={() => onDeleteMultiple(checkedIds).then(() => { setDeleteMode(false); setChecked({}); })}
-              style={{ padding: "7px 16px", borderRadius: 20, fontSize: 12, cursor: checkedIds.length ? "pointer" : "default", fontFamily: "inherit", fontWeight: 700, border: "none", background: checkedIds.length ? "var(--red)" : "var(--surface2)", color: checkedIds.length ? "#fff" : "var(--text-dim)", opacity: checkedIds.length ? 1 : 0.5 }}>
+              style={{ padding: "7px 16px", borderRadius: 20, fontSize: 14, cursor: checkedIds.length ? "pointer" : "default", fontFamily: "inherit", fontWeight: 700, border: "none", background: checkedIds.length ? "var(--red)" : "var(--surface2)", color: checkedIds.length ? "#fff" : "var(--text-dim)", opacity: checkedIds.length ? 1 : 0.5 }}>
               🗑 מחק נבחרים ({checkedIds.length})
             </button>
             <button onClick={() => { setDeleteMode(false); setChecked({}); }}
-              style={{ padding: "7px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer", fontFamily: "inherit", border: "1px solid var(--border)", background: "transparent", color: "var(--text-dim)" }}>
+              style={{ padding: "7px 14px", borderRadius: 20, fontSize: 14, cursor: "pointer", fontFamily: "inherit", border: "1px solid var(--border)", background: "transparent", color: "var(--text-dim)" }}>
               ביטול
             </button>
           </>
         ) : (
           <>
-            <div style={{ fontSize: 13, color: "var(--text-dim)", marginLeft: 4, whiteSpace: "nowrap" }}>תסריט:</div>
+            <div style={{ fontSize: 15, color: "var(--text-dim)", marginLeft: 4, whiteSpace: "nowrap" }}>תסריט:</div>
             {scenarios.map(sc => {
               const isSelected = selectedId === sc.id;
               const isActive   = activeScenarioId === sc.id;
@@ -536,7 +554,7 @@ function ScenarioTableView({ scenarios, activeScenarioId, clientId, onDelete, on
                   if (isActive) { alert(`התסריט "${sc.name}" כבר פעיל`); }
                   else { setActivateModal(sc); }
                 }} style={{
-                  padding: "7px 18px", borderRadius: 20, fontSize: 14,
+                  padding: "7px 18px", borderRadius: 20, fontSize: 16,
                   fontWeight: isSelected ? 700 : 500, cursor: "pointer", fontFamily: "inherit",
                   transition: "all 0.15s", position: "relative",
                   border: `2px solid ${isActive ? "var(--green-mid)" : isSelected && activeScenarioId ? "#6b7280" : "var(--border)"}`,
@@ -551,7 +569,7 @@ function ScenarioTableView({ scenarios, activeScenarioId, clientId, onDelete, on
               );
             })}
             <button onClick={() => setDeleteMode(true)}
-              style={{ marginRight: "auto", padding: "6px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer", fontFamily: "inherit", border: "1px solid rgba(192,57,43,0.3)", background: "var(--red-light)", color: "var(--red)" }}>
+              style={{ marginRight: "auto", padding: "6px 14px", borderRadius: 20, fontSize: 14, cursor: "pointer", fontFamily: "inherit", border: "1px solid rgba(192,57,43,0.3)", background: "var(--red-light)", color: "var(--red)" }}>
               🗑 מחק תסריטים
             </button>
           </>
@@ -569,8 +587,8 @@ function ScenarioTableView({ scenarios, activeScenarioId, clientId, onDelete, on
               { label: "יתרה חודשית", val: balance, bg: balance >= 0 ? "#f0faf2" : "#fff5f5", color: balance >= 0 ? "var(--green-deep)" : "var(--red)" },
             ].map(k => (
               <div key={k.label} style={{ padding: "14px 20px", background: k.bg, textAlign: "center", borderLeft: "1px solid var(--border)" }}>
-                <div style={{ fontFamily: "'Fraunces', serif", fontSize: 22, fontWeight: 700, color: k.color }}>₪{Math.round(k.val).toLocaleString()}</div>
-                <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 3 }}>{k.label}</div>
+                <div style={{ fontFamily: "'Frank Ruhl Libre', serif", fontSize: 24, fontWeight: 700, color: k.color }}>₪{Math.round(k.val).toLocaleString()}</div>
+                <div style={{ fontSize: 14, color: "var(--text-dim)", marginTop: 3 }}>{k.label}</div>
               </div>
             ))}
           </div>
@@ -583,15 +601,15 @@ function ScenarioTableView({ scenarios, activeScenarioId, clientId, onDelete, on
             ].map(section => (
               <div key={section.title}>
                 <div style={{ padding: "8px 20px", background: section.titleBg, borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div style={{ fontWeight: 700, fontSize: 13, color: section.titleColor }}>{section.title}</div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: section.titleColor }}>
+                  <div style={{ fontWeight: 700, fontSize: 15, color: section.titleColor }}>{section.title}</div>
+                  <div style={{ fontSize: 15, fontWeight: 600, color: section.titleColor }}>
                     ₪{Math.round(section.items.reduce((s, i) => s + Number(i.amount || 0), 0)).toLocaleString()}
                   </div>
                 </div>
                 {section.items.filter(i => Number(i.amount) > 0).map((item, idx) => (
                   <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 20px", background: idx % 2 === 0 ? section.bg : "var(--surface)", borderBottom: "1px solid var(--border)44" }}>
-                    <span style={{ fontSize: 14, color: "var(--text-mid)" }}>{item.category_name}</span>
-                    <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", fontFamily: "'Fraunces', serif" }}>₪{Math.round(item.amount).toLocaleString()}</span>
+                    <span style={{ fontSize: 16, color: "var(--text-mid)" }}>{item.category_name}</span>
+                    <span style={{ fontSize: 16, fontWeight: 600, color: "var(--text)", fontFamily: "'Frank Ruhl Libre', serif" }}>₪{Math.round(item.amount).toLocaleString()}</span>
                   </div>
                 ))}
               </div>
@@ -605,7 +623,7 @@ function ScenarioTableView({ scenarios, activeScenarioId, clientId, onDelete, on
 
 function MsgBar({ msg }: { msg: string }) {
   return (
-    <div style={{ marginBottom: 16, background: msg.startsWith("✅") ? "var(--green-pale)" : "var(--red-light)", border: `1px solid ${msg.startsWith("✅") ? "var(--green-mint)" : "rgba(192,57,43,0.2)"}`, borderRadius: 10, padding: "10px 16px", fontSize: 14, color: msg.startsWith("✅") ? "var(--green-deep)" : "var(--red)" }}>
+    <div style={{ marginBottom: 16, background: msg.startsWith("✅") ? "var(--green-pale)" : "var(--red-light)", border: `1px solid ${msg.startsWith("✅") ? "var(--green-mint)" : "rgba(192,57,43,0.2)"}`, borderRadius: 10, padding: "10px 16px", fontSize: 16, color: msg.startsWith("✅") ? "var(--green-deep)" : "var(--red)" }}>
       {msg}
     </div>
   );
