@@ -3,6 +3,277 @@ import ScenarioTab from "./ScenarioTab";
 import { supabase } from "./supabase";
 import { Card, Btn, Input, C } from "./ui";
 import CategoryManager from "./components/CategoryManager";
+import LeadsPanel from "./components/LeadsPanel";
+import TransactionSummaryTab from "./components/TransactionSummaryTab";
+import ScenarioPlanTab from "./components/ScenarioPlanTab";
+
+// ── SVG Icons ─────────────────────────────────────────────────────────────────
+function IcoUser({ size = 16 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>;
+}
+function IcoEye({ size = 14 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>;
+}
+function IcoEyeOff({ size = 14 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>;
+}
+function IcoTrash({ size = 14 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>;
+}
+function IcoMail({ size = 14 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>;
+}
+function IcoClock({ size = 13 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>;
+}
+function IcoFolder({ size = 13 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>;
+}
+function IcoLock({ size = 14 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>;
+}
+function IcoUnlock({ size = 14 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>;
+}
+function IcoBell({ size = 14 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>;
+}
+function IcoDownload({ size = 14 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>;
+}
+function IcoKey({ size = 14 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>;
+}
+function IcoWarn({ size = 13 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>;
+}
+function IcoCheck({ size = 13 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>;
+}
+function IcoUsers({ size = 32 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.3 }}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>;
+}
+
+// ── Delete Confirm Modal ───────────────────────────────────────────────────────
+function AdminDeleteConfirmModal({ name, onConfirm, onCancel }: { name: string; onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <>
+      <div onClick={onCancel} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 1200 }} />
+      <div style={{
+        position: "fixed", top: "50%", left: "50%",
+        transform: "translate(-50%, -50%)",
+        width: 360, background: "var(--surface)", borderRadius: 16,
+        boxShadow: "0 24px 60px rgba(0,0,0,0.2)",
+        zIndex: 1201, padding: "28px 28px 22px",
+        animation: "adminModalIn 200ms cubic-bezier(0.16,1,0.3,1)",
+        textAlign: "center",
+      }}>
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 12, color: "var(--red)" }}><IcoTrash size={28} /></div>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text)", marginBottom: 8 }}>מחיקת לקוח</div>
+        <div style={{ fontSize: 14, color: "var(--text-mid)", marginBottom: 24, lineHeight: 1.5 }}>
+          האם למחוק את <strong>{name}</strong>?<br />
+          <span style={{ fontSize: 12, color: "var(--text-dim)" }}>פעולה זו תמחק את כל הנתונים ובלתי הפיכה</span>
+        </div>
+        <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+          <button onClick={onCancel} style={{ padding: "9px 20px", borderRadius: 9, border: "1px solid var(--border)", background: "none", fontFamily: "inherit", fontSize: 14, cursor: "pointer", color: "var(--text-mid)" }}>ביטול</button>
+          <button onClick={onConfirm} style={{ padding: "9px 20px", borderRadius: 9, border: "none", background: "var(--red)", color: "#fff", fontFamily: "inherit", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>מחק</button>
+        </div>
+      </div>
+      <style>{`@keyframes adminModalIn { from { transform: translate(-50%,-48%) scale(0.96); opacity:0; } to { transform: translate(-50%,-50%) scale(1); opacity:1; } }`}</style>
+    </>
+  );
+}
+
+// ── Sidebar icons ─────────────────────────────────────────────────────────────
+function IconUsers() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+      <circle cx="9" cy="7" r="4"/>
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+      <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+    </svg>
+  );
+}
+function IconFunnel() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
+    </svg>
+  );
+}
+function IconTag() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+      <line x1="7" y1="7" x2="7.01" y2="7"/>
+    </svg>
+  );
+}
+function IconLogout() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+      <polyline points="16 17 21 12 16 7"/>
+      <line x1="21" y1="12" x2="9" y2="12"/>
+    </svg>
+  );
+}
+
+// ── Admin Sidebar ─────────────────────────────────────────────────────────────
+const ADMIN_STYLES = `
+  @media (max-width: 900px) {
+    .admin-sidebar {
+      position: fixed !important;
+      top: 0; right: -220px; bottom: 0;
+      width: 220px !important;
+      z-index: 300;
+      transition: right 0.25s ease;
+    }
+    .admin-sidebar.admin-sidebar-open {
+      right: 0 !important;
+      box-shadow: -4px 0 24px rgba(0,0,0,0.35) !important;
+    }
+    .admin-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.45);
+      z-index: 299;
+    }
+    .admin-overlay.admin-overlay-open { display: block; }
+    .admin-hamburger { display: flex !important; }
+    .admin-main { padding: 16px !important; }
+    .admin-close-btn { display: flex !important; }
+  }
+  @media (min-width: 901px) {
+    .admin-hamburger { display: none !important; }
+    .admin-overlay { display: none !important; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .admin-sidebar { transition: none !important; }
+  }
+`;
+
+function AdminSidebar({ mainView, setMainView, onLogout, isOpen, onClose }: {
+  mainView: "clients" | "leads" | "categories";
+  setMainView: (v: "clients" | "leads" | "categories") => void;
+  onLogout: () => void;
+  isOpen: boolean;
+  onClose: () => void;
+}) {
+  const [adminEmail, setAdminEmail] = useState("");
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      setAdminEmail(data.user?.email || "");
+    });
+  }, []);
+  const initials = adminEmail ? adminEmail[0].toUpperCase() : "א";
+  const displayName = adminEmail ? adminEmail.split("@")[0] : "מנהל";
+
+  const navItems = [
+    { id: "clients" as const, label: "לקוחות", icon: <IconUsers /> },
+    { id: "leads" as const, label: "לידים", icon: <IconFunnel /> },
+    { id: "categories" as const, label: "קטגוריות", icon: <IconTag /> },
+  ];
+
+  return (
+    <div className={`admin-sidebar${isOpen ? " admin-sidebar-open" : ""}`} style={{
+      width: 220, minHeight: "100vh", flexShrink: 0,
+      background: "linear-gradient(180deg, #0d2218 0%, #1e4d35 100%)",
+      display: "flex", flexDirection: "column",
+      position: "sticky", top: 0, alignSelf: "flex-start", height: "100vh",
+    }}>
+      {/* Logo + close button */}
+      <div style={{ padding: "28px 24px 20px", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div>
+          <div style={{ fontFamily: "'Frank Ruhl Libre', serif", fontWeight: 700, fontSize: 26, color: "#fff", letterSpacing: "-0.02em" }}>מאזן</div>
+          <div style={{ fontSize: 12, color: "rgba(255,255,255,0.65)", marginTop: 4 }}>פאנל ניהול</div>
+        </div>
+        <button onClick={onClose} aria-label="סגור תפריט" style={{
+          background: "none", border: "none", color: "rgba(255,255,255,0.5)", cursor: "pointer",
+          fontSize: 20, lineHeight: 1, padding: "4px 8px", borderRadius: 6,
+          display: "none",
+        }} className="admin-close-btn">✕</button>
+      </div>
+
+      {/* Divider */}
+      <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "0 16px 12px" }} />
+
+      {/* Nav */}
+      <nav style={{ flex: 1, padding: "4px 10px" }}>
+        {navItems.map(item => {
+          const active = mainView === item.id;
+          return (
+            <button
+              key={item.id}
+              onClick={() => setMainView(item.id)}
+              style={{
+                width: "100%", display: "flex", alignItems: "center", gap: 10,
+                padding: "10px 14px", borderRadius: 10, border: "none", cursor: "pointer",
+                background: active ? "rgba(255,255,255,0.12)" : "transparent",
+                color: "#fff",
+                fontFamily: "inherit", fontSize: 15, fontWeight: active ? 600 : 400,
+                textAlign: "right", marginBottom: 2,
+                borderRight: active ? "3px solid #52b788" : "3px solid transparent",
+                transition: "background 0.15s, color 0.15s",
+              }}
+              onMouseEnter={e => { if (!active) (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.07)"; }}
+              onMouseLeave={e => { if (!active) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+            >
+              {item.icon}
+              {item.label}
+            </button>
+          );
+        })}
+      </nav>
+
+      {/* Divider */}
+      <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "0 16px 16px" }} />
+
+      {/* Profile + Logout */}
+      <div style={{ padding: "0 10px 20px", display: "flex", flexDirection: "column", gap: 6 }}>
+        {/* Profile card */}
+        <div style={{
+          display: "flex", alignItems: "center", gap: 10,
+          padding: "10px 12px", borderRadius: 10,
+          background: "rgba(255,255,255,0.06)",
+        }}>
+          <div style={{
+            width: 34, height: 34, borderRadius: "50%", flexShrink: 0,
+            background: "linear-gradient(135deg, #52b788, #2d6a4f)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontFamily: "'Frank Ruhl Libre', serif", fontSize: 16, fontWeight: 700, color: "#fff",
+          }}>
+            {initials}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {displayName}
+            </div>
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.38)", marginTop: 1 }}>מנהל</div>
+          </div>
+        </div>
+
+        {/* Logout */}
+        <button
+          onClick={onLogout}
+          style={{
+            width: "100%", display: "flex", alignItems: "center", gap: 10,
+            padding: "9px 12px", borderRadius: 10, border: "none", cursor: "pointer",
+            background: "transparent", color: "rgba(255,255,255,0.42)",
+            fontFamily: "inherit", fontSize: 13, fontWeight: 400, textAlign: "right",
+            transition: "background 0.15s, color 0.15s",
+          }}
+          onMouseEnter={e => { const el = e.currentTarget as HTMLButtonElement; el.style.background = "rgba(255,255,255,0.07)"; el.style.color = "rgba(255,255,255,0.75)"; }}
+          onMouseLeave={e => { const el = e.currentTarget as HTMLButtonElement; el.style.background = "transparent"; el.style.color = "rgba(255,255,255,0.42)"; }}
+        >
+          <IconLogout />
+          יציאה
+        </button>
+      </div>
+    </div>
+  );
+}
 
 const HEB_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
 function monthKeyToLabel(mk) {
@@ -55,7 +326,7 @@ function ReminderEmailBtn({ client }: { client: any }) {
       onClick={sendReminder}
       disabled={status === "sending" || status === "sent"}
     >
-      {status === "sending" ? "שולח..." : status === "sent" ? "✅ נשלח!" : status === "error" ? "❌ שגיאה" : "📨 שלח תזכורת"}
+      {status === "sending" ? "שולח..." : status === "sent" ? "נשלח" : status === "error" ? "שגיאה" : <span style={{ display: "flex", alignItems: "center", gap: 5 }}><IcoBell /> שלח תזכורת</span>}
     </Btn>
   );
 }
@@ -96,18 +367,18 @@ function WelcomeEmailCard({ name, last_name, username, password, email, clientId
 
   return (
     <div style={{ background: "var(--surface2)", borderRadius: 12, padding: 16, border: "1px solid var(--border)" }}>
-      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 10 }}>📧 שלח הוראות כניסה במייל</div>
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 10, display:"flex", alignItems:"center", gap:7 }}><IcoMail size={15} /> שלח הוראות כניסה במייל</div>
       {!email ? (
         <div style={{ fontSize: 15, color: "var(--text-dim)" }}>לא הוזנה כתובת מייל — הוסף בפרטי הלקוח ושלח משם</div>
       ) : notConfigured ? (
-        <div style={{ fontSize: 14, color: "var(--gold)" }}>⚠️ חסר <code>REACT_APP_EMAILJS_WELCOME_TEMPLATE_ID</code> ב-.env</div>
+        <div style={{ fontSize: 14, color: "var(--gold)", display:"flex", alignItems:"center", gap:6 }}><IcoWarn size={13} /> חסר <code>REACT_APP_EMAILJS_WELCOME_TEMPLATE_ID</code> ב-.env</div>
       ) : (
         <>
           <div style={{ fontSize: 15, color: "var(--text-dim)", marginBottom: 14 }}>
             ישלח אל: <strong style={{ color: "var(--text)" }}>{email}</strong>
           </div>
           <Btn onClick={sendEmail} disabled={status === "sending" || status === "sent"}>
-            {status === "idle" ? "📧 שלח מייל" : status === "sending" ? "שולח..." : status === "sent" ? "✅ נשלח!" : "❌ שגיאה — נסה שוב"}
+            {status === "idle" ? <><IcoMail size={14} /> שלח מייל</> : status === "sending" ? "שולח..." : status === "sent" ? <><IcoCheck size={13} /> נשלח!</> : "שגיאה — נסה שוב"}
           </Btn>
           {status === "error" && (
             <div style={{ fontSize: 14, color: "var(--red)", marginTop: 8 }}>שגיאה — בדוק שהתבנית ב-EmailJS מוגדרת נכון</div>
@@ -121,14 +392,20 @@ function WelcomeEmailCard({ name, last_name, username, password, email, clientId
 export default function AdminPanel({ onLogout }) {
   const [clients, setClients] = useState([]);
   const [subCounts, setSubCounts] = useState<Record<number, number>>({});
+  const [readyMap, setReadyMap] = useState<Record<string, boolean>>({});
   const [clientFilter, setClientFilter] = useState<"all"|"active"|"waiting"|"collecting"|"blocked">("all");
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<"created"|"last_active"|"name">("created");
   const [sortAsc, setSortAsc] = useState(false);
+  const [mainView, setMainView] = useState<"clients" | "leads" | "categories">("clients");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [view, setView] = useState("list"); // list | new | detail | categories
-  const [visitedAdminViews, setVisitedAdminViews] = useState<Set<string>>(() => new Set(["list"]));
+  const [visitedAdminViews, setVisitedAdminViews] = useState<Set<string>>(() => new Set(["list", "leads"]));
+  const [pendingLeadId, setPendingLeadId] = useState<string | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
   const [selected, setSelected] = useState(null);
   const [form, setForm] = useState({ name: "", last_name: "", username: "", password: "", email: "", phone: "" });
+  const [showPass, setShowPass] = useState(false);
   const [justCreated, setJustCreated] = useState<{id:number;name:string;last_name:string;username:string;password:string;email:string}|null>(null);
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(true);
@@ -137,16 +414,45 @@ export default function AdminPanel({ onLogout }) {
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 10000);
-      const [{ data, error }, { data: allSubs }] = await Promise.all([
+      const [{ data, error }, { data: allSubs }, { data: allDocs }, { data: allQuestionnaire }] = await Promise.all([
         supabase.from("clients").select("*").order("created_at", { ascending: false }).abortSignal(controller.signal),
         supabase.from("submissions").select("client_id"),
+        supabase.from("client_documents").select("client_id, category, marked_done"),
+        supabase.from("client_questionnaire").select("client_id, spouse_index, done"),
       ]);
       clearTimeout(timer);
       if (error) console.error("loadClients error:", error.message);
-      setClients(data || []);
-      const counts: Record<number, number> = {};
+      const clientList = data || [];
+      setClients(clientList);
+
+      const counts: Record<string, number> = {};
       (allSubs || []).forEach((s: any) => { counts[s.client_id] = (counts[s.client_id] || 0) + 1; });
       setSubCounts(counts);
+
+      // Compute readyForPortfolio per client:
+      // all required_docs must be marked_done, and questionnaire (if required) must be done
+      const ready: Record<string, boolean> = {};
+      for (const client of clientList) {
+        const reqDocs: string[] = client.required_docs || [];
+        if (reqDocs.length === 0) { ready[client.id] = false; continue; }
+        const clientDocs = (allDocs || []).filter((d: any) => d.client_id === client.id);
+        const clientQ = (allQuestionnaire || []).filter((q: any) => q.client_id === client.id);
+        let allComplete = true;
+        for (const docId of reqDocs) {
+          if (docId === "questionnaire") {
+            const spousesRequired = client.questionnaire_spouses || 1;
+            for (let i = 1; i <= spousesRequired; i++) {
+              if (!clientQ.find((q: any) => q.spouse_index === i && q.done)) { allComplete = false; break; }
+            }
+          } else {
+            const category = DOC_ID_MAP[docId] || docId;
+            if (!clientDocs.find((d: any) => d.category === category && d.marked_done)) { allComplete = false; }
+          }
+          if (!allComplete) break;
+        }
+        ready[client.id] = allComplete;
+      }
+      setReadyMap(ready);
     } catch(err: any) {
       if (err?.name !== "AbortError") console.error("loadClients error:", err);
     } finally {
@@ -164,7 +470,7 @@ export default function AdminPanel({ onLogout }) {
       .insert([{ name: form.name, last_name: form.last_name || null, username: form.username, email: form.email || null, phone: form.phone || null, created_at: new Date().toISOString() }])
       .select("id")
       .single();
-    if (error) { setMsg("❌ " + (error.message.includes("unique") ? "שם משתמש תפוס" : error.message)); return; }
+    if (error) { setMsg("err: " + (error.message.includes("unique") ? "שם משתמש תפוס" : error.message)); return; }
 
     // 2. Create Supabase Auth user and link auth_id via Edge Function
     const { data: authResult, error: fnErr } = await supabase.functions.invoke("manage-auth", {
@@ -174,14 +480,25 @@ export default function AdminPanel({ onLogout }) {
     setForm({ name: "", last_name: "", username: "", password: "", email: "", phone: "" });
     loadClients();
     if (fnErr || !authResult?.ok) {
-      setMsg("⚠️ לקוח נוצר אך חשבון Auth נכשל: " + (authResult?.error || fnErr?.message || "שגיאה"));
+      setMsg("warn: לקוח נוצר אך חשבון Auth נכשל: " + (authResult?.error || fnErr?.message || "שגיאה"));
     } else {
       setJustCreated(saved);
+      // If this client was created from a lead, mark the lead as converted
+      if (pendingLeadId) {
+        await supabase.from("leads").update({ status: "converted", client_id: (newClient as any).id }).eq("id", pendingLeadId);
+        setPendingLeadId(null);
+      }
     }
   };
 
-  const deleteClient = async (id, name) => {
-    if (!window.confirm(`למחוק את ${name}?`)) return;
+  const deleteClient = (id: string, name: string) => {
+    setDeleteConfirm({ id, name });
+  };
+
+  const confirmDeleteClient = async () => {
+    if (!deleteConfirm) return;
+    const { id } = deleteConfirm;
+    setDeleteConfirm(null);
     // Delete Supabase Auth user first (so DB cascade doesn't orphan auth.users)
     await supabase.functions.invoke("manage-auth", { body: { action: "delete", clientId: id } });
     await supabase.from("submissions").delete().eq("client_id", id);
@@ -191,38 +508,40 @@ export default function AdminPanel({ onLogout }) {
   };
 
   const migrateAllClients = async () => {
-    setMsg("⏳ מגיר לקוחות...");
+    setMsg("מגיר לקוחות...");
     const supabaseUrl = process.env.REACT_APP_SUPABASE_URL || "";
     const anonKey = process.env.REACT_APP_SUPABASE_ANON_KEY || "";
     const url = `${supabaseUrl}/functions/v1/manage-auth`;
-    if (!supabaseUrl || !anonKey) { setMsg("❌ חסרים פרטי Supabase ב-.env"); return; }
+    if (!supabaseUrl || !anonKey) { setMsg("err: חסרים פרטי Supabase ב-.env"); return; }
     const resp = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${anonKey}` },
       body: JSON.stringify({ action: "migrate_all" }),
     });
     const data = await resp.json();
-    if (!resp.ok) { setMsg("❌ " + (data?.error || "שגיאה")); return; }
-    setMsg(`✅ הגירה הושלמה — ${data.migrated} לקוחות עודכנו`);
+    if (!resp.ok) { setMsg("err: " + (data?.error || "שגיאה")); return; }
+    setMsg(`ok: הגירה הושלמה — ${data.migrated} לקוחות עודכנו`);
     loadClients();
   };
 
   const openClient = async (client) => {
-    const [{ data: subs }, { data: maps }, { data: freshClient }] = await Promise.all([
+    const [{ data: subs }, { data: maps }, { data: freshClient }, { data: estimates }] = await Promise.all([
       supabase.from("submissions").select("*").eq("client_id", client.id).order("created_at", { ascending: false }),
       supabase.from("remembered_mappings").select("*").eq("client_id", client.id),
-      supabase.from("clients").select("required_docs,questionnaire_spouses,is_blocked").eq("id", client.id).maybeSingle(),
+      supabase.from("clients").select("required_docs,questionnaire_spouses,is_blocked,submission_notes,no_payslip_reason_s1,no_payslip_reason_s2").eq("id", client.id).maybeSingle(),
+      supabase.from("category_estimates").select("*").eq("client_id", client.id).order("created_at", { ascending: true }),
     ]);
-    setSelected({ ...client, required_docs: freshClient?.required_docs ?? client.required_docs, questionnaire_spouses: freshClient?.questionnaire_spouses ?? client.questionnaire_spouses, is_blocked: freshClient?.is_blocked ?? client.is_blocked, submissions: subs || [], mappings: maps || [] });
+    setSelected({ ...client, required_docs: freshClient?.required_docs ?? client.required_docs, questionnaire_spouses: freshClient?.questionnaire_spouses ?? client.questionnaire_spouses, is_blocked: freshClient?.is_blocked ?? client.is_blocked, submission_notes: freshClient?.submission_notes ?? null, no_payslip_reason_s1: freshClient?.no_payslip_reason_s1 ?? null, no_payslip_reason_s2: freshClient?.no_payslip_reason_s2 ?? null, submissions: subs || [], mappings: maps || [], estimates: estimates || [] });
     setView("detail");
   };
 
   const openPortfolio = async (client) => {
-    const [{ data: subs }, { data: maps }] = await Promise.all([
+    const [{ data: subs }, { data: maps }, { data: estimates }] = await Promise.all([
       supabase.from("submissions").select("*").eq("client_id", client.id).order("created_at", { ascending: false }),
-      supabase.from("remembered_mappings").select("*").eq("client_id", client.id)
+      supabase.from("remembered_mappings").select("*").eq("client_id", client.id),
+      supabase.from("category_estimates").select("*").eq("client_id", client.id).order("created_at", { ascending: true }),
     ]);
-    setSelected({ ...client, submissions: subs || [], mappings: maps || [], startTab: "portfolio" });
+    setSelected({ ...client, submissions: subs || [], mappings: maps || [], estimates: estimates || [], startTab: "portfolio" });
     setView("detail");
   };
 
@@ -231,38 +550,92 @@ export default function AdminPanel({ onLogout }) {
     return true;
   });
 
-  return (
-    <div style={{ background: "var(--bg)", minHeight: "100vh", color: "var(--text)" }}>
-      {/* Header */}
-      <div style={{ position: "sticky", top: 0, zIndex: 100, background: "var(--surface)", borderBottom: "1px solid var(--border)", padding: "16px 28px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div style={{ display:"flex", alignItems:"center", justifyContent:"center", width:38, height:38, background:"var(--green-mid)", borderRadius:10 }}>
-            <svg width="20" height="20" viewBox="0 0 32 32" fill="none"><path d="M6 24 L12 16 L18 20 L26 10" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M22 10 H26 V14" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-          </div>
-          <div>
-            <div style={{ fontFamily:"'Frank Ruhl Libre', serif", fontWeight:600, fontSize: 20, color:"var(--green-deep)", lineHeight:1 }}>מאזן</div>
-            <div style={{ fontSize: 14, color:"var(--text-dim)", marginTop:2 }}>פאנל ניהול — אלון</div>
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          {view !== "list" && <Btn variant="ghost" size="sm" onClick={() => { setView("list"); setMsg(""); setSelected(null); setJustCreated(null); }}>← חזור</Btn>}
-          {view === "list" && <Btn variant="ghost" size="sm" onClick={() => { setView("categories"); setVisitedAdminViews(prev => { const next = new Set(prev); next.add("categories"); return next; }); }}>🏷️ קטגוריות</Btn>}
-          <Btn variant="ghost" size="sm" onClick={onLogout}>יציאה</Btn>
-        </div>
-      </div>
+  const handleCreateClientFromLead = (lead: { name: string; phone: string; leadId: string }) => {
+    setPendingLeadId(lead.leadId);
+    setForm(prev => ({ ...prev, name: lead.name, phone: lead.phone }));
+    setMainView("clients");
+    setView("new");
+    setMsg("");
+    setJustCreated(null);
+  };
 
-      <div style={{ maxWidth: 960, margin: "0 auto", padding: "28px 20px" }}>
+  return (
+    <>
+    <style>{ADMIN_STYLES}</style>
+    <div style={{ display: "flex", minHeight: "100vh", background: "var(--bg)", color: "var(--text)" }}>
+      {/* Sidebar */}
+      <AdminSidebar
+        mainView={mainView}
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        setMainView={(v) => {
+          setMainView(v);
+          setSidebarOpen(false);
+          if (v === "clients") { setView("list"); setMsg(""); setSelected(null); setJustCreated(null); }
+          setVisitedAdminViews(prev => { const next = new Set(prev); next.add(v); return next; });
+        }}
+        onLogout={onLogout}
+      />
+
+      {/* Overlay (mobile) */}
+      <div
+        className={`admin-overlay${sidebarOpen ? " admin-overlay-open" : ""}`}
+        onClick={() => setSidebarOpen(false)}
+        aria-hidden="true"
+      />
+
+      {/* Main content */}
+      <div className="admin-main" style={{ flex: 1, minWidth: 0, padding: "32px 32px" }}>
+        {/* Hamburger (mobile only) */}
+        <button
+          className="admin-hamburger"
+          onClick={() => setSidebarOpen(true)}
+          aria-label="פתח תפריט"
+          style={{
+            display: "none", alignItems: "center", gap: 8,
+            marginBottom: 16, padding: "8px 12px", borderRadius: 8,
+            border: "1px solid var(--border)", background: "var(--surface2)",
+            cursor: "pointer", fontFamily: "inherit", fontSize: 14, color: "var(--text)",
+          }}
+        >
+          <span style={{ fontSize: 18, lineHeight: 1 }}>☰</span>
+          תפריט
+        </button>
         {msg && (
-          <div style={{ background: msg.startsWith("✅") ? "rgba(46,204,138,0.1)" : "rgba(247,92,92,0.1)", border: `1px solid ${msg.startsWith("✅") ? "rgba(46,204,138,0.3)" : "rgba(247,92,92,0.3)"}`, borderRadius: 10, padding: "10px 16px", marginBottom: 16, fontSize: 15, color: msg.startsWith("✅") ? "var(--green-soft)" : "var(--red)" }}>
-            {msg}
+          <div style={{ background: msg.startsWith("ok:") ? "rgba(46,204,138,0.1)" : "rgba(247,92,92,0.1)", border: `1px solid ${msg.startsWith("ok:") ? "rgba(46,204,138,0.3)" : "rgba(247,92,92,0.3)"}`, borderRadius: 10, padding: "10px 16px", marginBottom: 16, fontSize: 15, color: msg.startsWith("ok:") ? "var(--green-soft)" : "var(--red)" }}>
+            {msg.replace(/^(ok:|err:|warn:)\s*/, "")}
+          </div>
+        )}
+
+        {/* LEADS */}
+        {visitedAdminViews.has("leads") && (
+          <div style={{ display: mainView === "leads" ? "block" : "none" }}>
+            <LeadsPanel onCreateClient={handleCreateClientFromLead} />
+          </div>
+        )}
+
+        {/* CATEGORIES (lazy mount) */}
+        {visitedAdminViews.has("categories") && (
+          <div style={{ display: mainView === "categories" ? "block" : "none" }}>
+            <CategoryManager />
+          </div>
+        )}
+
+        {/* CLIENTS section */}
+        {mainView === "clients" && (<>
+
+        {/* Back button for sub-views */}
+        {view !== "list" && (
+          <div style={{ marginBottom: 20 }}>
+            <Btn variant="ghost" size="sm" onClick={() => { setView("list"); setMsg(""); setSelected(null); setJustCreated(null); setPendingLeadId(null); }}>← חזור ללקוחות</Btn>
           </div>
         )}
 
         {/* LIST */}
         {view === "list" && (() => {
           const active    = clients.filter(c => c.portfolio_open && !c.is_blocked);
-          const waiting   = clients.filter(c => !c.is_blocked && !c.portfolio_open && (subCounts[c.id] || 0) >= 3);
-          const collecting = clients.filter(c => !c.is_blocked && !c.portfolio_open && (subCounts[c.id] || 0) < 3);
+          const waiting   = clients.filter(c => !c.is_blocked && !c.portfolio_open && c.submitted_at);
+          const collecting = clients.filter(c => !c.is_blocked && !c.portfolio_open && !c.submitted_at);
           const blocked   = clients.filter(c => c.is_blocked);
           const byFilter = clientFilter === "active" ? active : clientFilter === "waiting" ? waiting : clientFilter === "collecting" ? collecting : clientFilter === "blocked" ? blocked : clients;
           const bySearch = search.trim() ? byFilter.filter(c => `${c.name} ${c.username} ${c.last_name || ""}`.toLowerCase().includes(search.trim().toLowerCase())) : byFilter;
@@ -286,9 +659,9 @@ export default function AdminPanel({ onLogout }) {
           return (
             <>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                <div style={{ fontSize: 20, fontWeight: 700 }}>
+                <h1 style={{ fontFamily: "'Frank Ruhl Libre', serif", fontSize: 22, fontWeight: 600, color: "var(--text)", margin: 0, letterSpacing: "-0.01em" }}>
                   לקוחות ({clientFilter === "all" && !search.trim() ? clients.length : `${filteredClients.length} מתוך ${clients.length}`})
-                </div>
+                </h1>
                 <Btn size="sm" onClick={() => { setView("new"); setMsg(""); setJustCreated(null); }}>+ לקוח חדש</Btn>
               </div>
 
@@ -296,8 +669,8 @@ export default function AdminPanel({ onLogout }) {
               {!loading && clients.length > 0 && (
                 <input
                   value={search} onChange={e => setSearch(e.target.value)}
-                  placeholder="🔍 חיפוש לפי שם או שם משתמש..."
-                  style={{ width: "100%", padding: "10px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: 16, fontFamily: "inherit", boxSizing: "border-box", marginBottom: 12, direction: "rtl" }}
+                  placeholder="חיפוש לפי שם או שם משתמש..."
+                  style={{ width: "100%", padding: "10px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: 15, fontFamily: "inherit", boxSizing: "border-box", marginBottom: 12, direction: "rtl" }}
                 />
               )}
 
@@ -321,11 +694,12 @@ export default function AdminPanel({ onLogout }) {
               {!loading && clients.length > 0 && (
                 <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
                   {kpiItems.map(k => (
-                    <button key={k.id} onClick={() => setClientFilter(k.id as any)} style={{
-                      padding: "10px 18px", borderRadius: 12, cursor: "pointer", fontFamily: "inherit",
+                    <button key={k.id} onClick={() => k.count > 0 && setClientFilter(k.id as any)} style={{
+                      padding: "10px 18px", borderRadius: 12, cursor: k.count > 0 ? "pointer" : "default", fontFamily: "inherit",
                       background: clientFilter === k.id ? "var(--surface2)" : "var(--surface)",
                       border: `1px solid ${clientFilter === k.id ? "var(--green-mid)" : "var(--border)"}`,
                       display: "flex", flexDirection: "column", alignItems: "center", gap: 3, minWidth: 76,
+                      opacity: k.id !== "all" && k.count === 0 ? 0.4 : 1,
                     }}>
                       <span style={{ fontSize: 24, fontWeight: 800, color: k.color }}>{k.count}</span>
                       <span style={{ fontSize: 13, color: clientFilter === k.id ? "var(--green-mid)" : "var(--text-dim)" }}>{k.label}</span>
@@ -338,15 +712,15 @@ export default function AdminPanel({ onLogout }) {
                 <div style={{ textAlign: "center", padding: 40, color: "var(--text-dim)" }}>טוען...</div>
               ) : clients.length === 0 ? (
                 <Card style={{ textAlign: "center", padding: "48px 24px" }}>
-                  <div style={{ fontSize: 40, marginBottom: 12 }}>👥</div>
-                  <div style={{ color: "var(--text-dim)" }}>אין לקוחות עדיין</div>
+                  <IcoUsers size={40} />
+                  <div style={{ color: "var(--text-dim)", marginTop: 8 }}>אין לקוחות עדיין</div>
                 </Card>
               ) : filteredClients.length === 0 ? (
                 <Card style={{ textAlign: "center", padding: "32px 24px", color: "var(--text-dim)" }}>אין לקוחות בקטגוריה זו</Card>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   {filteredClients.map(c => (
-                    <ClientRow key={c.id} client={c} subCount={subCounts[c.id] ?? 0} onOpen={openClient} onDelete={deleteClient} />
+                    <ClientRow key={c.id} client={c} subCount={subCounts[c.id] ?? 0} readyForPortfolio={readyMap[c.id] ?? false} onOpen={openClient} onDelete={deleteClient} />
                   ))}
                 </div>
               )}
@@ -357,11 +731,25 @@ export default function AdminPanel({ onLogout }) {
         {/* NEW CLIENT */}
         {view === "new" && !justCreated && (
           <Card style={{ maxWidth: 440 }}>
-            <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 20 }}>➕ לקוח חדש</div>
+            <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 20 }}>לקוח חדש</div>
             <Input label="שם פרטי" value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} placeholder="ישראל" />
             <Input label="שם משפחה" value={form.last_name} onChange={e => setForm(p => ({ ...p, last_name: e.target.value }))} placeholder="ישראלי" />
             <Input label="שם משתמש" value={form.username} onChange={e => setForm(p => ({ ...p, username: e.target.value.replace(/\s/g, "").toLowerCase() }))} placeholder="israel123" />
-            <Input label="סיסמה" value={form.password} onChange={e => setForm(p => ({ ...p, password: e.target.value }))} placeholder="לפחות 6 תווים" />
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 15, color: "var(--text-mid)", marginBottom: 6, fontWeight: 600 }}>סיסמה</div>
+              <div style={{ position: "relative" }}>
+                <input
+                  type={showPass ? "text" : "password"}
+                  value={form.password}
+                  onChange={e => setForm(p => ({ ...p, password: e.target.value }))}
+                  placeholder="לפחות 6 תווים"
+                  style={{ width: "100%", background: "var(--surface2)", border: "1.5px solid var(--border)", borderRadius: 10, padding: "11px 14px", paddingLeft: 40, color: "var(--text)", fontFamily: "'Heebo', sans-serif", fontSize: 17, direction: "rtl", boxSizing: "border-box", outline: "none" }}
+                />
+                <button type="button" tabIndex={-1} onClick={() => setShowPass(p => !p)} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", display: "flex", alignItems: "center", padding: 4 }}>
+                  {showPass ? <IcoEyeOff size={18} /> : <IcoEye size={18} />}
+                </button>
+              </div>
+            </div>
             <Input label="מייל (לשליחת הוראות כניסה)" type="email" value={form.email} onChange={e => setForm(p => ({ ...p, email: e.target.value }))} placeholder="israel@gmail.com" />
             <Input label="טלפון" type="tel" value={form.phone} onChange={e => setForm(p => ({ ...p, phone: e.target.value }))} placeholder="050-0000000" />
             {msg && <div style={{ color: "var(--red)", fontSize: 14, marginBottom: 12 }}>{msg}</div>}
@@ -376,7 +764,7 @@ export default function AdminPanel({ onLogout }) {
         {view === "new" && justCreated && (
           <div style={{ maxWidth: 480 }}>
             <Card style={{ textAlign: "center", padding: "24px 24px 20px", marginBottom: 16 }}>
-              <div style={{ fontSize: 44, marginBottom: 10 }}>✅</div>
+              <div style={{ display: "flex", justifyContent: "center", marginBottom: 10, color: "var(--green-mid)" }}><IcoCheck size={40} /></div>
               <div style={{ fontWeight: 700, fontSize: 19, marginBottom: 4 }}>הלקוח נוצר בהצלחה!</div>
               <div style={{ fontSize: 15, color: "var(--text-dim)" }}>{justCreated.name} · @{justCreated.username}</div>
             </Card>
@@ -390,72 +778,92 @@ export default function AdminPanel({ onLogout }) {
 
         {/* CLIENT DETAIL */}
         {view === "detail" && selected && (
-          <ClientDetail client={selected} onRefresh={async () => { await loadClients(); const fresh = clients.find(c => c.id === selected.id) || selected; await openClient(fresh); }} />
+          <ClientDetail client={selected} readyForPortfolio={readyMap[selected.id] ?? false} onDelete={deleteClient} onRefresh={async () => { await loadClients(); const fresh = clients.find(c => c.id === selected.id) || selected; await openClient(fresh); }} />
         )}
-
-        {/* CATEGORY MANAGER (lazy mount) */}
-        {visitedAdminViews.has("categories") && (
-          <div style={{ display: view === "categories" ? "block" : "none" }}>
-            <CategoryManager />
-          </div>
-        )}
+        </>)}
       </div>
     </div>
+
+    {deleteConfirm && (
+      <AdminDeleteConfirmModal
+        name={deleteConfirm.name}
+        onConfirm={confirmDeleteClient}
+        onCancel={() => setDeleteConfirm(null)}
+      />
+    )}
+    <style>{`
+      .client-row { transition: box-shadow 0.18s, transform 0.18s; cursor: pointer; }
+      .client-row:hover { box-shadow: 0 6px 20px rgba(0,0,0,0.08) !important; transform: translateY(-1px); }
+      .client-row-delete { opacity: 0.25; transition: opacity 0.18s; }
+      .client-row:hover .client-row-delete { opacity: 1; }
+    `}</style>
+    </>
   );
 }
 
 // ── Client row in list ────────────────────────────────────────────────────────
-function ClientRow({ client, subCount, onOpen, onDelete }) {
-  const REQUIRED = 3;
-  const done = subCount >= REQUIRED;
+function ClientRow({ client, subCount, readyForPortfolio, onOpen, onDelete }) {
   const isBlocked = client.is_blocked || false;
 
-  // 5-day inactivity warning
   const daysSinceWelcome = client.welcome_sent_at ? Math.floor((Date.now() - new Date(client.welcome_sent_at).getTime()) / 86400000) : null;
   const lastActivity = client.last_active ? new Date(client.last_active) : null;
   const daysSinceActivity = lastActivity ? Math.floor((Date.now() - lastActivity.getTime()) / 86400000) : 999;
   const showInactiveWarning = !isBlocked && client.welcome_sent_at && daysSinceWelcome >= INACTIVITY_DAYS && daysSinceActivity >= INACTIVITY_DAYS;
 
   return (
+    <div className="client-row" onClick={() => onOpen(client)} style={{ marginBottom: 2 }}>
     <Card style={{ display: "flex", alignItems: "center", gap: 14, padding: "16px 20px", flexWrap: "wrap", borderRight: showInactiveWarning ? "3px solid var(--red)" : undefined }}>
       <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 700, display:"flex", alignItems:"center", gap:8 }}>
+        <div style={{ fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
           {client.name}
-          {showInactiveWarning && <span style={{ fontSize: 13, color:"var(--red)", background:"rgba(192,57,43,0.1)", borderRadius:20, padding:"2px 8px", fontWeight:600 }}>⚠️ לא פעיל {daysSinceActivity >= 999 ? `${daysSinceWelcome}+` : daysSinceActivity} ימים</span>}
-        </div>
-        <div style={{ fontSize: 14, color: "var(--text-dim)", display:"flex", flexWrap:"wrap", gap:"0 12px" }}>
-          {client.last_active && <span style={{ color: "var(--text-mid)" }}>פעיל {formatRelativeTime(client.last_active)}</span>}
-          {client.welcome_sent_at
-            ? <span style={{ color: "var(--green-soft)" }}>✉️ מייל נשלח {new Date(client.welcome_sent_at).toLocaleDateString("he-IL")}</span>
-            : client.email ? <span style={{ color: "var(--text-dim)" }}>✉️ טרם נשלח</span> : null}
-          {!isBlocked && !client.portfolio_open && (
-            <span style={{ color: done ? "var(--green-soft)" : "var(--gold)" }}>
-              {done ? "✅ 3/3 חודשים" : `⏳ ${subCount}/3 חודשים`}
+          {showInactiveWarning && (
+            <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--red)", background: "rgba(192,57,43,0.1)", borderRadius: 20, padding: "2px 8px", fontWeight: 600 }}>
+              <IcoWarn size={11} /> לא פעיל {daysSinceActivity >= 999 ? `${daysSinceWelcome}+` : daysSinceActivity} ימים
             </span>
           )}
-          {!isBlocked && client.portfolio_open && <span style={{ color: "var(--green-mid)" }}>📁 תיק פעיל</span>}
-          {!isBlocked && !client.portfolio_open && done && <span style={{ color: "var(--gold)" }}>ממתין לפתיחת תיק</span>}
+        </div>
+        <div style={{ fontSize: 13, color: "var(--text-dim)", display: "flex", flexWrap: "wrap", gap: "0 14px", marginTop: 3 }}>
+          {client.username && <span style={{ color: "var(--text-dim)", fontWeight: 500 }}>@{client.username}</span>}
+          {client.last_active && <span style={{ color: "var(--text-mid)", display: "flex", alignItems: "center", gap: 4 }}><IcoClock /> פעיל {formatRelativeTime(client.last_active)}</span>}
+          {client.welcome_sent_at
+            ? <span style={{ color: "var(--green-soft)", display: "flex", alignItems: "center", gap: 4 }}><IcoMail /> מייל נשלח {new Date(client.welcome_sent_at).toLocaleDateString("he-IL")}</span>
+            : client.email ? <span style={{ display: "flex", alignItems: "center", gap: 4 }}><IcoMail /> טרם נשלח</span> : null}
+          {!isBlocked && !client.portfolio_open && (
+            <span style={{ color: "var(--text-dim)", display: "flex", alignItems: "center", gap: 4 }}>
+              <IcoClock size={12} /> {subCount} הגשות
+            </span>
+          )}
         </div>
       </div>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+      <div onClick={e => e.stopPropagation()} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        {/* תיק פעיל — מוצג רק כשיש תיק כלכלי */}
+        {client.portfolio_open && (
+          <span style={{ padding: "4px 12px", borderRadius: 20, fontSize: 13, fontWeight: 600, background: "rgba(46,125,82,0.12)", color: "var(--green-mid)", display: "flex", alignItems: "center", gap: 4 }}>
+            <IcoFolder size={13} /> תיק פעיל
+          </span>
+        )}
         <span style={{
-          padding: "5px 14px", borderRadius: 20, fontSize: 14, fontWeight: 700,
+          padding: "4px 12px", borderRadius: 20, fontSize: 13, fontWeight: 600,
           background: isBlocked ? "rgba(192,57,43,0.12)" : "rgba(46,125,82,0.12)",
           color: isBlocked ? "var(--red)" : "var(--green-mid)",
+          display: "flex", alignItems: "center", gap: 4,
         }}>
-          {isBlocked ? "🔒 חסום" : "✅ פעיל"}
+          {isBlocked ? <><IcoLock size={12} /> חסום</> : <><IcoCheck size={12} /> פעיל</>}
         </span>
-        <Btn variant="ghost" size="sm" onClick={() => onOpen(client)}>👁 פרטים</Btn>
+        <Btn variant="ghost" size="sm" onClick={() => onOpen(client)} style={{ display: "flex", alignItems: "center", gap: 5 }}><IcoEye /> פרטים</Btn>
         {!client.portfolio_open && <ReminderEmailBtn client={client} />}
-        {done && !client.portfolio_open && !isBlocked && (
+        {client.submitted_at && !client.portfolio_open && !isBlocked && (
           <Btn variant="success" size="sm" onClick={async () => {
             await supabase.from("clients").update({ portfolio_open: true }).eq("id", client.id);
             onOpen(client);
-          }}>📁 פתח תיק כלכלי</Btn>
+          }} style={{ display: "flex", alignItems: "center", gap: 5 }}><IcoFolder /> פתח תיק כלכלי</Btn>
         )}
-        <Btn variant="danger" size="sm" onClick={() => onDelete(client.id, client.name)}>מחק</Btn>
+        <span className="client-row-delete">
+          <Btn variant="danger" size="sm" onClick={() => onDelete(client.id, client.name)} style={{ display: "flex", alignItems: "center", gap: 5 }}><IcoTrash /> מחק</Btn>
+        </span>
       </div>
     </Card>
+    </div>
   );
 }
 
@@ -487,12 +895,12 @@ function AllFilesSection({ clientId }) {
   // Build flat list of all downloadable items
   const items = [
     ...payslips.filter(p => p.path).map(p => ({
-      key: `p_${p.id}`, label: `💼 ${monthKeyToLabel(p.month_key) || p.label || "תלוש"}`,
+      key: `p_${p.id}`, label: `${monthKeyToLabel(p.month_key) || p.label || "תלוש"}`,
       sub: p.filename, path: p.path, filename: p.filename,
     })),
     ...docs.flatMap(doc =>
       (doc.files || []).filter(f => f.path).map((f, i) => ({
-        key: `d_${doc.id}_${i}`, label: `📎 ${doc.label}`,
+        key: `d_${doc.id}_${i}`, label: `${doc.label}`,
         sub: f.filename, path: f.path, filename: f.filename,
         extra: doc.extra_data,
       }))
@@ -519,14 +927,14 @@ function AllFilesSection({ clientId }) {
   return (
     <div style={{ marginBottom: 24 }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
-        <div style={{ fontWeight: 700 }}>📁 קבצים שהועלו</div>
+        <div style={{ fontWeight: 700, display:"flex", alignItems:"center", gap:7 }}><IcoFolder size={15} /> קבצים שהועלו</div>
         <div style={{ display:"flex", gap:8 }}>
           <button onClick={toggleAll} style={{ background:"none", border:"1px solid var(--border)", borderRadius:7, padding:"5px 12px", fontSize: 14, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}>
             {selected.size === items.length ? "בטל הכל" : "בחר הכל"}
           </button>
           {selected.size > 0 && (
             <Btn size="sm" onClick={downloadSelected} disabled={bulkLoading}>
-              {bulkLoading ? "מוריד..." : `⬇ הורד נבחרים (${selected.size})`}
+              {bulkLoading ? "מוריד..." : <><IcoDownload size={14} /> הורד נבחרים ({selected.size})</>}
             </Btn>
           )}
         </div>
@@ -534,11 +942,11 @@ function AllFilesSection({ clientId }) {
       {items.map(item => (
         <div key={item.key} onClick={() => toggleItem(item.key)} style={{ display:"flex", alignItems:"center", gap:12, padding:"10px 14px", marginBottom:6, background: selected.has(item.key) ? "rgba(46,183,124,0.06)" : "var(--surface2)", border:`1px solid ${selected.has(item.key) ? "rgba(46,183,124,0.3)" : "var(--border)"}`, borderRadius:10, cursor:"pointer" }}>
           <input type="checkbox" checked={selected.has(item.key)} onChange={() => {}} style={{ accentColor:"var(--green-mid)", width:16, height:16, flexShrink:0 }} />
-          <div style={{ flex:1 }}>
+          <div style={{ flex:1, minWidth: 0 }}>
             <div style={{ fontSize: 15, fontWeight:600 }}>{item.label}</div>
-            <div style={{ fontSize: 13, color:"var(--text-dim)" }}>{item.sub}</div>
+            <div style={{ fontSize: 13, color:"var(--text-dim)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }} title={item.sub}>{item.sub}</div>
           </div>
-          <Btn size="sm" variant="secondary" onClick={e => { e.stopPropagation(); downloadStorageFile(item.path, item.filename); }}>⬇ הורד</Btn>
+          <Btn size="sm" variant="secondary" onClick={e => { e.stopPropagation(); downloadStorageFile(item.path, item.filename); }}><IcoDownload size={13} /> הורד</Btn>
         </div>
       ))}
     </div>
@@ -555,11 +963,11 @@ function PayslipsSection({ clientId }) {
   if (!payslips.length) return null;
   return (
     <div style={{ marginBottom: 16 }}>
-      <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 15, color:"var(--text-mid)" }}>💼 תלושים ישנים (ללא קובץ)</div>
+      <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 15, color:"var(--text-mid)" }}>תלושים ישנים (ללא קובץ)</div>
       {payslips.map(p => (
         <div key={p.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 14px", background:"var(--surface2)", borderRadius:8, marginBottom:4, fontSize: 14 }}>
           <span>{monthKeyToLabel(p.month_key) || p.label}</span>
-          <span style={{ color:"var(--text-dim)" }}>📎 {p.filename} (אין קובץ)</span>
+          <span style={{ color:"var(--text-dim)" }}>{p.filename} (אין קובץ)</span>
         </div>
       ))}
     </div>
@@ -587,7 +995,7 @@ function QuestionnaireViewer({ clientId, spousesCount }) {
   }, [clientId]);
 
   if (!loaded) return <div style={{ color: "var(--text-dim)", padding: 24 }}>טוען...</div>;
-  if (!data.length) return <Card style={{ textAlign: "center", padding: 32, color: "var(--text-dim)" }}>הלקוח טרם מילא שאלון</Card>;
+  if (!data.length) return <Card style={{ textAlign: "center", padding: 40, color: "var(--text-dim)" }}><div style={{ marginBottom: 8, opacity: 0.4 }}><IcoUser size={32} /></div>הלקוח טרם מילא שאלון<br /><span style={{ fontSize: 13 }}>יופיע כאן לאחר שהלקוח יגיש את השאלון מהאפליקציה שלו</span></Card>;
 
   const visibleSpouses = spousesCount >= 2 ? [1, 2] : [1];
   return (
@@ -600,7 +1008,7 @@ function QuestionnaireViewer({ clientId, spousesCount }) {
           <div key={idx} style={{ marginBottom: 32 }}>
             {visibleSpouses.length > 1 && (
               <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
-                {idx === 1 ? "👤 בן/בת זוג ראשון/ה" : "👥 בן/בת זוג שני/ה"}
+                {idx === 1 ? <><IcoUser size={15} /> בן/בת זוג ראשון/ה</> : <><IcoUsers size={15} /> בן/בת זוג שני/ה</>}
                 {done && <span style={{ background: "rgba(46,204,138,0.15)", color: "#22c55e", borderRadius: 20, padding: "2px 10px", fontSize: 14, fontWeight: 700 }}>✓ הושלם</span>}
               </div>
             )}
@@ -623,17 +1031,49 @@ function QuestionnaireViewer({ clientId, spousesCount }) {
   );
 }
 
+// ── Sub-tab bar (pill style) ──────────────────────────────────────────────────
+function SubTabBar({ tabs, active, onSelect }: { tabs: { id: string; label: string }[]; active: string; onSelect: (id: string) => void }) {
+  return (
+    <div style={{ display: "flex", gap: 2, marginBottom: 20 }}>
+      {tabs.map(t => {
+        const isActive = active === t.id;
+        return (
+          <button
+            key={t.id}
+            onClick={() => onSelect(t.id)}
+            onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = "rgba(216,243,220,0.5)"; }}
+            onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+            style={{
+              padding: "5px 16px", fontSize: 14, fontFamily: "inherit",
+              fontWeight: isActive ? 600 : 400,
+              color: isActive ? "var(--green-deep)" : "var(--text-dim)",
+              background: isActive ? "var(--green-mint)" : "transparent",
+              border: "none", borderRadius: 20,
+              cursor: "pointer", transition: "all 0.15s",
+              whiteSpace: "nowrap", letterSpacing: "0.01em",
+            }}>
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Client detail with tabs ───────────────────────────────────────────────────
-function ClientDetail({ client, onRefresh }) {
-  const REQUIRED = 3;
-  const done = client.submissions.length >= REQUIRED;
+function ClientDetail({ client, readyForPortfolio, onDelete, onRefresh }) {
   const [activeTab, setActiveTab] = useState(client.startTab || "intake");
   const [visitedAdminTabs, setVisitedAdminTabs] = useState<Set<string>>(() => new Set([client.startTab || "intake"]));
   const switchAdminTab = (id) => {
     setActiveTab(id);
     setVisitedAdminTabs(prev => { const next = new Set(prev); next.add(id); return next; });
   };
-  const [portfolioTab, setPortfolioTab] = useState("control");
+  const [intakeTab,    setIntakeTabRaw]    = useState(() => sessionStorage.getItem(`intake_tab_${client.id}`)    || "initial");
+  const [workflowTab,  setWorkflowTabRaw]  = useState(() => sessionStorage.getItem(`workflow_tab_${client.id}`)  || "data");
+  const [portfolioTab, setPortfolioTabRaw] = useState(() => sessionStorage.getItem(`portfolio_tab_${client.id}`) || "scenario_plan");
+  const setIntakeTab    = (id: string) => { sessionStorage.setItem(`intake_tab_${client.id}`,    id); setIntakeTabRaw(id); };
+  const setWorkflowTab  = (id: string) => { sessionStorage.setItem(`workflow_tab_${client.id}`,  id); setWorkflowTabRaw(id); };
+  const setPortfolioTab = (id: string) => { sessionStorage.setItem(`portfolio_tab_${client.id}`, id); setPortfolioTabRaw(id); };
   const [newCatCount, setNewCatCount] = useState(0);
   const [logSeenAt, setLogSeenAt] = useState<string | null>(null);
 
@@ -660,20 +1100,29 @@ function ClientDetail({ client, onRefresh }) {
   };
 
   const tabs = [
-    { id: "intake", label: "📋 פגישה ראשונה" },
-    { id: "required_docs", label: "📌 מסמכים נדרשים" },
-    { id: "data", label: "תיק מסמכים" },
-    { id: "questionnaire", label: "📝 שאלון" },
-    ...(client.portfolio_open ? [{ id: "portfolio", label: "📁 תיק כלכלי" }] : []),
-    ...(client.portfolio_open ? [{ id: "scenario", label: "📊 תסריט תקציבי" }] : []),
-    { id: "log", label: "📋 לוג שינויים", badge: newCatCount },
+    { id: "intake", label: "פגישה ראשונה" },
+    ...(client.portfolio_open ? [{ id: "workflow", label: "תהליך עבודה" }] : []),
+    ...(client.portfolio_open ? [{ id: "portfolio", label: "תיק כלכלי" }] : []),
+    ...(client.portfolio_open ? [{ id: "scenario", label: "תסריט תקציבי" }] : []),
+    { id: "log", label: "לוג שינויים", badge: newCatCount },
     { id: "personal", label: "פרטים אישיים" },
   ];
 
+  const intakeTabs = [
+    { id: "initial", label: "שאלון ראשוני" },
+    { id: "required_docs", label: "מסמכים נדרשים" },
+    { id: "questionnaire", label: "שאלון אישי" },
+  ];
+
+  const workflowTabs = [
+    { id: "data", label: "תיק מסמכים" },
+    { id: "balance", label: "מאזן" },
+    { id: "questionnaire", label: "שאלון אישי" },
+  ];
+
   const portfolioTabs = [
-    { id: "control", label: "בקרת תיק כלכלי" },
+    { id: "scenario_plan", label: "מאזן מבוסס תסריטים" },
     { id: "savings", label: "פירוט חסכונות" },
-    { id: "balance", label: "מאזן מתוכנן" },
   ];
 
   return (
@@ -681,16 +1130,16 @@ function ClientDetail({ client, onRefresh }) {
       {/* Client header */}
       <Card style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ width: 48, height: 48, borderRadius: 12, background: "var(--surface2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>👤</div>
+          <div style={{ width: 48, height: 48, borderRadius: 12, background: "var(--surface2)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)" }}><IcoUser size={22} /></div>
           <div style={{ flex: 1 }}>
             <div style={{ fontWeight: 700, fontSize: 18 }}>{client.name}</div>
             <div style={{ fontSize: 14, color: "var(--text-dim)" }}>@{client.username} · {client.submissions.length} הגשות · {client.mappings.length} מיפויים</div>
           </div>
-          {done && !client.portfolio_open && (
+          {client.submitted_at && !client.portfolio_open && (
             <Btn onClick={async () => {
               await supabase.from("clients").update({ portfolio_open: true }).eq("id", client.id);
               onRefresh();
-            }}>📁 פתח תיק כלכלי</Btn>
+            }} style={{ display: "flex", alignItems: "center", gap: 6 }}><IcoFolder size={15} /> פתח תיק כלכלי</Btn>
           )}
         </div>
       </Card>
@@ -699,115 +1148,176 @@ function ClientDetail({ client, onRefresh }) {
       {newCatCount > 0 && activeTab !== "log" && (
         <div style={{ marginBottom: 16, background: "rgba(251,191,36,0.12)", border: "2px solid rgba(251,191,36,0.5)", borderRadius: 12, padding: "12px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
-            <span style={{ fontWeight: 700, color: "var(--gold)" }}>⚠️ הלקוח יצר {newCatCount} קטגוריות חדשות</span>
+            <span style={{ fontWeight: 700, color: "var(--gold)", display: "flex", alignItems: "center", gap: 6 }}><IcoWarn size={15} /> הלקוח יצר {newCatCount} קטגוריות חדשות</span>
             <span style={{ fontSize: 15, color: "var(--text-dim)", marginRight: 8 }}>— ראה בלוג שינויים</span>
           </div>
           <Btn size="sm" onClick={() => { switchAdminTab("log"); markLogSeen(); }}>עבור ללוג</Btn>
         </div>
       )}
 
-      {/* Tab bar */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 20, borderBottom: "1px solid var(--border)", paddingBottom: 0 }}>
-        {tabs.map(t => (
-          <button key={t.id} onClick={() => { switchAdminTab(t.id); if (t.id === "log") markLogSeen(); }} style={{ padding: "10px 18px", fontSize: 15, fontFamily: "inherit", fontWeight: activeTab === t.id ? 700 : 400, color: activeTab === t.id ? "var(--green-mid)" : "var(--text-dim)", background: "none", border: "none", borderBottom: `2px solid ${activeTab === t.id ? "var(--green-mid)" : "transparent"}`, cursor: "pointer", marginBottom: -1, display: "flex", alignItems: "center", gap: 6 }}>
-            {t.label}
-            {(t as any).badge > 0 && (
-              <span style={{ background: "var(--red)", color: "#fff", borderRadius: "50%", width: 18, height: 18, fontSize: 13, display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 700 }}>
-                {(t as any).badge}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
-
-      {/* INTAKE TAB */}
-      {activeTab === "intake" && (
-        <IntakeForm client={client} />
-      )}
-
-      {/* REQUIRED DOCS TAB */}
-      {activeTab === "required_docs" && (
-        <RequiredDocsTab client={client} onRefresh={onRefresh} />
-      )}
-
-      {/* QUESTIONNAIRE TAB */}
-      {activeTab === "questionnaire" && (
-        <QuestionnaireViewer clientId={client.id} spousesCount={client.questionnaire_spouses || 1} />
-      )}
-
-      {/* DATA TAB */}
-      {activeTab === "data" && (
-        <div>
-          <AllFilesSection clientId={client.id} />
-          <PayslipsSection clientId={client.id} />
-          <div style={{ fontWeight: 700, marginBottom: 12, marginTop: 8 }}>📊 היסטוריית הגשות (תנועות)</div>
-          {client.submissions.length === 0 ? (
-            <Card style={{ textAlign: "center", padding: 32, color: "var(--text-dim)" }}>טרם הוגשו קבצים</Card>
-          ) : client.submissions.map(s => {
-            const txs = s.transactions || [];
-            const total = txs.reduce((sum, t) => sum + t.amount, 0);
-            const monthLabel = monthKeyToLabel(s.month_key);
-            const exportOne = () => {
-              const XLSX = window.XLSX;
-              if (!XLSX) { alert("ספריית Excel לא נטענה"); return; }
-              const rows = txs.map(t => ({ "תאריך": t.date, "שם בית עסק": t.name, "סעיף": t.cat, "סכום": t.amount, "מקור": t.source || "" }));
-              const wb = XLSX.utils.book_new();
-              XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), (s.label || "חודש").substring(0,31));
-              XLSX.writeFile(wb, `מאזן_${client.name}_${s.label || monthLabel}.xlsx`);
-            };
-            return (
-              <Card key={s.id} style={{ marginBottom: 10, padding: "14px 20px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                  <div>
-                    <div style={{ fontWeight: 600 }}>{s.label}{monthLabel && <span style={{ fontWeight: 400, color: "var(--text-mid)", marginRight: 8 }}>— {monthLabel}</span>}</div>
-                    <div style={{ fontSize: 13, color: "var(--text-dim)" }}>{new Date(s.created_at).toLocaleDateString("he-IL")} · {txs.length} עסקאות</div>
-                  </div>
-                  <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-                    <div style={{ fontWeight: 700, color: "var(--red)", fontSize: 18 }}>₪{Math.round(total).toLocaleString()}</div>
-                    <Btn size="sm" variant="secondary" onClick={exportOne}>📥 Excel</Btn>
-                  </div>
-                </div>
-              </Card>
-            );
-          })}
-
-          {client.mappings.length > 0 && (
-            <>
-              <div style={{ fontWeight: 700, margin: "20px 0 12px" }}>🧠 מיפויים שנזכרו</div>
-              <Card style={{ padding: 0, overflow: "hidden" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
-                  <thead>
-                    <tr style={{ background: "var(--surface2)" }}>
-                      <th style={{ padding: "8px 14px", textAlign: "right", color: "var(--text-dim)" }}>בית עסק</th>
-                      <th style={{ padding: "8px 14px", textAlign: "right", color: "var(--text-dim)" }}>סעיף</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {client.mappings.map(m => (
-                      <tr key={m.id}>
-                        <td style={{ padding: "8px 14px", borderTop: `1px solid ${"var(--border)"}22` }}>{m.business_name}</td>
-                        <td style={{ padding: "8px 14px", borderTop: `1px solid ${"var(--border)"}22`, color: "var(--green-mid)" }}>{m.category}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </Card>
-            </>
-          )}
+      {/* Banner — הערת הגשה מהלקוח */}
+      {client.submission_notes && (
+        <div style={{ marginBottom: 16, background: "rgba(251,191,36,0.08)", border: "2px solid rgba(251,191,36,0.4)", borderRadius: 12, padding: "14px 20px", display: "flex", gap: 12, alignItems: "flex-start" }}>
+          <span style={{ fontSize: 20, flexShrink: 0 }}>📝</span>
+          <div>
+            <div style={{ fontWeight: 700, color: "var(--gold)", marginBottom: 4, fontSize: 15 }}>הערה מהלקוח בהגשה</div>
+            <div style={{ fontSize: 15, color: "var(--text)", lineHeight: 1.65 }}>{client.submission_notes}</div>
+          </div>
         </div>
       )}
 
-      {/* PORTFOLIO TAB */}
+      {/* Tab bar */}
+      <div style={{ display: "flex", gap: 2, marginBottom: 20, borderBottom: "1px solid var(--border)", paddingBottom: 0, overflowX: "auto", whiteSpace: "nowrap" }}>
+        {tabs.map(t => {
+          const isActive = activeTab === t.id;
+          return (
+            <button
+              key={t.id}
+              onClick={() => { switchAdminTab(t.id); if (t.id === "log") markLogSeen(); }}
+              onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.color = "var(--text)"; }}
+              onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.color = "var(--text-dim)"; }}
+              style={{
+                padding: "10px 16px", fontSize: 14, fontFamily: "inherit",
+                fontWeight: isActive ? 700 : 400,
+                color: isActive ? "var(--green-mid)" : "var(--text-dim)",
+                background: "none", border: "none",
+                borderBottom: `3px solid ${isActive ? "var(--green-mid)" : "transparent"}`,
+                cursor: "pointer", marginBottom: -1,
+                display: "flex", alignItems: "center", gap: 6,
+                transition: "color 0.12s",
+              }}>
+              {t.label}
+              {(t as any).badge > 0 && (
+                <span style={{ background: "var(--red)", color: "#fff", borderRadius: "50%", width: 18, height: 18, fontSize: 12, display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 700 }}>
+                  {(t as any).badge}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* INTAKE TAB — with sub-tabs */}
+      {activeTab === "intake" && (
+        <div>
+          <SubTabBar tabs={intakeTabs} active={intakeTab} onSelect={setIntakeTab} />
+          {intakeTab === "initial" && <IntakeForm client={client} />}
+          {intakeTab === "required_docs" && <RequiredDocsTab client={client} onRefresh={onRefresh} />}
+          {intakeTab === "questionnaire" && <QuestionnaireViewer clientId={client.id} spousesCount={client.questionnaire_spouses || 1} />}
+        </div>
+      )}
+
+      {/* WORKFLOW TAB — with sub-tabs */}
+      {activeTab === "workflow" && (
+        <div>
+          <SubTabBar tabs={workflowTabs} active={workflowTab} onSelect={setWorkflowTab} />
+          {workflowTab === "data" && (
+            <div>
+              {(client.no_payslip_reason_s1 || client.no_payslip_reason_s2) && (
+                <div style={{ marginBottom:16, padding:"12px 16px", background:"rgba(245,158,11,0.08)", border:"1px solid rgba(245,158,11,0.25)", borderRadius:10 }}>
+                  <div style={{ fontWeight:700, fontSize:14, marginBottom:8, color:"var(--text)" }}>📋 הצהרות "אין תלושים"</div>
+                  {client.no_payslip_reason_s1 && <div style={{ fontSize:14, color:"var(--text-mid)", marginBottom:4 }}>בן/בת זוג 1: <span style={{ color:"var(--text)" }}>{client.no_payslip_reason_s1}</span></div>}
+                  {client.no_payslip_reason_s2 && <div style={{ fontSize:14, color:"var(--text-mid)" }}>בן/בת זוג 2: <span style={{ color:"var(--text)" }}>{client.no_payslip_reason_s2}</span></div>}
+                </div>
+              )}
+              <AllFilesSection clientId={client.id} />
+              <PayslipsSection clientId={client.id} />
+              <div style={{ fontWeight: 700, marginBottom: 12, marginTop: 8 }}>היסטוריית הגשות (תנועות)</div>
+              {client.submissions.length === 0 ? (
+                <Card style={{ textAlign: "center", padding: 32, color: "var(--text-dim)" }}>טרם הוגשו קבצים</Card>
+              ) : client.submissions.map(s => {
+                const txs = s.transactions || [];
+                const total = txs.reduce((sum, t) => sum + t.amount, 0);
+                const monthLabel = monthKeyToLabel(s.month_key);
+                const exportOne = () => {
+                  const XLSX = window.XLSX;
+                  if (!XLSX) { alert("ספריית Excel לא נטענה"); return; }
+                  const rows = txs.map(t => ({ "תאריך": t.date, "שם בית עסק": t.name, "סעיף": t.cat, "סכום": t.amount, "מקור": t.source || "" }));
+                  const wb = XLSX.utils.book_new();
+                  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), (s.label || "חודש").substring(0,31));
+                  XLSX.writeFile(wb, `מאזן_${client.name}_${s.label || monthLabel}.xlsx`);
+                };
+                return (
+                  <Card key={s.id} style={{ marginBottom: 10, padding: "14px 20px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                      <div>
+                        <div style={{ fontWeight: 600 }}>{s.label}{monthLabel && <span style={{ fontWeight: 400, color: "var(--text-mid)", marginRight: 8 }}>— {monthLabel}</span>}</div>
+                        <div style={{ fontSize: 13, color: "var(--text-dim)" }}>{new Date(s.created_at).toLocaleDateString("he-IL")} · {txs.length} עסקאות</div>
+                      </div>
+                      <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                        <div style={{ fontWeight: 700, color: "var(--red)", fontSize: 18 }}>₪{Math.round(total).toLocaleString()}</div>
+                        <Btn size="sm" variant="secondary" onClick={exportOne}><IcoDownload size={13} /> Excel</Btn>
+                      </div>
+                    </div>
+                  </Card>
+                );
+              })}
+              {client.estimates?.length > 0 && (
+                <div style={{ marginTop: 24 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 12, display: "flex", alignItems: "center", gap: 10 }}>
+                    הערכות חודשיות
+                    <span style={{ background: "rgba(251,191,36,0.15)", color: "var(--gold)", fontSize: 12, borderRadius: 6, padding: "2px 8px", fontWeight: 600 }}>הוסף ידנית ע"י הלקוח</span>
+                  </div>
+                  <Card style={{ padding: 0, overflow: "hidden" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <thead>
+                        <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--surface2)" }}>
+                          <th style={{ padding: "10px 16px", textAlign: "right", fontWeight: 600, fontSize: 13, color: "var(--text-dim)" }}>קטגוריה</th>
+                          <th style={{ padding: "10px 16px", textAlign: "left", fontWeight: 600, fontSize: 13, color: "var(--text-dim)" }}>הערכה חודשית</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {client.estimates.map((e, i) => (
+                          <tr key={e.id} style={{ borderBottom: i < client.estimates.length - 1 ? "1px solid var(--border)" : "none" }}>
+                            <td style={{ padding: "12px 16px", fontSize: 15 }}>{e.category_name}</td>
+                            <td style={{ padding: "12px 16px", fontSize: 15, fontWeight: 700, color: "var(--red)", textAlign: "left" }}>
+                              ₪{Number(e.monthly_amount).toLocaleString()}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </Card>
+                </div>
+              )}
+              {client.mappings.length > 0 && (
+                <>
+                  <div style={{ fontWeight: 700, margin: "20px 0 12px" }}>מיפויים שנזכרו</div>
+                  <Card style={{ padding: 0, overflow: "hidden" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+                      <thead>
+                        <tr style={{ background: "var(--surface2)" }}>
+                          <th style={{ padding: "8px 14px", textAlign: "right", color: "var(--text-dim)" }}>בית עסק</th>
+                          <th style={{ padding: "8px 14px", textAlign: "right", color: "var(--text-dim)" }}>סעיף</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {client.mappings.map(m => (
+                          <tr key={m.id}>
+                            <td style={{ padding: "8px 14px", borderTop: `1px solid ${"var(--border)"}22` }}>{m.business_name}</td>
+                            <td style={{ padding: "8px 14px", borderTop: `1px solid ${"var(--border)"}22`, color: "var(--green-mid)" }}>{m.category}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </Card>
+                </>
+              )}
+            </div>
+          )}
+          {workflowTab === "balance" && <TransactionSummaryTab client={client} />}
+          {workflowTab === "questionnaire" && <QuestionnaireViewer clientId={client.id} spousesCount={client.questionnaire_spouses || 1} />}
+        </div>
+      )}
+
+      {/* PORTFOLIO TAB — with sub-tabs */}
       {activeTab === "portfolio" && (
         <div>
-          <div style={{ display: "flex", gap: 4, marginBottom: 20 }}>
-            {portfolioTabs.map(t => (
-              <button key={t.id} onClick={() => setPortfolioTab(t.id)} style={{ padding: "8px 16px", fontSize: 14, fontFamily: "inherit", fontWeight: portfolioTab === t.id ? 700 : 400, color: portfolioTab === t.id ? "var(--text)" : "var(--text-dim)", background: portfolioTab === t.id ? "var(--surface2)" : "transparent", border: `1px solid ${portfolioTab === t.id ? "var(--border)" : "transparent"}`, borderRadius: 8, cursor: "pointer" }}>
-                {t.label}
-              </button>
-            ))}
-          </div>
-          <ComingSoon label={portfolioTabs.find(t => t.id === portfolioTab)?.label} />
+          <SubTabBar tabs={portfolioTabs} active={portfolioTab} onSelect={setPortfolioTab} />
+          {portfolioTab === "scenario_plan"
+            ? <ScenarioPlanTab client={client} />
+            : <ComingSoon label={portfolioTabs.find(t => t.id === portfolioTab)?.label} />
+          }
         </div>
       )}
 
@@ -827,7 +1337,7 @@ function ClientDetail({ client, onRefresh }) {
 
       {/* PERSONAL TAB */}
       {activeTab === "personal" && (
-        <PersonalTab client={client} onRefresh={onRefresh} />
+        <PersonalTab client={client} onDelete={onDelete} onRefresh={onRefresh} />
       )}
     </div>
   );
@@ -837,7 +1347,7 @@ function ClientDetail({ client, onRefresh }) {
 function ComingSoon({ label }) {
   return (
     <Card style={{ textAlign: "center", padding: "64px 32px" }}>
-      <div style={{ fontSize: 48, marginBottom: 16 }}>🚧</div>
+      <div style={{ fontSize: 48, marginBottom: 16, opacity: 0.3 }}>—</div>
       <div style={{ fontWeight: 700, fontSize: 20, marginBottom: 8 }}>{label}</div>
       <div style={{ color: "var(--text-dim)", fontSize: 16, marginBottom: 6 }}>הסעיף הזה נמצא בפיתוח ובבנייה</div>
       <div style={{ color: "var(--text-dim)", fontSize: 14 }}>בקרוב תוכל לנהל כאן את כל הנתונים הפיננסיים של הלקוח</div>
@@ -846,7 +1356,7 @@ function ComingSoon({ label }) {
 }
 
 // ── Personal tab ─────────────────────────────────────────────────────────────
-function PersonalTab({ client, onRefresh }) {
+function PersonalTab({ client, onDelete, onRefresh }) {
   const [editName, setEditName] = useState(client.name);
   const [editEmail, setEditEmail] = useState(client.email || "");
   const [editPhone, setEditPhone] = useState(client.phone || "");
@@ -854,15 +1364,17 @@ function PersonalTab({ client, onRefresh }) {
   const [confirmPass, setConfirmPass] = useState("");
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
+  const [blockConfirm, setBlockConfirm] = useState(false);
   const isBlocked = client.is_blocked || false;
 
-  const toggleBlock = async () => {
-    const action = isBlocked ? "שחרר" : "חסום";
-    if (!window.confirm(`${action} את ${client.name}?`)) return;
+  const toggleBlock = () => { setBlockConfirm(true); };
+
+  const confirmToggleBlock = async () => {
+    setBlockConfirm(false);
     setLoading(true);
     const { error } = await supabase.from("clients").update({ is_blocked: !isBlocked }).eq("id", client.id);
-    if (error) showMsg("❌ שגיאה");
-    else { showMsg(isBlocked ? "✅ הלקוח שוחרר" : "✅ הלקוח נחסם"); onRefresh(); }
+    if (error) showMsg("err: שגיאה");
+    else { showMsg(isBlocked ? "ok: הלקוח שוחרר" : "ok: הלקוח נחסם"); onRefresh(); }
     setLoading(false);
   };
 
@@ -871,23 +1383,23 @@ function PersonalTab({ client, onRefresh }) {
   const saveDetails = async () => {
     setLoading(true);
     const { error } = await supabase.from("clients").update({ name: editName, email: editEmail, phone: editPhone }).eq("id", client.id);
-    if (error) showMsg("❌ שגיאה בשמירה");
-    else { showMsg("✅ הפרטים עודכנו בהצלחה"); onRefresh(); }
+    if (error) showMsg("err: שגיאה בשמירה");
+    else { showMsg("ok: הפרטים עודכנו בהצלחה"); onRefresh(); }
     setLoading(false);
   };
 
   const changePassword = async () => {
-    if (newPass.length < 4) { showMsg("❌ סיסמה חייבת להיות לפחות 4 תווים"); return; }
-    if (newPass !== confirmPass) { showMsg("❌ הסיסמאות לא תואמות"); return; }
+    if (newPass.length < 4) { showMsg("err: סיסמה חייבת להיות לפחות 4 תווים"); return; }
+    if (newPass !== confirmPass) { showMsg("err: הסיסמאות לא תואמות"); return; }
     setLoading(true);
     // Update via Supabase Auth only (no plaintext stored)
     const { data: authResult, error: fnErr } = await supabase.functions.invoke("manage-auth", {
       body: { action: "update_password", clientId: client.id, password: newPass },
     });
     if (fnErr || !authResult?.ok) {
-      showMsg("❌ שגיאה בעדכון סיסמה: " + (authResult?.error || fnErr?.message));
+      showMsg("err: שגיאה בעדכון סיסמה: " + (authResult?.error || fnErr?.message));
     } else {
-      showMsg("✅ הסיסמה עודכנה"); setNewPass(""); setConfirmPass("");
+      showMsg("ok: הסיסמה עודכנה"); setNewPass(""); setConfirmPass("");
     }
     setLoading(false);
   };
@@ -896,7 +1408,7 @@ function PersonalTab({ client, onRefresh }) {
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
       {/* Details card */}
       <Card>
-        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>👤 פרטי לקוח</div>
+        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16, display: "flex", alignItems: "center", gap: 7 }}><IcoUser size={16} /> פרטי לקוח</div>
         <Input label="שם מלא" value={editName} onChange={e => setEditName(e.target.value)} />
         <Input label="מייל" type="email" value={editEmail} onChange={e => setEditEmail(e.target.value)} placeholder="example@gmail.com" />
         <Input label="טלפון" value={editPhone} onChange={e => setEditPhone(e.target.value)} placeholder="050-0000000" />
@@ -904,45 +1416,50 @@ function PersonalTab({ client, onRefresh }) {
           <div style={{ marginBottom: 4 }}>שם משתמש לכניסה</div>
           <div style={{ color: "var(--text)", fontWeight: 600 }}>@{client.username}</div>
         </div>
-        {msg && <div style={{ fontSize: 14, color: msg.startsWith("✅") ? "var(--green-soft)" : "var(--red)", marginBottom: 12 }}>{msg}</div>}
+        {msg && <div style={{ fontSize: 14, color: msg.startsWith("ok:") ? "var(--green-soft)" : "var(--red)", marginBottom: 12 }}>{msg.replace(/^(ok:|err:)\s*/, "")}</div>}
         <Btn onClick={saveDetails} disabled={loading}>שמור שינויים</Btn>
       </Card>
 
       {/* Password card */}
       <Card>
-        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>🔐 שינוי סיסמה</div>
+        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16, display: "flex", alignItems: "center", gap: 7 }}><IcoKey size={16} /> שינוי סיסמה</div>
         <Input label="סיסמה חדשה" type="password" value={newPass} onChange={e => setNewPass(e.target.value)} placeholder="לפחות 4 תווים" />
         <Input label="אימות סיסמה" type="password" value={confirmPass} onChange={e => setConfirmPass(e.target.value)} placeholder="הכנס שוב את הסיסמה" />
-        {msg && <div style={{ fontSize: 14, color: msg.startsWith("✅") ? "var(--green-soft)" : "var(--red)", marginBottom: 12 }}>{msg}</div>}
+        {msg && <div style={{ fontSize: 14, color: msg.startsWith("ok:") ? "var(--green-soft)" : "var(--red)", marginBottom: 12 }}>{msg.replace(/^(ok:|err:)\s*/, "")}</div>}
         <Btn onClick={changePassword} disabled={loading || !newPass || !confirmPass}>עדכן סיסמה</Btn>
       </Card>
 
       {/* Block card */}
       <Card>
-        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>🔒 ניהול גישה</div>
+        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16, display: "flex", alignItems: "center", gap: 7 }}><IcoLock size={16} /> ניהול גישה</div>
         <div style={{ fontSize: 15, color: "var(--text-dim)", marginBottom: 14 }}>
           {isBlocked ? "הלקוח חסום — לא יכול להתחבר לאפליקציה." : "הלקוח פעיל — יכול להתחבר לאפליקציה."}
         </div>
-        <Btn variant={isBlocked ? "secondary" : "danger"} onClick={toggleBlock} disabled={loading}>
-          {isBlocked ? "🔓 שחרר לקוח" : "🔒 חסום לקוח"}
-        </Btn>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Btn variant={isBlocked ? "secondary" : "danger"} onClick={toggleBlock} disabled={loading}>
+            {isBlocked ? <span style={{ display: "flex", alignItems: "center", gap: 5 }}><IcoUnlock size={14} /> שחרר לקוח</span> : <span style={{ display: "flex", alignItems: "center", gap: 5 }}><IcoLock size={14} /> חסום לקוח</span>}
+          </Btn>
+          <Btn variant="danger" onClick={() => onDelete(client.id, client.name)} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <IcoTrash size={14} /> מחק לקוח
+          </Btn>
+        </div>
       </Card>
 
       {/* Welcome email card */}
       <Card>
-        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>📧 שלח הוראות כניסה</div>
+        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16, display: "flex", alignItems: "center", gap: 7 }}><IcoMail size={15} /> שלח הוראות כניסה</div>
         <WelcomeEmailCard name={client.name} last_name={client.last_name || ""} username={client.username} email={client.email || ""} clientId={client.id} onSent={onRefresh} />
       </Card>
 
       {/* Info card */}
       <Card>
-        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>📋 מידע נוסף</div>
+        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>מידע נוסף</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {[
             { label: "תאריך הצטרפות", value: new Date(client.created_at).toLocaleDateString("he-IL", { day: "numeric", month: "long", year: "numeric" }) },
             { label: "הגשות", value: `${client.submissions.length} / 3` },
             { label: "מיפויים שנזכרו", value: client.mappings.length },
-            { label: "סטטוס תיק", value: client.portfolio_open ? "פעיל 📁" : "טרם נפתח" },
+            { label: "סטטוס תיק", value: client.portfolio_open ? "פעיל" : "טרם נפתח" },
           ].map(item => (
             <div key={item.label} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${"var(--border)"}22`, fontSize: 15 }}>
               <span style={{ color: "var(--text-dim)" }}>{item.label}</span>
@@ -951,6 +1468,26 @@ function PersonalTab({ client, onRefresh }) {
           ))}
         </div>
       </Card>
+
+      {/* Block confirm modal */}
+      {blockConfirm && (
+        <>
+          <div onClick={() => setBlockConfirm(false)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.35)", zIndex:1200 }} />
+          <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", width:340, background:"var(--surface)", borderRadius:16, boxShadow:"0 24px 60px rgba(0,0,0,0.2)", zIndex:1201, padding:"28px 28px 22px", textAlign:"center" }}>
+            <div style={{ display:"flex", justifyContent:"center", marginBottom:12, color: isBlocked ? "var(--green-mid)" : "var(--red)" }}>
+              {isBlocked ? <IcoUnlock size={28} /> : <IcoLock size={28} />}
+            </div>
+            <div style={{ fontSize:16, fontWeight:700, color:"var(--text)", marginBottom:8 }}>{isBlocked ? "שחרור לקוח" : "חסימת לקוח"}</div>
+            <div style={{ fontSize:14, color:"var(--text-mid)", marginBottom:24, lineHeight:1.5 }}>
+              {isBlocked ? <>שחרר את <strong>{client.name}</strong> לגישה לאפליקציה?</> : <>חסום את <strong>{client.name}</strong> ומנע גישה לאפליקציה?</>}
+            </div>
+            <div style={{ display:"flex", gap:10, justifyContent:"center" }}>
+              <button onClick={() => setBlockConfirm(false)} style={{ padding:"9px 20px", borderRadius:9, border:"1px solid var(--border)", background:"none", fontFamily:"inherit", fontSize:14, cursor:"pointer", color:"var(--text-mid)" }}>ביטול</button>
+              <button onClick={confirmToggleBlock} style={{ padding:"9px 20px", borderRadius:9, border:"none", background: isBlocked ? "var(--green-mid)" : "var(--red)", color:"#fff", fontFamily:"inherit", fontSize:14, fontWeight:600, cursor:"pointer" }}>{isBlocked ? "שחרר" : "חסום"}</button>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1005,7 +1542,7 @@ function ExportSection({ submissions, clientName }) {
   return (
     <Card style={{ marginBottom: 8 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
-        <div style={{ fontWeight: 700, fontSize: 16 }}>⬇️ ייצוא לאקסל</div>
+        <div style={{ fontWeight: 700, fontSize: 16, display:"flex", alignItems:"center", gap:7 }}><IcoDownload size={15} /> ייצוא לאקסל</div>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={toggleAll} style={{ background: "none", border: "1px solid var(--border)", borderRadius: 7, padding: "5px 12px", fontSize: 14, color: "var(--text-dim)", cursor: "pointer", fontFamily: "inherit" }}>
             {allSelected ? "בטל הכל" : "בחר הכל"}
@@ -1168,7 +1705,7 @@ function ChangeLogTab({ clientId, clientName, clientLastName }) {
         <div style={{ marginRight: "auto" }}>
           <button onClick={exportToExcel} disabled={filtered.length === 0}
             style={{ fontSize: 15, padding: "5px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", cursor: filtered.length === 0 ? "default" : "pointer", fontFamily: "inherit", opacity: filtered.length === 0 ? 0.5 : 1 }}>
-            📥 ייצוא Excel ({filtered.length})
+            ייצוא Excel ({filtered.length})
           </button>
         </div>
       </div>
@@ -1197,14 +1734,23 @@ function ChangeLogTab({ clientId, clientName, clientLastName }) {
 // ════════════════════════════════════════════════════════════════
 // מסמכים נדרשים — המאמן בוחר אילו מסמכים הלקוח צריך להביא
 // ════════════════════════════════════════════════════════════════
+// maps required_doc id → client_documents.category value
+const DOC_ID_MAP: Record<string, string> = {
+  loans: "loans_section", provident: "provident_fund", pl: "profit_loss",
+  savings: "savings_pension", retirement: "retirement_forecast",
+  checks: "deferred_checks", debts_other: "debts_other",
+  bank_stmt: "bank_stmt_meta",
+};
+
 const ALL_REQUIRED_DOC_OPTIONS = [
-  { id: "loans",       label: "מסמכי הלוואות",                   icon: "📋" },
-  { id: "provident",   label: "יתרת קרן השתלמות",                icon: "💰" },
-  { id: "pl",          label: "דוח רווח והפסד (לעצמאיים)",       icon: "📊" },
-  { id: "savings",     label: "פירוט חסכונות ופנסיה",            icon: "🏦" },
-  { id: "retirement",  label: "דוח תחזית פרישה (מעל גיל 55)",   icon: "👴" },
-  { id: "checks",      label: "שיקים דחויים",                    icon: "📄" },
-  { id: "debts_other", label: "פיגורי תשלומים וחובות אחרים",    icon: "⚠️" },
+  { id: "bank_stmt",   label: 'פירוט עו"ש' },
+  { id: "loans",       label: "מסמכי הלוואות" },
+  { id: "provident",   label: "יתרת קרן השתלמות" },
+  { id: "pl",          label: "דוח רווח והפסד (לעצמאיים)" },
+  { id: "savings",     label: "פירוט חסכונות ופנסיה" },
+  { id: "retirement",  label: "דוח תחזית פרישה (מעל גיל 55)" },
+  { id: "checks",      label: "שיקים דחויים" },
+  { id: "debts_other", label: "פיגורי תשלומים וחובות אחרים" },
 ];
 
 function RequiredDocsTab({ client, onRefresh }) {
@@ -1218,6 +1764,7 @@ function RequiredDocsTab({ client, onRefresh }) {
   const [newCustom, setNewCustom]       = useState("");
   const [showCustomInput, setShowCustomInput] = useState(false);
   const [docProgress, setDocProgress]   = useState<{done: string[]; partial: string[]}>({ done: [], partial: [] });
+  const [intakeEmpTypes, setIntakeEmpTypes] = useState<{s1:string|null,s2:string|null}>({s1:null,s2:null});
 
   useEffect(() => {
     supabase.from("client_documents").select("category, marked_done, files")
@@ -1229,6 +1776,23 @@ function RequiredDocsTab({ client, onRefresh }) {
         setDocProgress({ done, partial });
       });
   }, [client.id]);
+
+  useEffect(() => {
+    supabase.from("client_intake").select("data").eq("client_id", client.id).maybeSingle()
+      .then(({ data: row }) => {
+        if (row?.data) setIntakeEmpTypes({
+          s1: row.data.spouse1_employment_type || null,
+          s2: row.data.spouse2_employment_type || null,
+        });
+      });
+  }, [client.id]);
+
+  const _needsPL = (t: string|null) => t === "עצמאי" || t === "גם וגם";
+  const plBlocked =
+    intakeEmpTypes.s1 !== null &&
+    !_needsPL(intakeEmpTypes.s1) &&
+    (client.questionnaire_spouses !== 2 ||
+      (intakeEmpTypes.s2 !== null && !_needsPL(intakeEmpTypes.s2)));
 
   const questionnaireSelected = (selected || []).includes("questionnaire");
 
@@ -1286,11 +1850,10 @@ function RequiredDocsTab({ client, onRefresh }) {
   const allOptions = [
     ...ALL_REQUIRED_DOC_OPTIONS,
     ...customDocs,
-    { id: "questionnaire", label: "שאלון אישי", icon: "📝" },
+    { id: "questionnaire", label: "שאלון אישי" },
   ];
 
   // progress
-  const DOC_ID_MAP: Record<string,string> = { loans:"loans_section", provident:"provident_fund", pl:"profit_loss", savings:"savings_pension", retirement:"retirement_forecast", checks:"deferred_checks", debts_other:"debts_other" };
   const totalSelected = cur.filter(id => id !== "questionnaire").length;
   const doneCount = cur.filter(id => {
     const cat = DOC_ID_MAP[id] || id;
@@ -1305,7 +1868,7 @@ function RequiredDocsTab({ client, onRefresh }) {
     const label = newCustom.trim();
     if (!label) return;
     const id = "custom_" + Date.now();
-    setCustomDocs(p => [...p, { id, label, icon: "📄" } as any]);
+    setCustomDocs(p => [...p, { id, label } as any]);
     setSelected(p => [...(p||[]), id]);
     setNewCustom("");
     setShowCustomInput(false);
@@ -1318,14 +1881,14 @@ function RequiredDocsTab({ client, onRefresh }) {
       {showSpouseModal && (
         <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.4)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center" }}>
           <div style={{ background:"var(--surface)", borderRadius:16, padding:32, maxWidth:360, width:"90%", textAlign:"center" }}>
-            <div style={{ fontWeight:700, fontSize: 19, marginBottom:8 }}>📝 שאלון אישי</div>
+            <div style={{ fontWeight:700, fontSize: 19, marginBottom:8 }}>שאלון אישי</div>
             <div style={{ fontSize: 16, color:"var(--text-dim)", marginBottom:24 }}>כמה בני זוג ממלאים שאלון?</div>
             <div style={{ display:"flex", gap:12, justifyContent:"center" }}>
-              <button onClick={() => selectSpouses(1)} style={{ padding:"14px 28px", borderRadius:12, border:"2px solid var(--green-mid)", background:"transparent", color:"var(--green-mid)", fontWeight:700, fontSize: 17, cursor:"pointer", fontFamily:"inherit" }}>
-                👤 בן/בת זוג אחד/ת
+              <button onClick={() => selectSpouses(1)} style={{ padding:"14px 28px", borderRadius:12, border:"2px solid var(--green-mid)", background:"transparent", color:"var(--green-mid)", fontWeight:700, fontSize: 17, cursor:"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:8 }}>
+                <IcoUser size={18} /> בן/בת זוג אחד/ת
               </button>
-              <button onClick={() => selectSpouses(2)} style={{ padding:"14px 28px", borderRadius:12, border:"2px solid var(--green-mid)", background:"var(--green-mid)", color:"white", fontWeight:700, fontSize: 17, cursor:"pointer", fontFamily:"inherit" }}>
-                👥 שני בני זוג
+              <button onClick={() => selectSpouses(2)} style={{ padding:"14px 28px", borderRadius:12, border:"2px solid var(--green-mid)", background:"var(--green-mid)", color:"white", fontWeight:700, fontSize: 17, cursor:"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:8 }}>
+                <IcoUsers size={18} /> שני בני זוג
               </button>
             </div>
             <button onClick={() => setShowSpouseModal(false)} style={{ marginTop:16, fontSize: 15, color:"var(--text-dim)", background:"none", border:"none", cursor:"pointer" }}>ביטול</button>
@@ -1335,18 +1898,18 @@ function RequiredDocsTab({ client, onRefresh }) {
 
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
         <div>
-          <div style={{ fontWeight:700, fontSize: 17 }}>📌 מסמכים נדרשים — {client.name}</div>
+          <div style={{ fontWeight:700, fontSize: 17 }}>מסמכים נדרשים — {client.name}</div>
           <div style={{ fontSize: 14, color:"var(--text-dim)", marginTop:4 }}>
             {isNull ? "לא הוגדר — הלקוח לא רואה כלום" : cur.length === 0 ? "לא נבחרו — הלקוח לא רואה אף סעיף" : `נבחרו ${cur.length} סעיפים`}
             {spouses && <span style={{ marginRight:8, color:"var(--green-mid)" }}>· שאלון: {spouses === 1 ? "בן/בת זוג אחד/ת" : "שני בני זוג"}</span>}
           </div>
         </div>
         <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
-          {saved && <span style={{ fontSize: 15, color:"var(--green-soft)" }}>✅ נשמר</span>}
-          {saveError && <span style={{ fontSize: 15, color:"var(--red)" }}>⚠️ {saveError}</span>}
+          {saved && <span style={{ fontSize: 15, color:"var(--green-soft)", display:"flex", alignItems:"center", gap:4 }}><IcoCheck size={14} /> נשמר</span>}
+          {saveError && <span style={{ fontSize: 15, color:"var(--red)", display:"flex", alignItems:"center", gap:4 }}><IcoWarn size={13} /> {saveError}</span>}
           <Btn variant="secondary" size="sm" onClick={selectAll}>בחר הכל</Btn>
           <Btn variant="secondary" size="sm" onClick={clearAll}>נקה הכל</Btn>
-          <Btn onClick={save} disabled={saving}>{saving ? "שומר..." : "💾 שמור"}</Btn>
+          <Btn onClick={save} disabled={saving}>{saving ? "שומר..." : "שמור"}</Btn>
         </div>
       </div>
 
@@ -1360,7 +1923,7 @@ function RequiredDocsTab({ client, onRefresh }) {
           <div style={{ height:8, background:"var(--border)", borderRadius:4, overflow:"hidden" }}>
             <div style={{ height:"100%", width:`${totalSelected>0?(doneCount/totalSelected)*100:0}%`, background:"var(--green-mid)", borderRadius:4, transition:"width 0.3s" }} />
           </div>
-          {partialCount > 0 && <div style={{ fontSize: 13, color:"var(--gold)", marginTop:4 }}>⏳ {partialCount} מסמכים בתהליך</div>}
+          {partialCount > 0 && <div style={{ fontSize: 13, color:"var(--gold)", marginTop:4 }}>{partialCount} מסמכים בתהליך</div>}
         </div>
       )}
 
@@ -1369,12 +1932,13 @@ function RequiredDocsTab({ client, onRefresh }) {
           const cat = DOC_ID_MAP[opt.id] || opt.id;
           const isDone = docProgress.done.includes(cat);
           const isPartial = docProgress.partial.includes(cat);
+          const isPlBlocked = opt.id === "pl" && plBlocked;
           return (
-            <div key={opt.id}>
-              <div onClick={() => toggle(opt.id)} style={{
+            <div key={opt.id} style={isPlBlocked ? { opacity: 0.45, pointerEvents: "none" } : {}}>
+              <div onClick={() => !isPlBlocked && toggle(opt.id)} style={{
                 display:"flex", alignItems:"center", gap:14, padding:"14px 16px",
                 borderBottom: "none",
-                cursor:"pointer",
+                cursor: isPlBlocked ? "not-allowed" : "pointer",
                 background: cur.includes(opt.id) ? "rgba(46,204,138,0.04)" : "transparent",
               }}>
                 <div style={{
@@ -1384,7 +1948,6 @@ function RequiredDocsTab({ client, onRefresh }) {
                 }}>
                   {cur.includes(opt.id) && <span style={{ color:"white", fontSize: 15, fontWeight:700 }}>✓</span>}
                 </div>
-                <span style={{ fontSize: 20 }}>{(opt as any).icon}</span>
                 <div style={{ flex:1 }}>
                   <span style={{ fontSize: 16, fontWeight: cur.includes(opt.id) ? 600 : 400 }}>{opt.label}</span>
                   {opt.id === "questionnaire" && cur.includes("questionnaire") && spouses && (
@@ -1395,7 +1958,7 @@ function RequiredDocsTab({ client, onRefresh }) {
                   <span style={{ fontSize: 13, fontWeight:600, padding:"2px 8px", borderRadius:20,
                     background: isDone ? "rgba(46,204,138,0.12)" : isPartial ? "rgba(255,193,7,0.15)" : "var(--surface2)",
                     color: isDone ? "var(--green-mid)" : isPartial ? "var(--gold)" : "var(--text-dim)" }}>
-                    {isDone ? "✅ הוגש" : isPartial ? "⏳ חלקי" : "⬜ טרם הוגש"}
+                    {isDone ? "הוגש" : isPartial ? "חלקי" : "טרם הוגש"}
                   </span>
                 )}
               </div>
@@ -1408,6 +1971,11 @@ function RequiredDocsTab({ client, onRefresh }) {
                     placeholder="הוסף הנחיה ללקוח (אופציונלי) — למשל: 3 חודשים אחרונים מבנק מזרחי"
                     style={{ width:"100%", boxSizing:"border-box", fontSize: 14, padding:"6px 10px", borderRadius:6, border:"1px dashed var(--border)", background:"var(--surface2)", color:"var(--text)", fontFamily:"inherit", outline:"none" }}
                   />
+                </div>
+              )}
+              {isPlBlocked && (
+                <div style={{ padding:"0 16px 10px 16px", marginRight:50, fontSize:13, color:"var(--text-dim)" }}>
+                  לא רלוונטי — כל בני הזוג שכירים
                 </div>
               )}
               {i < allOptions.length-1 && <div style={{ height:1, background:"rgba(0,0,0,0.05)", marginRight:16, marginLeft:16 }} />}
@@ -1451,7 +2019,7 @@ function RequiredDocsTab({ client, onRefresh }) {
 const INTAKE_SECTIONS = [
   {
     id: "why",
-    title: "📌 רקע ומניע",
+    title: "רקע ומניע",
     fields: [
       { key: "why_came", label: "למה הגיעו אליך?", type: "textarea", placeholder: "מה הניע אותם לפנות דווקא עכשיו?" },
       { key: "why_situation", label: "למה לדעתם הגיעו למצב הנוכחי?", type: "textarea", placeholder: "חוסר ידע, הרגלים, אירוע מסוים..." },
@@ -1460,20 +2028,22 @@ const INTAKE_SECTIONS = [
   },
   {
     id: "family",
-    title: "👨‍👩‍👧 פרטי המשפחה",
+    title: "פרטי המשפחה",
     fields: [
       { key: "_spouse1_header", label: "", type: "header", text: "בן/בת זוג ראשון" },
       { key: "spouse1_name",        label: "שם",                                type: "text" },
       { key: "spouse1_age",         label: "גיל",                               type: "text" },
-      { key: "spouse1_job",         label: "עיסוק",                             type: "text" },
-      { key: "spouse1_salary",      label: "שכר חודשי ברוטו (₪)",              type: "number" },
+      { key: "spouse1_job",              label: "עיסוק",                             type: "text" },
+      { key: "spouse1_employment_type", label: "סוג עיסוק",                         type: "select", options: ["שכיר", "עצמאי", "גם וגם"] },
+      { key: "spouse1_salary",          label: "שכר חודשי ברוטו (₪)",              type: "number" },
       { key: "spouse1_salary_net",  label: "שכר חודשי נטו (₪)",               type: "number" },
       { key: "spouse1_notes",       label: "הערות (תואר, תנאים מיוחדים...)",  type: "textarea" },
       { key: "_spouse2_header", label: "", type: "header", text: "בן/בת זוג שני" },
       { key: "spouse2_name",        label: "שם",                                type: "text" },
       { key: "spouse2_age",         label: "גיל",                               type: "text" },
-      { key: "spouse2_job",         label: "עיסוק",                             type: "text" },
-      { key: "spouse2_salary",      label: "שכר חודשי ברוטו (₪)",              type: "number" },
+      { key: "spouse2_job",              label: "עיסוק",                             type: "text" },
+      { key: "spouse2_employment_type", label: "סוג עיסוק",                         type: "select", options: ["שכיר", "עצמאי", "גם וגם"] },
+      { key: "spouse2_salary",          label: "שכר חודשי ברוטו (₪)",              type: "number" },
       { key: "spouse2_salary_net",  label: "שכר חודשי נטו (₪)",               type: "number" },
       { key: "spouse2_notes",       label: "הערות",                             type: "textarea" },
       { key: "_children_header", label: "", type: "header", text: "ילדים, תלויים וחיות" },
@@ -1484,7 +2054,7 @@ const INTAKE_SECTIONS = [
   },
   {
     id: "housing",
-    title: "🏠 מגורים ונכסים",
+    title: "מגורים ונכסים",
     fields: [
       { key: "_housing_header", label: "", type: "header", text: "מגורים" },
       { key: "housing_type", label: "סוג מגורים", type: "text", placeholder: "בעלות / שכירות" },
@@ -1507,7 +2077,7 @@ const INTAKE_SECTIONS = [
   },
   {
     id: "debts",
-    title: "💳 חובות ואשראי",
+    title: "חובות ואשראי",
     fields: [
       { key: "overdraft", label: "אוברדראפט — כמה ומאיפה (₪)", type: "number" },
       { key: "monthly_deficit", label: "גרעון חודשי משוער לפי תחושתם (₪)", type: "number" },
@@ -1519,14 +2089,14 @@ const INTAKE_SECTIONS = [
   },
   {
     id: "loans",
-    title: "🏦 הלוואות",
+    title: "הלוואות",
     fields: [
       { key: "_loans_table", label: "", type: "loans_table" },
     ],
   },
   {
     id: "goals",
-    title: "🎯 יעדים ותכנונים",
+    title: "יעדים ותכנונים",
     fields: [
       { key: "success_definition", label: "מה ההגדרה שלהם להצלחה?", type: "textarea", placeholder: "בעוד שנה, מה ישמח אותם?" },
       { key: "goals_short", label: "יעדים לטווח קצר (עד שנה)", type: "textarea" },
@@ -1538,7 +2108,7 @@ const INTAKE_SECTIONS = [
   },
   {
     id: "insurance",
-    title: "🛡️ ביטוחים ופנסיה",
+    title: "ביטוחים ופנסיה",
     fields: [
       { key: "last_pension_agent", label: "מתי היו לאחרונה אצל סוכן פנסיוני?", type: "text" },
       { key: "insurance_notes", label: "ביטוחים קיימים והערות", type: "textarea" },
@@ -1546,7 +2116,7 @@ const INTAKE_SECTIONS = [
   },
   {
     id: "coach_notes",
-    title: "📝 הערות המאמן",
+    title: "הערות המאמן",
     fields: [
       { key: "client_quote", label: "ציטוט — מה הם אמרו שהם רוצים להשיג", type: "textarea", placeholder: "משפט מדויק בלשונם" },
       { key: "first_impression", label: "רושם ראשוני", type: "textarea" },
@@ -1598,6 +2168,63 @@ function LoansTable({ loans, onChange }: { loans: {desc:string;amount:string;mon
   );
 }
 
+function IntakeSelectField({ value, options, onChange }: {
+  value: string;
+  options: string[];
+  onChange: (v: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, []);
+
+  const triggerStyle: React.CSSProperties = {
+    width: "100%", padding: "9px 12px", borderRadius: 8,
+    border: "1px solid var(--border)", background: "var(--surface2)",
+    color: "var(--text)", fontSize: 14, fontFamily: "inherit",
+    display: "flex", justifyContent: "space-between", alignItems: "center",
+    cursor: "pointer", userSelect: "none",
+  };
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <div onClick={() => setOpen(o => !o)} style={triggerStyle}>
+        <span style={{ color: value ? "var(--text)" : "var(--text-dim)" }}>
+          {value || "בחר..."}
+        </span>
+        <span style={{ fontSize: 11, color: "var(--text-dim)", marginRight: 4 }}>▾</span>
+      </div>
+      {open && (
+        <div style={{ position: "absolute", top: "calc(100% + 4px)", right: 0, left: 0, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,0.12)", zIndex: 200, overflow: "hidden" }}>
+          {options.map(opt => (
+            <div
+              key={opt}
+              onClick={() => { onChange(opt); setOpen(false); }}
+              style={{ padding: "10px 14px", cursor: "pointer", fontSize: 14, background: opt === value ? "rgba(46,204,138,0.1)" : "transparent", color: opt === value ? "var(--green-mid)" : "var(--text)", fontWeight: opt === value ? 600 : 400, transition: "background 0.1s" }}
+              onMouseEnter={e => { if (opt !== value) (e.currentTarget as HTMLElement).style.background = "var(--surface2)"; }}
+              onMouseLeave={e => { if (opt !== value) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+            >
+              {opt}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function IntakeForm({ client }) {
   const [data, setData]       = useState<Record<string,any>>({});
   const [saving, setSaving]   = useState(false);
@@ -1607,7 +2234,7 @@ function IntakeForm({ client }) {
   const autoSaveRef = useRef<ReturnType<typeof setTimeout>|null>(null);
 
   useEffect(() => {
-    supabase.from("client_intake").select("data,meeting_date").eq("client_id", client.id).maybeSingle()
+    supabase.from("client_intake").select("data").eq("client_id", client.id).maybeSingle()
       .then(({ data: row }) => {
         if (row?.data) setData(row.data);
         else setData({ meeting_date: new Date(client.created_at || Date.now()).toISOString().slice(0,10) });
@@ -1625,6 +2252,57 @@ function IntakeForm({ client }) {
     if (error) { alert("שגיאה בשמירה — " + error.message); return; }
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+
+    // Sync personalized income categories for spouses
+    await syncIncomeCategories(client.id, newData.spouse1_name, newData.spouse2_name);
+  };
+
+  const syncIncomeCategories = async (clientId: number, name1?: string, name2?: string) => {
+    const spouses = [
+      { marker: "__spouse1__", name: name1?.trim() },
+      { marker: "__spouse2__", name: name2?.trim() },
+    ];
+
+    for (const { marker, name } of spouses) {
+      // Find existing client-specific income category with this marker
+      const { data: existing } = await supabase
+        .from("categories")
+        .select("id, name")
+        .eq("client_id", clientId)
+        .eq("budget_type", "הכנסה")
+        .contains("keywords", [marker])
+        .maybeSingle();
+
+      if (!name) {
+        // Name cleared — delete the category if it exists
+        if (existing) {
+          await supabase.from("categories").delete().eq("id", existing.id);
+        }
+        continue;
+      }
+
+      const catName = `הכנסה ${name}`;
+
+      if (existing) {
+        // Update name if changed
+        if (existing.name !== catName) {
+          await supabase.from("categories").update({ name: catName }).eq("id", existing.id);
+        }
+      } else {
+        // Create new personalized income category
+        await supabase.from("categories").insert({
+          client_id: clientId,
+          name: catName,
+          section: "הכנסות",
+          budget_type: "הכנסה",
+          keywords: [marker],
+          max_hints: [],
+          is_active: true,
+          is_ignored: false,
+          sort_order: 0,
+        });
+      }
+    }
   };
 
   const update = (key, val) => {
@@ -1664,17 +2342,17 @@ function IntakeForm({ client }) {
     <div>
       {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <div style={{ fontWeight: 700, fontSize: 18 }}>📋 טופס פגישה ראשונה — {client.name}</div>
+        <div style={{ fontWeight: 700, fontSize: 18 }}>טופס פגישה ראשונה — {client.name}</div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           {saving && <span style={{ fontSize: 14, color: "var(--text-dim)" }}>שומר...</span>}
-          {saved && !saving && <span style={{ fontSize: 14, color: "var(--green-soft)" }}>✅ נשמר</span>}
-          <Btn onClick={save} disabled={saving}>💾 שמור</Btn>
+          {saved && !saving && <span style={{ fontSize: 14, color: "var(--green-soft)", display:"flex", alignItems:"center", gap:4 }}><IcoCheck size={13} /> נשמר</span>}
+          <Btn onClick={save} disabled={saving}>שמור</Btn>
         </div>
       </div>
 
       {/* תאריך פגישה */}
       <div style={{ marginBottom: 16, display:"flex", alignItems:"center", gap:12 }}>
-        <span style={{ fontSize: 15, color:"var(--text-dim)", fontWeight:600 }}>📅 תאריך פגישה:</span>
+        <span style={{ fontSize: 15, color:"var(--text-dim)", fontWeight:600 }}>תאריך פגישה:</span>
         <input type="date" value={data.meeting_date||""} onChange={e=>update("meeting_date",e.target.value)}
           style={{ ...fieldStyle, width:"auto", padding:"6px 10px" }} />
       </div>
@@ -1682,10 +2360,10 @@ function IntakeForm({ client }) {
       {/* Summary bar */}
       {(totalIncome > 0 || overdraft > 0 || totalDebt > 0 || monthlyDeficit > 0) && (
         <div style={{ display:"flex", gap:12, flexWrap:"wrap", marginBottom:16, background:"var(--surface2)", borderRadius:10, padding:"12px 16px" }}>
-          {totalIncome > 0 && <div style={{ fontSize: 15 }}>💰 הכנסה נטו: <strong style={{color:"var(--green-mid)"}}>{totalIncome.toLocaleString("he-IL")} ₪</strong></div>}
-          {overdraft > 0 && <div style={{ fontSize: 15 }}>🔴 אוברדראפט: <strong style={{color:"var(--red)"}}>{overdraft.toLocaleString("he-IL")} ₪</strong></div>}
-          {totalDebt > 0 && <div style={{ fontSize: 15 }}>💳 חוב כולל: <strong style={{color:"var(--red)"}}>{totalDebt.toLocaleString("he-IL")} ₪</strong></div>}
-          {monthlyDeficit > 0 && <div style={{ fontSize: 15 }}>📉 גרעון חודשי: <strong style={{color:"var(--gold)"}}>{monthlyDeficit.toLocaleString("he-IL")} ₪</strong></div>}
+          {totalIncome > 0 && <div style={{ fontSize: 15 }}>הכנסה נטו: <strong style={{color:"var(--green-mid)"}}>{totalIncome.toLocaleString("he-IL")} ₪</strong></div>}
+          {overdraft > 0 && <div style={{ fontSize: 15 }}>אוברדראפט: <strong style={{color:"var(--red)"}}>{overdraft.toLocaleString("he-IL")} ₪</strong></div>}
+          {totalDebt > 0 && <div style={{ fontSize: 15 }}>חוב כולל: <strong style={{color:"var(--red)"}}>{totalDebt.toLocaleString("he-IL")} ₪</strong></div>}
+          {monthlyDeficit > 0 && <div style={{ fontSize: 15 }}>גרעון חודשי: <strong style={{color:"var(--gold)"}}>{monthlyDeficit.toLocaleString("he-IL")} ₪</strong></div>}
         </div>
       )}
 
@@ -1729,6 +2407,16 @@ function IntakeForm({ client }) {
                       <div key={field.key} style={{ marginBottom: 12 }}>
                         <div style={{ fontSize: 14, color: "var(--text-dim)", marginBottom: 5, fontWeight: 500 }}>{field.label}</div>
                         <input type="number" value={data[field.key] || ""} onChange={e => update(field.key, e.target.value)} style={fieldStyle} placeholder="0" />
+                      </div>
+                    );
+                    if (field.type === "select") return (
+                      <div key={field.key} style={{ marginBottom: 12 }}>
+                        <div style={{ fontSize: 14, color: "var(--text-dim)", marginBottom: 5, fontWeight: 500 }}>{field.label}</div>
+                        <IntakeSelectField
+                          value={data[field.key] || ""}
+                          options={(field as any).options}
+                          onChange={val => update(field.key, val)}
+                        />
                       </div>
                     );
                     return (

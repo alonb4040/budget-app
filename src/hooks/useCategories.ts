@@ -73,7 +73,12 @@ export function useCategories(clientId?: number | string | null): CategoriesData
     const ignoredCats = new Set(rows.filter(r => r.is_ignored).map(r => r.name));
     const incomeCats  = new Set(rows.filter(r => r.budget_type === 'הכנסה').map(r => r.name));
     const fixedCats   = new Set(rows.filter(r => r.budget_type === 'קבוע').map(r => r.name));
-    const allCats = [...globalRows.map(r => r.name), ...clientCats];
+    // If the client has personalized income categories, hide the generic global one
+    const hasPersonalizedIncome = clientRows.some(r => r.budget_type === 'הכנסה');
+    const filteredGlobalRows = hasPersonalizedIncome
+      ? globalRows.filter(r => r.name !== 'הכנסה בן/ת זוג נטו')
+      : globalRows;
+    const allCats = [...filteredGlobalRows.map(r => r.name), ...clientCats];
     const rules: CategoryRule[] = rows
       .filter(r => r.keywords?.length > 0 || r.max_hints?.length > 0)
       .map(r => ({ name: r.name, keywords: r.keywords || [], max_hints: r.max_hints || [] }));

@@ -11,6 +11,7 @@ import InsightsPanel from "./components/InsightsPanel";
 import ClientScenarioView, { periodsOverlap, periodForYear } from "./components/ClientScenarioView";
 import AnalyticsTrends from "./components/AnalyticsTrends";
 import AnalyticsForecast from "./components/AnalyticsForecast";
+import BankTutorial from "./components/BankTutorial";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, Legend, LineChart, Line } from "recharts";
 
 const REQUIRED_MONTHS = 3;
@@ -45,37 +46,47 @@ export default function ClientApp({ session, onLogout }) {
   const [portfolioSubs, setPortfolioSubs]     = useState([]);
   const [portfolioOpenedAt, setPortfolioOpenedAt] = useState(null);
   const [loadingData, setLoadingData]     = useState(true);
+  const TAB_KEY      = `mazan_activeTab_${session.id}`;
+  const PORT_KEY     = `mazan_portfolioOpen_${session.id}`;
+  const PORT_TAB_KEY = `mazan_portfolioTab_${session.id}`;
   const [activeTab, setActiveTab]         = useState(() => {
-    const saved = sessionStorage.getItem('mazan_activeTab');
+    const saved = sessionStorage.getItem(TAB_KEY);
     if (saved && saved !== "questionnaire") return saved;
-    const portfolioWasOpen = sessionStorage.getItem('mazan_portfolioOpen') === "1";
+    const portfolioWasOpen = sessionStorage.getItem(PORT_KEY) === "1";
     return portfolioWasOpen ? "portfolio" : "data";
   });
   // visitedTabs — tracks which tabs have been mounted at least once (lazy mount)
   const [visitedTabs, setVisitedTabs] = useState<Set<string>>(() => {
-    const saved = sessionStorage.getItem('mazan_activeTab');
+    const saved = sessionStorage.getItem(TAB_KEY);
     const initial = (saved && saved !== "questionnaire") ? saved
-      : sessionStorage.getItem('mazan_portfolioOpen') === "1" ? "portfolio" : "data";
+      : sessionStorage.getItem(PORT_KEY) === "1" ? "portfolio" : "data";
     return new Set([initial]);
   });
   const switchTab = (id) => {
-    sessionStorage.setItem('mazan_activeTab', id);
+    sessionStorage.setItem(TAB_KEY, id);
     setActiveTab(id);
     setVisitedTabs(prev => { const next = new Set(prev); next.add(id); return next; });
   };
   const [dataSubTab, setDataSubTab]       = useState(() =>
-    sessionStorage.getItem('mazan_activeTab') === "questionnaire" ? "questionnaire" : "documents"
+    sessionStorage.getItem(TAB_KEY) === "questionnaire" ? "questionnaire" : "documents"
   ); // documents | questionnaire
-  const [portfolioSubTab, setPortfolioSubTab] = useState(() => sessionStorage.getItem('mazan_portfolioTab') || "control");
+  const [portfolioSubTab, setPortfolioSubTab] = useState(() => sessionStorage.getItem(PORT_TAB_KEY) || "control");
   const [visitedPortfolioSubTabs, setVisitedPortfolioSubTabs] = useState<Set<string>>(() =>
-    new Set([sessionStorage.getItem('mazan_portfolioTab') || "control"])
+    new Set([sessionStorage.getItem(PORT_TAB_KEY) || "control"])
   );
   const switchPortfolioSubTab = (id: string) => {
-    sessionStorage.setItem('mazan_portfolioTab', id);
+    sessionStorage.setItem(PORT_TAB_KEY, id);
     setPortfolioSubTab(id);
     setVisitedPortfolioSubTabs(prev => { const next = new Set(prev); next.add(id); return next; });
   };
   const [showWelcome, setShowWelcome]     = useState(false);
+  const dismissWelcome = () => { setShowWelcome(false); sessionStorage.setItem('welcome_dismissed_' + session.id, '1'); };
+  useEffect(() => {
+    if (!showWelcome) return;
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') dismissWelcome(); };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [showWelcome]);
   const [showUserMenu, setShowUserMenu]   = useState(false);
   const [importedTxs, setImportedTxs]     = useState([]);
   const [importedLoaded, setImportedLoaded] = useState(false);
@@ -91,6 +102,14 @@ export default function ClientApp({ session, onLogout }) {
   const [hiddenCats, setHiddenCats]       = useState<string[]>([]);
   // קטגוריות מהתסריט הפעיל — null = אין תסריט פעיל (הצג הכל)
   const [scenarioCats, setScenarioCats]   = useState<string[] | null>(null);
+  // שמות בני הזוג לפי טופס פגישה ראשונה
+  const [spouseNames, setSpouseNames]     = useState<{s1: string|null, s2: string|null}>({ s1: null, s2: null });
+  // סוג עיסוק לפי טופס פגישה ראשונה
+  const [employmentTypes, setEmploymentTypes] = useState<{s1: string|null, s2: string|null}>({ s1: null, s2: null });
+  // סיבות "אין תלושים" לכל בן/בת זוג
+  const [noPayslipReasons, setNoPayslipReasons] = useState<{s1: string|null, s2: string|null}>({ s1: null, s2: null });
+  // מי מהספאוסים נמצא במסך תלושי השכר
+  const [activePayslipSpouse, setActivePayslipSpouse] = useState<1|2>(1);
 
   // active month context
   const [activeMonth, setActiveMonth]     = useState(null); // month_entry row
@@ -117,9 +136,31 @@ export default function ClientApp({ session, onLogout }) {
   const [dragOver, setDragOver]                   = useState(false);
   const [selectedTxIds, setSelectedTxIds]         = useState<Set<any>>(new Set());
 
+  // ── בדיקת כיסוי קטגוריות — מודלים ────────────────────────────────────────────
+  const [finalizeModal, setFinalizeModal]         = useState<null | 'month1' | 'month2' | 'month3'>(null);
+  const [pendingFinalize, setPendingFinalize]     = useState(false);
+  const [estimates, setEstimates]                 = useState<Record<string, string>>({});
+  const [openSections, setOpenSections]           = useState<Record<string, boolean>>({});
+  const [finalizeNote, setFinalizeNote]           = useState("");  // הערה לפני סיום חודש (משימה 4א)
+  const [showSubmissionNoteModal, setShowSubmissionNoteModal] = useState(false);
+  const [submissionNote, setSubmissionNote]       = useState("");
+  const [submittingNote, setSubmittingNote]       = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { loadUserData(); }, []);
+
+  // real-time: עדכון שמות בני זוג כשהאדמין משנה את טופס הפגישה הראשונה
+  useEffect(() => {
+    const channel = supabase
+      .channel(`intake_names_${session.id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "client_intake", filter: `client_id=eq.${session.id}` }, (payload) => {
+        const data = (payload.new as any)?.data;
+        if (data) setSpouseNames({ s1: data.spouse1_name || null, s2: data.spouse2_name || null });
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [session.id]);
 
   // פונקציה לרענון scenarioCats — משותפת לטעינה ראשונית ולreal-time
   const reloadScenarioCats = async (portfolioOpen: boolean) => {
@@ -215,7 +256,7 @@ export default function ClientApp({ session, onLogout }) {
       supabase.from("month_entries").select("*").eq("client_id", session.id).order("month_key", { ascending: false }),
       supabase.from("submissions").select("*").eq("client_id", session.id).order("created_at", { ascending: true }),
       supabase.from("remembered_mappings").select("*").eq("client_id", session.id),
-      supabase.from("clients").select("portfolio_open,portfolio_opened_at,email,phone,cycle_start_day,plan,submitted_at,required_docs,questionnaire_spouses,doc_notes,custom_docs,hidden_cats").eq("id", session.id).maybeSingle(),
+      supabase.from("clients").select("portfolio_open,portfolio_opened_at,email,phone,cycle_start_day,plan,submitted_at,required_docs,questionnaire_spouses,doc_notes,custom_docs,hidden_cats,no_payslip_reason_s1,no_payslip_reason_s2").eq("id", session.id).maybeSingle(),
       supabase.from("payslips").select("*").eq("client_id", session.id).order("created_at", { ascending: false }),
       supabase.from("portfolio_months").select("*").eq("client_id", session.id).order("month_key", { ascending: false }),
       supabase.from("portfolio_submissions").select("*").eq("client_id", session.id).order("created_at", { ascending: true }),
@@ -231,11 +272,11 @@ export default function ClientApp({ session, onLogout }) {
     setPayslips(pays || []);
     const isPortfolioOpen = clientData?.portfolio_open || false;
     setPortfolioOpen(isPortfolioOpen);
-    const wasTabSaved = !!sessionStorage.getItem('mazan_activeTab');
-    sessionStorage.setItem('mazan_portfolioOpen', isPortfolioOpen ? "1" : "0");
+    const wasTabSaved = !!sessionStorage.getItem(TAB_KEY);
+    sessionStorage.setItem(PORT_KEY, isPortfolioOpen ? "1" : "0");
     if (isPortfolioOpen && !wasTabSaved) {
-      sessionStorage.setItem('mazan_activeTab', 'portfolio');
-      sessionStorage.setItem('mazan_portfolioTab', 'control');
+      sessionStorage.setItem(TAB_KEY, 'portfolio');
+      sessionStorage.setItem(PORT_TAB_KEY, 'control');
       setActiveTab('portfolio');
       setPortfolioSubTab('control');
       setVisitedTabs(prev => { const next = new Set(prev); next.add('portfolio'); return next; });
@@ -250,6 +291,13 @@ export default function ClientApp({ session, onLogout }) {
     setDocNotes(clientData?.doc_notes ?? {});
     setCustomDocs(clientData?.custom_docs ?? []);
     setHiddenCats(clientData?.hidden_cats ?? []);
+    setNoPayslipReasons({ s1: clientData?.no_payslip_reason_s1 ?? null, s2: clientData?.no_payslip_reason_s2 ?? null });
+    // טעינת שמות בני הזוג מטופס פגישה ראשונה
+    const { data: intakeData } = await supabase.from("client_intake").select("data").eq("client_id", session.id).maybeSingle();
+    if (intakeData?.data) {
+      setSpouseNames({ s1: intakeData.data.spouse1_name || null, s2: intakeData.data.spouse2_name || null });
+      setEmploymentTypes({ s1: intakeData.data.spouse1_employment_type || null, s2: intakeData.data.spouse2_employment_type || null });
+    }
     await reloadScenarioCats(!!clientData?.portfolio_open).catch(() => {});
     setClientDocs(cDocs || []);
     setPortfolioMonths(pMonths || []);
@@ -281,9 +329,29 @@ export default function ClientApp({ session, onLogout }) {
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(""), 3500); };
 
   const finalizedMonths = monthEntries.filter(e => e.is_finalized);
+  // completedOnboarding — בודק האם הלקוח עבר את שלב האיסוף הבסיסי (3 חודשים + לפחות 3 תלושים כלשהם)
+  // מכוון: לא משתמש בלוגיקת per-spouse כדי לא לשבור לקוחות קיימים
   const completedOnboarding = finalizedMonths.length >= REQUIRED_MONTHS && payslips.length >= REQUIRED_MONTHS;
   const isOnboarding = !completedOnboarding;
-  const usedMonthKeys = monthEntries.map(e => e.month_key);
+
+  // ── קטגוריות ריקות — לבדיקת כיסוי ──────────────────────────────────────────
+  // קטגוריות גלובליות ריקות בחודש הנוכחי (popup A / B חודשים 1-2)
+  const emptyCatsCurrentMonth = useMemo(() => {
+    if (!activeMonth || !categoryRows.length) return [];
+    const usedCats = new Set(monthSubs.flatMap(s => (s.transactions || []).map(t => t.cat)));
+    return categoryRows.filter(r => r.client_id === null && !usedCats.has(r.name));
+  }, [activeMonth, monthSubs, categoryRows]);
+
+  // קטגוריות גלובליות ריקות לאורך כל 3 החודשים (popup B — חודש 3)
+  const emptyCatsAllMonths = useMemo(() => {
+    if (!categoryRows.length) return [];
+    const allUsedCats = new Set(submissions.flatMap(s => (s.transactions || []).map(t => t.cat)));
+    return categoryRows.filter(r => r.client_id === null && !allUsedCats.has(r.name));
+  }, [submissions, categoryRows]);
+  // חודש נחשב "תפוס" רק אם יש לו לפחות submission אחד — ghost entries (month_entry ללא submissions) לא חוסמים בחירה מחדש
+  const usedMonthKeys = monthEntries
+    .filter(e => submissions.some(s => s.month_key === e.month_key))
+    .map(e => e.month_key);
 
   // ── open month picker to create new month ──
   const openNewMonth = () => setShowMonthPicker(true);
@@ -386,18 +454,56 @@ export default function ClientApp({ session, onLogout }) {
     if (freshEntry) setActiveMonth(freshEntry);
     reloadSilent(); // רענן שאר הנתונים ברקע
 
-    showToast("✅ הפירוט נשמר!");
-    setScreen("month"); // always go to month view after saving
+    setScreen("month"); // go to month view (fallback if modal is dismissed)
+    finalizeMonth();   // קפוץ ישירות למודל "רגע לפני שמסמנים הושלם"
   };
 
-  const finalizeMonth = async () => {
+  const finalizeMonth = () => {
     if (!activeMonth) return;
-    if (!window.confirm(`לסמן את ${activeMonth.label} כהושלם?\nלא תוכל להוסיף תנועות חדשות, אך תוכל לערוך קיימות.`)) return;
-    await supabase.from("month_entries").update({ is_finalized: true }).eq("client_id", session.id).eq("month_key", activeMonth.month_key);
-    setMonthEntries(prev => prev.map(e => e.month_key === activeMonth.month_key ? { ...e, is_finalized: true } : e));
-    reloadSilent(); // רענן ברקע (לבדיקת completion)
-    showToast("✅ החודש סומן כהושלם!");
-    setScreen("dashboard");
+    // קבע איזה מודל להציג לפי מספר החודשים שכבר הושלמו
+    const doneCount = finalizedMonths.length;
+    const modalType = doneCount >= 2 ? 'month3' : doneCount === 1 ? 'month2' : 'month1';
+    setEstimates({});
+    setOpenSections({});
+    setFinalizeNote("");
+    setFinalizeModal(modalType);
+  };
+
+  const doFinalize = async (saveEstimatesFirst = false) => {
+    if (!activeMonth) return;
+    setPendingFinalize(true);
+    try {
+      if (saveEstimatesFirst) {
+        const entries = Object.entries(estimates)
+          .filter(([, v]) => v && Number(v) > 0)
+          .map(([category_name, monthly_amount]) => ({
+            client_id: session.id,
+            category_name,
+            monthly_amount: Number(monthly_amount),
+          }));
+        if (entries.length > 0) {
+          // מחיקת הערכות קיימות קודם, לאחר מכן הכנסה מחדש
+          await supabase.from("category_estimates").delete().eq("client_id", session.id);
+          await supabase.from("category_estimates").insert(entries);
+        }
+      }
+      const updatePayload: Record<string, any> = { is_finalized: true };
+      if (finalizeNote.trim()) updatePayload.finalize_note = finalizeNote.trim();
+      await supabase
+        .from("month_entries")
+        .update(updatePayload)
+        .eq("client_id", session.id)
+        .eq("month_key", activeMonth.month_key);
+      setMonthEntries(prev =>
+        prev.map(e => e.month_key === activeMonth.month_key ? { ...e, is_finalized: true } : e)
+      );
+      reloadSilent();
+      showToast("✅ החודש סומן כהושלם!");
+      setScreen("dashboard");
+    } finally {
+      setPendingFinalize(false);
+      setFinalizeModal(null);
+    }
   };
 
   const reopenMonth = async (monthKey) => {
@@ -498,10 +604,10 @@ export default function ClientApp({ session, onLogout }) {
           <div style={{ display:"flex", alignItems:"stretch" }}>
             {[
               ...(portfolioOpen ? [{ id:"portfolio", label:"תיק כלכלי" }] : []),
-              { id:"data", label:"חומרי בסיס" },
+              ...(!portfolioOpen ? [{ id:"data", label:"חומרי בסיס" }] : []),
               ...(completedOnboarding ? [{ id:"personal", label:"פרטים אישיים" }] : []),
-              ...(completedOnboarding ? [{ id:"analytics-trends", label:"מגמות" }] : []),
-              ...(completedOnboarding ? [{ id:"analytics-forecast", label:"תחזית" }] : []),
+              ...(portfolioOpen ? [{ id:"analytics-trends", label:"מגמות" }] : []),
+              ...(portfolioOpen ? [{ id:"analytics-forecast", label:"תחזית" }] : []),
             ].map(t => (
               <button key={t.id} onClick={() => switchTab(t.id)}
                 onMouseEnter={e => { if (activeTab !== t.id) (e.currentTarget as HTMLElement).style.color = "var(--text)"; }}
@@ -569,16 +675,28 @@ export default function ClientApp({ session, onLogout }) {
       {/* Welcome modal for new clients */}
       {showWelcome && (
         <>
-          <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", zIndex:9000 }} onClick={() => { setShowWelcome(false); sessionStorage.setItem('welcome_dismissed_' + session.id, '1'); }} />
-          <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:`1px solid ${"var(--border)"}`, borderRadius:20, padding:"36px 32px", zIndex:9001, width:"min(480px,90vw)", textAlign:"center", boxShadow:"0 24px 64px rgba(0,0,0,0.6)" }}>
-            <div style={{ fontSize:52, marginBottom:16 }}>👋</div>
-            <div style={{ fontWeight:800, fontSize: 22, marginBottom:10 }}>ברוכים הבאים!</div>
-            <div style={{ color:"var(--text-dim)", fontSize: 15, lineHeight:1.8, marginBottom:28 }}>
-              כדי שאלון יוכל לבנות לכם תכנית פיננסית מדויקת,<br/>
+          <style>{`@keyframes welcomeModalIn { from { transform: translate(-50%,-48%) scale(0.96); opacity:0; } to { transform: translate(-50%,-50%) scale(1); opacity:1; } }`}</style>
+          <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", zIndex:9000 }} onClick={dismissWelcome} />
+          <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:20, padding:"36px 32px", zIndex:9001, width:"min(480px,90vw)", textAlign:"center", boxShadow:"0 24px 60px rgba(0,0,0,0.25)", animation:"welcomeModalIn 250ms cubic-bezier(0.16,1,0.3,1)" }}>
+            {/* Close button */}
+            <button onClick={dismissWelcome} style={{ position:"absolute", top:14, left:16, background:"none", border:"none", cursor:"pointer", color:"var(--text-dim)", display:"flex", alignItems:"center", padding:6, borderRadius:8 }}>
+              <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+            {/* Icon */}
+            <div style={{ display:"flex", justifyContent:"center", marginBottom:16, color:"var(--green-mid)" }}>
+              <svg width={46} height={46} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>
+                <path d="M20 3v4"/><path d="M22 5h-4"/>
+                <path d="M4 17v2"/><path d="M5 18H3"/>
+              </svg>
+            </div>
+            <div style={{ fontWeight:700, fontSize:22, marginBottom:10 }}>ברוכים הבאים!</div>
+            <div style={{ color:"var(--text-dim)", fontSize:15, lineHeight:1.8, marginBottom:28, textAlign:"right" }}>
+              כדי שיוכל אלון לבנות לכם תכנית פיננסית מדויקת,<br/>
               נצטרך מכם מספר מסמכים. הרשימה המלאה מחכה לכם בדף הבא.
             </div>
-            <Btn onClick={() => { setShowWelcome(false); sessionStorage.setItem('welcome_dismissed_' + session.id, '1'); }} style={{ width:"100%", justifyContent:"center" }}>
-              מובן, בואו נתחיל! →
+            <Btn onClick={dismissWelcome} style={{ width:"100%", justifyContent:"center" }}>
+              ← מובן, בואו נתחיל!
             </Btn>
           </div>
         </>
@@ -588,6 +706,90 @@ export default function ClientApp({ session, onLogout }) {
       {toast && (
         <div style={{ position:"fixed", bottom:24, right:24, background:"var(--green-deep)", color:"#fff", borderRadius:12, padding:"12px 20px", fontSize: 15, zIndex:9999, boxShadow:"0 8px 32px rgba(30,77,53,0.3)" }}>
           {toast}
+        </div>
+      )}
+
+      {/* ── מודל בדיקת כיסוי קטגוריות (popup A — חודשים 1-2) ────────────────── */}
+      {(finalizeModal === 'month1' || finalizeModal === 'month2') && (
+        <FinalizeCheckModal
+          monthLabel={activeMonth?.label || ""}
+          emptyCats={emptyCatsCurrentMonth}
+          isMonth3={false}
+          estimates={estimates}
+          onEstimateChange={() => {}}
+          openSections={openSections}
+          onToggleSection={(s) => setOpenSections(p => ({ ...p, [s]: !p[s] }))}
+          finalizeNote={finalizeNote}
+          onFinalizeNoteChange={setFinalizeNote}
+          pending={pendingFinalize}
+          onBack={() => setFinalizeModal(null)}
+          onConfirm={() => doFinalize(false)}
+        />
+      )}
+
+      {/* ── מודל בדיקת כיסוי קטגוריות (popup B — חודש 3) ──────────────────────── */}
+      {finalizeModal === 'month3' && (
+        <FinalizeCheckModal
+          monthLabel={activeMonth?.label || ""}
+          emptyCats={emptyCatsAllMonths}
+          isMonth3={true}
+          estimates={estimates}
+          onEstimateChange={(cat, val) => setEstimates(p => ({ ...p, [cat]: val }))}
+          openSections={openSections}
+          onToggleSection={(s) => setOpenSections(p => ({ ...p, [s]: !p[s] }))}
+          finalizeNote={finalizeNote}
+          onFinalizeNoteChange={setFinalizeNote}
+          pending={pendingFinalize}
+          onBack={() => setFinalizeModal(null)}
+          onConfirm={() => doFinalize(true)}
+        />
+      )}
+
+      {/* ── מודל הערת הגשה (popup C) ─────────────────────────────────────────── */}
+      {showSubmissionNoteModal && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.55)", zIndex:10000, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+          <div style={{ background:"var(--surface)", borderRadius:18, padding:"32px 28px", maxWidth:500, width:"100%", boxShadow:"0 24px 64px rgba(0,0,0,0.35)", direction:"rtl" }}>
+            <div style={{ fontSize:22, fontWeight:700, marginBottom:8 }}>רגע לפני ההגשה ✋</div>
+            <div style={{ fontSize:15, color:"var(--text-dim)", marginBottom:20, lineHeight:1.7 }}>
+              לעיתים יש חודשים חריגים — נסיעה גדולה לחו"ל, קנייה חד-פעמית, הוצאה יוצאת דופן.
+              אם יש משהו שאלון צריך לדעת כדי להבין את התמונה נכון — כתוב כאן.
+            </div>
+            <textarea
+              value={submissionNote}
+              onChange={e => setSubmissionNote(e.target.value)}
+              placeholder='לדוגמה: "הייתה לנו נסיעה לתאילנד בעלות ₪40,000 — לא אופייני בכלל"'
+              rows={4}
+              style={{
+                width:"100%", boxSizing:"border-box", resize:"vertical",
+                background:"var(--surface2)", border:"1px solid var(--border)",
+                borderRadius:10, padding:"12px 14px", fontSize:15, color:"var(--text)",
+                fontFamily:"inherit", lineHeight:1.6, marginBottom:20, outline:"none",
+              }}
+            />
+            <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}>
+              <Btn variant="ghost" onClick={async () => {
+                setSubmittingNote(true);
+                await supabase.from("clients").update({ submitted_at: new Date().toISOString(), completion_email_sent: true }).eq("id", session.id);
+                await sendCompletionEmail(session.name);
+                setSubmittedAt(new Date().toISOString());
+                setShowSubmissionNoteModal(false);
+                setSubmittingNote(false);
+                showToast("🎉 הטופס הוגש! נשלחה הודעה לאלון.");
+              }} disabled={submittingNote}>הגש בלי הערה</Btn>
+              <Btn onClick={async () => {
+                setSubmittingNote(true);
+                if (submissionNote.trim()) {
+                  await supabase.from("clients").update({ submission_notes: submissionNote.trim() }).eq("id", session.id);
+                }
+                await supabase.from("clients").update({ submitted_at: new Date().toISOString(), completion_email_sent: true }).eq("id", session.id);
+                await sendCompletionEmail(session.name);
+                setSubmittedAt(new Date().toISOString());
+                setShowSubmissionNoteModal(false);
+                setSubmittingNote(false);
+                showToast("🎉 הטופס הוגש! נשלחה הודעה לאלון.");
+              }} disabled={submittingNote}>{submittingNote ? "מגיש..." : "הגש עם הערה"}</Btn>
+            </div>
+          </div>
         </div>
       )}
 
@@ -616,13 +818,14 @@ export default function ClientApp({ session, onLogout }) {
                       onMouseEnter={e => { if (dataSubTab !== t.id) (e.currentTarget as HTMLElement).style.background = "rgba(216,243,220,0.5)"; }}
                       onMouseLeave={e => { if (dataSubTab !== t.id) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
                       style={{
-                        padding:"5px 16px", fontSize: 15, fontFamily:"inherit",
-                        fontWeight: dataSubTab===t.id ? 600 : 400,
-                        color: dataSubTab===t.id ? "var(--green-deep)" : "var(--text-dim)",
-                        background: dataSubTab===t.id ? "var(--green-mint)" : "transparent",
+                        padding:"5px 18px", fontSize: 15, fontFamily:"inherit",
+                        fontWeight: dataSubTab===t.id ? 700 : 400,
+                        color: dataSubTab===t.id ? "#fff" : "var(--text-dim)",
+                        background: dataSubTab===t.id ? "var(--green-mid)" : "transparent",
                         border:"none", borderRadius:20,
                         cursor:"pointer", transition:"all 0.15s", whiteSpace:"nowrap",
                         letterSpacing:"0.01em",
+                        boxShadow: dataSubTab===t.id ? "0 2px 8px rgba(45,106,79,0.25)" : "none",
                       }}>
                       {t.label}
                     </button>
@@ -668,6 +871,7 @@ export default function ClientApp({ session, onLogout }) {
             <OnboardingChecklist
               session={session}
               finalizedMonths={finalizedMonths}
+              inProgressMonths={monthEntries.filter(e => !e.is_finalized && submissions.some(s => s.month_key === e.month_key))}
               payslips={payslips}
               docs={clientDocs}
               submittedAt={submittedAt}
@@ -675,19 +879,26 @@ export default function ClientApp({ session, onLogout }) {
               questionnaireSpouses={questionnaireSpouses}
               docNotes={docNotes}
               customDocs={customDocs}
+              spouseNames={spouseNames}
+              employmentTypes={employmentTypes}
+              noPayslipReasons={noPayslipReasons}
               onNavigateTxs={openNewMonth}
-              onNavigatePayslips={() => setScreen("payslips")}
+              onOpenExistingMonth={openMonth}
+              onNavigatePayslips={(spouseIdx: 1|2) => { setActivePayslipSpouse(spouseIdx); setScreen("payslips"); }}
+              onNoPayslipReasonSave={async (spouseIdx: 1|2, reason: string) => {
+                const col = spouseIdx === 1 ? "no_payslip_reason_s1" : "no_payslip_reason_s2";
+                await supabase.from("clients").update({ [col]: reason || null }).eq("id", session.id);
+                setNoPayslipReasons(prev => ({ ...prev, [spouseIdx === 1 ? "s1" : "s2"]: reason || null }));
+              }}
               onNavigateQuestionnaire={() => { switchTab("data"); setDataSubTab("questionnaire"); }}
               onMonthsChange={reloadSilent}
               onDocsChange={async () => {
                 const { data } = await supabase.from("client_documents").select("*").eq("client_id", session.id);
                 setClientDocs(data || []);
               }}
-              onSubmit={async () => {
-                await supabase.from("clients").update({ submitted_at: new Date().toISOString(), completion_email_sent: true }).eq("id", session.id);
-                await sendCompletionEmail(session.name);
-                setSubmittedAt(new Date().toISOString());
-                showToast("🎉 הטופס הוגש! נשלחה הודעה לאלון.");
+              onSubmit={(existingNote?: string) => {
+                setSubmissionNote(existingNote || "");
+                setShowSubmissionNoteModal(true);
               }}
             />
           )}
@@ -697,7 +908,7 @@ export default function ClientApp({ session, onLogout }) {
             <div>
               {/* KPIs */}
               <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))", gap:12, marginBottom:24 }}>
-                <KpiCard icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--green-mid)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><polyline points="9 16 11 18 15 14"/></svg>} label="חודשים שהושלמו" value={`${finalizedMonths.length} / ${REQUIRED_MONTHS}`} />
+                <KpiCard icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--green-mid)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><polyline points="9 16 11 18 15 14"/></svg>} label={finalizedMonths.length >= REQUIRED_MONTHS ? "חודשים שהועלו" : `חודשים שהועלו (נדרש: ${REQUIRED_MONTHS})`} value={finalizedMonths.length >= REQUIRED_MONTHS ? `✓ ${finalizedMonths.length}` : `${finalizedMonths.length} / ${REQUIRED_MONTHS}`} />
                 <KpiCard icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--green-mid)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg>} label="מיפויים שנזכרו" value={Object.keys(rememberedMappings).length} />
                 <KpiCard icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--red)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>} label="הוצאות אחרונות" value={(() => {
                   const last = monthEntries[0];
@@ -722,14 +933,13 @@ export default function ClientApp({ session, onLogout }) {
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
                 <div style={{ fontWeight:700, fontSize: 17, color:"var(--green-deep)", letterSpacing:"-0.1px" }}>חודשים שהוזנו</div>
                 <div style={{ display:"flex", gap:8 }}>
-                  <Btn size="sm" variant="secondary" onClick={() => setShowConnectCard(true)}>🔗 חבר כרטיס</Btn>
                   {monthEntries.length < REQUIRED_MONTHS && <Btn size="sm" onClick={openNewMonth}>+ הוסף חודש</Btn>}
                 </div>
               </div>
 
               {monthEntries.length === 0 ? (
                 <Card style={{ textAlign:"center", padding:48, color:"var(--text-dim)" }}>
-                  <div style={{ fontSize:36, marginBottom:12 }}>📂</div>
+                  <div style={{ display:"flex", justifyContent:"center", marginBottom:12, opacity:0.4 }}><DocIcon name="folder" color="var(--text-dim)" size={36} /></div>
                   <div>לחץ "+ הוסף חודש" כדי להתחיל</div>
                 </Card>
               ) : monthEntries.map(entry => {
@@ -740,11 +950,11 @@ export default function ClientApp({ session, onLogout }) {
                 return (
                   <Card key={entry.id || entry.month_key} style={{ marginBottom:12, border:`1px solid ${entry.is_finalized?"rgba(46,204,138,0.25)":"var(--border)"}` }}>
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:10 }}>
-                      <div style={{ flex:1, cursor:"pointer" }} onClick={() => openMonth(entry)}>
+                      <div style={{ flex:1, cursor:"pointer", transition:"opacity 0.15s" }} onClick={() => openMonth(entry)} onMouseEnter={e=>(e.currentTarget as HTMLElement).style.opacity="0.8"} onMouseLeave={e=>(e.currentTarget as HTMLElement).style.opacity="1"}>
                         <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4 }}>
                           <div style={{ fontWeight:700, fontSize: 18 }}>{entry.label}</div>
                           {entry.is_finalized
-                            ? <span style={{ background:"rgba(46,204,138,0.15)", color:"var(--green-soft)", borderRadius:20, padding:"2px 10px", fontSize: 13, fontWeight:700 }}>✓ הושלם</span>
+                            ? <span style={{ background:"rgba(46,204,138,0.15)", color:"var(--green-soft)", borderRadius:20, padding:"2px 10px", fontSize: 13, fontWeight:700, display:"inline-flex", alignItems:"center", gap:4 }}><DocIcon name="check-circle" color="var(--green-soft)" size={13} /> הושלם</span>
                             : <span style={{ background:"rgba(255,183,77,0.12)", color:"var(--gold)", borderRadius:20, padding:"2px 10px", fontSize: 13 }}>בתהליך</span>
                           }
                         </div>
@@ -752,6 +962,7 @@ export default function ClientApp({ session, onLogout }) {
                         <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
                           {top3.map(([cat,amt]) => <span key={cat} style={{ background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:20, padding:"2px 10px", fontSize: 14, color:"var(--text-mid)" }}>{cat}: ₪{Math.round(amt).toLocaleString()}</span>)}
                         </div>
+                        <div style={{ fontSize: 13, color:"var(--text-dim)", marginTop:6, display:"flex", alignItems:"center", gap:4 }}>לחץ לפרטים <span style={{ fontSize:16 }}>←</span></div>
                       </div>
                       <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:6 }}>
                         <div style={{ fontWeight:800, fontSize: 22, color:"var(--red)" }}>₪{Math.round(total).toLocaleString()}</div>
@@ -768,7 +979,7 @@ export default function ClientApp({ session, onLogout }) {
           )}
 
           {/* PORTFOLIO TAB */}
-          {completedOnboarding && activeTab === "portfolio" && portfolioOpen && (
+          {activeTab === "portfolio" && portfolioOpen && (
             <PortfolioTab
               clientId={session.id}
               clientPlan={clientPlan}
@@ -808,7 +1019,7 @@ export default function ClientApp({ session, onLogout }) {
           )}
 
           {/* ANALYTICS TRENDS TAB — מגמות (lazy mount) */}
-          {completedOnboarding && visitedTabs.has("analytics-trends") && (
+          {portfolioOpen && visitedTabs.has("analytics-trends") && (
             <div style={{ display: activeTab === "analytics-trends" ? "block" : "none" }}>
               <AnalyticsTrends
                 clientId={session.id}
@@ -825,7 +1036,7 @@ export default function ClientApp({ session, onLogout }) {
           )}
 
           {/* ANALYTICS FORECAST TAB — תחזית (lazy mount) */}
-          {completedOnboarding && visitedTabs.has("analytics-forecast") && (
+          {portfolioOpen && visitedTabs.has("analytics-forecast") && (
             <div style={{ display: activeTab === "analytics-forecast" ? "block" : "none" }}>
               <AnalyticsForecast
                 clientId={session.id}
@@ -941,7 +1152,7 @@ export default function ClientApp({ session, onLogout }) {
           )}
 
           <Btn onClick={analyzeFiles} disabled={uploadedFiles.length === 0 || !sourceLabel || analyzing} style={{ width:"100%", justifyContent:"center" }}>
-            {analyzing ? "⏳ מנתח..." : "🔍 נתח תנועות ←"}
+            {analyzing ? "מנתח..." : "נתח תנועות ←"}
           </Btn>
         </div>
       )}
@@ -1068,7 +1279,7 @@ export default function ClientApp({ session, onLogout }) {
                         onClick={() => toggleFlowType(tx.id)}
                         title={inTransferSection ? "הזז להוצאות רגילות" : "סמן כחיוב אשראי — לא ייספר בהוצאות"}
                         style={{ background: inTransferSection ? "var(--green-mint)" : "transparent", border:`1px solid ${inTransferSection ? "var(--green-soft)" : "var(--border)"}`, borderRadius:8, padding:"5px 10px", fontSize: 14, color: inTransferSection ? "var(--green-deep)" : "var(--text-dim)", cursor:"pointer", fontFamily:"inherit", whiteSpace:"nowrap" }}
-                      >{inTransferSection ? "↩️ הוצאה" : "💳 כלול בכרטיס"}</button>
+                      >{inTransferSection ? "↩ הוצאה" : "כלול בכרטיס"}</button>
                     )}
                   </div>
                 </div>
@@ -1112,24 +1323,24 @@ export default function ClientApp({ session, onLogout }) {
                 {hasIncome && (
                   <>
                     <div style={{ fontWeight:800, fontSize: 20, color:"var(--green-deep)", marginBottom:10, marginTop:8, padding:"10px 14px", background:"var(--green-mint)", borderRadius:10, display:"flex", alignItems:"center", gap:8, borderBottom:"2px solid var(--green-soft)" }}>
-                      💰 הכנסות <span style={{ fontWeight:500, color:"var(--green-mid)", fontSize: 16 }}>({incomeTxs.length})</span>
+                      הכנסות <span style={{ fontWeight:500, color:"var(--green-mid)", fontSize: 16 }}>({incomeTxs.length})</span>
                     </div>
                     {incomeTxs.map(tx => renderTxCard(tx, false))}
                   </>
                 )}
                 {expenseTxs.length > 0 && (
                   <div style={{ fontWeight:800, fontSize: 20, color:"var(--red)", marginBottom:10, marginTop: hasIncome ? 16 : 8, padding:"10px 14px", background:"var(--red-light)", borderRadius:10, display:"flex", alignItems:"center", gap:8, borderBottom:"2px solid var(--red)" }}>
-                    💸 הוצאות <span style={{ fontWeight:500, color:"var(--text-dim)", fontSize: 16 }}>({expenseTxs.length})</span>
+                    הוצאות <span style={{ fontWeight:500, color:"var(--text-dim)", fontSize: 16 }}>({expenseTxs.length})</span>
                   </div>
                 )}
                 {expenseTxs.map(tx => renderTxCard(tx, false))}
                 {hasTransfers && (
                   <>
                     <div style={{ fontWeight:800, fontSize: 20, color:"var(--text-dim)", marginBottom:6, marginTop:20, padding:"10px 14px", background:"var(--surface2)", borderRadius:10, display:"flex", alignItems:"center", gap:8, borderBottom:"2px solid var(--border)" }}>
-                      🔄 חיובי אשראי <span style={{ fontWeight:500, color:"var(--text-dim)", fontSize: 16 }}>({creditTransferTxs.length})</span>
+                      חיובי אשראי <span style={{ fontWeight:500, color:"var(--text-dim)", fontSize: 16 }}>({creditTransferTxs.length})</span>
                     </div>
                     <div style={{ fontSize: 15, color:"var(--text-dim)", background:"rgba(255,183,77,0.08)", border:"1px solid rgba(255,183,77,0.25)", borderRadius:8, padding:"8px 14px", marginBottom:10 }}>
-                      ℹ️ תנועות אלו הן תשלומי כרטיס אשראי — <strong>לא נספרות כהוצאה</strong> כדי למנוע כפילות עם נתוני מקס/ישראכרט. לחץ על ↩️ כדי להעביר להוצאות.
+                      תנועות אלו הן תשלומי כרטיס אשראי — <strong>לא נספרות כהוצאה</strong> כדי למנוע כפילות עם נתוני מקס/ישראכרט. לחץ על ↩ כדי להעביר להוצאות.
                     </div>
                     {creditTransferTxs.map(tx => renderTxCard(tx, true))}
                   </>
@@ -1149,7 +1360,7 @@ export default function ClientApp({ session, onLogout }) {
                 </button>
                 <button type="button" onClick={() => { setTransactions(prev => prev.filter(t => !selectedTxIds.has(t.id))); setSelectedTxIds(new Set()); }}
                   style={{ background:"rgba(192,57,43,0.7)", border:"1px solid rgba(255,255,255,0.2)", borderRadius:8, padding:"5px 14px", fontSize: 15, color:"#fff", cursor:"pointer", fontFamily:"inherit", fontWeight:600 }}>
-                  🗑 מחק נבחרים
+                  מחק נבחרים
                 </button>
                 <button type="button" onClick={() => setSelectedTxIds(new Set())}
                   style={{ background:"transparent", border:"none", color:"rgba(255,255,255,0.6)", cursor:"pointer", fontSize: 20, padding:"0 4px" }}>×</button>
@@ -1169,6 +1380,8 @@ export default function ClientApp({ session, onLogout }) {
         <PayslipsScreen
           clientId={session.id}
           payslips={payslips}
+          spouseIndex={activePayslipSpouse}
+          spouseName={activePayslipSpouse === 1 ? spouseNames.s1 : spouseNames.s2}
           subsCount={finalizedMonths.length}
           clientName={session.name}
           onDone={async () => {
@@ -1181,13 +1394,14 @@ export default function ClientApp({ session, onLogout }) {
 
       {/* ── פס צד יצירת קשר ── */}
       <a
+        className="wa-sidebar-btn"
         href="https://wa.me/972542558557"
         target="_blank"
         rel="noreferrer"
         title="שלח הודעת WhatsApp"
         style={{
           position: "fixed",
-          right: 0,
+          left: 0,
           top: "50%",
           transform: "translateY(-50%)",
           zIndex: 1000,
@@ -1196,19 +1410,19 @@ export default function ClientApp({ session, onLogout }) {
           alignItems: "center",
           gap: 8,
           background: "var(--green-mid)",
-          borderRadius: "12px 0 0 12px",
+          borderRadius: "0 12px 12px 0",
           padding: "16px 10px",
           textDecoration: "none",
-          boxShadow: "-2px 0 18px rgba(45,106,79,0.18)",
+          boxShadow: "2px 0 18px rgba(45,106,79,0.18)",
           transition: "background 0.2s, box-shadow 0.2s",
         }}
         onMouseEnter={e => {
           (e.currentTarget as HTMLElement).style.background = "var(--green-deep)";
-          (e.currentTarget as HTMLElement).style.boxShadow = "-2px 0 24px rgba(45,106,79,0.3)";
+          (e.currentTarget as HTMLElement).style.boxShadow = "2px 0 24px rgba(45,106,79,0.3)";
         }}
         onMouseLeave={e => {
           (e.currentTarget as HTMLElement).style.background = "var(--green-mid)";
-          (e.currentTarget as HTMLElement).style.boxShadow = "-2px 0 18px rgba(45,106,79,0.18)";
+          (e.currentTarget as HTMLElement).style.boxShadow = "2px 0 18px rgba(45,106,79,0.18)";
         }}
       >
         <svg width="22" height="22" viewBox="0 0 32 32" fill="white">
@@ -1227,6 +1441,37 @@ export default function ClientApp({ session, onLogout }) {
       </a>
     </div>
   );
+}
+
+// ── Shared SVG Icon Component ─────────────────────────────────────────────────
+function DocIcon({ name, color = "var(--green-mid)", size = 20 }: { name: string; color?: string; size?: number }) {
+  const s: React.SVGProps<SVGSVGElement> = { width:size, height:size, viewBox:"0 0 24 24", fill:"none", stroke:color, strokeWidth:"1.75", strokeLinecap:"round", strokeLinejoin:"round" };
+  if (name==="folder")       return <svg {...s}><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>;
+  if (name==="payslip")      return <svg {...s}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>;
+  if (name==="clipboard")    return <svg {...s}><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><line x1="12" y1="11" x2="16" y2="11"/><line x1="12" y1="15" x2="16" y2="15"/></svg>;
+  if (name==="coins")        return <svg {...s}><circle cx="8" cy="8" r="5"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><line x1="16.71" y1="13.88" x2="17" y2="18"/></svg>;
+  if (name==="bar-chart")    return <svg {...s}><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="2" y1="20" x2="22" y2="20"/></svg>;
+  if (name==="building")     return <svg {...s}><rect x="3" y="9" width="18" height="12" rx="2"/><path d="M3 9l9-6 9 6"/><line x1="9" y1="21" x2="9" y2="12"/><line x1="15" y1="21" x2="15" y2="12"/></svg>;
+  if (name==="user")         return <svg {...s}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>;
+  if (name==="file")         return <svg {...s}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>;
+  if (name==="alert")        return <svg {...s} stroke={color||"var(--gold)"}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>;
+  if (name==="note")         return <svg {...s}><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>;
+  if (name==="pencil")       return <svg {...s}><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>;
+  if (name==="link")         return <svg {...s}><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>;
+  if (name==="save")         return <svg {...s}><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>;
+  if (name==="check-circle") return <svg {...s}><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>;
+  if (name==="lightbulb")    return <svg {...s}><line x1="9" y1="18" x2="15" y2="18"/><line x1="10" y1="22" x2="14" y2="22"/><path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14"/></svg>;
+  if (name==="trash")        return <svg {...s}><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>;
+  if (name==="paperclip")    return <svg {...s}><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>;
+  if (name==="bank")         return <svg {...s}><line x1="3" y1="22" x2="21" y2="22"/><line x1="6" y1="18" x2="6" y2="11"/><line x1="10" y1="18" x2="10" y2="11"/><line x1="14" y1="18" x2="14" y2="11"/><line x1="18" y1="18" x2="18" y2="11"/><polygon points="12 2 20 7 4 7"/></svg>;
+  if (name==="car")          return <svg {...s}><rect x="1" y="3" width="15" height="13" rx="2"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>;
+  if (name==="home")         return <svg {...s}><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>;
+  if (name==="briefcase")    return <svg {...s}><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>;
+  if (name==="users")        return <svg {...s}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>;
+  if (name==="pin")          return <svg {...s}><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>;
+  if (name==="eye")          return <svg {...s}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>;
+  if (name==="unlock")       return <svg {...s}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>;
+  return <svg {...s}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>;
 }
 
 // ── Month Picker Modal ────────────────────────────────────────────────────────
@@ -1320,15 +1565,18 @@ function LoanFieldForm({ cat, fields, onChange }) {
 // ── Onboarding Checklist ──────────────────────────────────────────────────────
 // type: "file" = קובץ בלבד | "fields" = שדות בלבד | "both" = שדות + קובץ אופציונלי
 const LOAN_TYPES = [
-  { id:"loan_bank",     label:"הלוואת בנק",          icon:"🏦", type:"file",   fileLabel:"פרטי הלוואה מהבנק" },
-  { id:"loan_car",      label:"הלוואת רכב",           icon:"🚗", type:"file",   fileLabel:"לוח סילוקין" },
-  { id:"loan_mortgage", label:"משכנתה",               icon:"🏠", type:"file",   fileLabel:"דוח יתרות משכנתה" },
-  { id:"loan_work",     label:"הלוואת עבודה",         icon:"💼", type:"fields" },
-  { id:"loan_family",   label:"הלוואה מחבר/משפחה",   icon:"👥", type:"fields" },
-  { id:"loan_other",    label:"הלוואה אחרת",          icon:"📄", type:"both" },
+  { id:"loan_bank",     label:"הלוואת בנק",          icon:"bank",       type:"file",   fileLabel:"פרטי הלוואה מהבנק" },
+  { id:"loan_car",      label:"הלוואת רכב",           icon:"car",        type:"file",   fileLabel:"לוח סילוקין" },
+  { id:"loan_mortgage", label:"משכנתה",               icon:"home",       type:"file",   fileLabel:"דוח יתרות משכנתה" },
+  { id:"loan_work",     label:"הלוואת עבודה",         icon:"briefcase",  type:"fields" },
+  { id:"loan_family",   label:"הלוואה מחבר/משפחה",   icon:"users",      type:"fields" },
+  { id:"loan_other",    label:"הלוואה אחרת",          icon:"file",       type:"both" },
 ];
 
-function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submittedAt, requiredDocs, questionnaireSpouses, docNotes, customDocs, onNavigateTxs, onNavigatePayslips, onNavigateQuestionnaire, onDocsChange, onMonthsChange, onSubmit }) {
+function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, payslips, docs, submittedAt, requiredDocs, questionnaireSpouses, docNotes, customDocs, spouseNames, employmentTypes, noPayslipReasons, onNavigateTxs, onOpenExistingMonth, onNavigatePayslips, onNoPayslipReasonSave, onNavigateQuestionnaire, onDocsChange, onMonthsChange, onSubmit }) {
+  spouseNames = spouseNames || { s1: null, s2: null };
+  employmentTypes = employmentTypes || { s1: null, s2: null };
+  noPayslipReasons = noPayslipReasons || { s1: null, s2: null };
   docNotes = docNotes || {};
   customDocs = customDocs || [];
   const [expanded, setExpanded]       = useState(null);
@@ -1343,7 +1591,33 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
   const [editMonthVal, setEditMonthVal]     = useState({ month: 0, year: new Date().getFullYear() });
   const [editMonthErr, setEditMonthErr]     = useState("");
   const [editMonthSaving, setEditMonthSaving] = useState(false);
+  const [noPayslipInput, setNoPayslipInput]   = useState<{spouse: 1|2, val: string}|null>(null);
+  const [cancelConfirmSpouse, setCancelConfirmSpouse] = useState<1|2|null>(null);
+  const [summaryNote, setSummaryNote]         = useState("");  // הערות מסכמות לאחר 3 חודשים (משימה 4ב)
+  const [summaryNoteSaving, setSummaryNoteSaving] = useState(false);
+  const [bankAccountCount, setBankAccountCount] = useState(1);
+  const [bankParseWarnings, setBankParseWarnings] = useState<Record<number,string>>({});
+  const [bankTutorialSeen, setBankTutorialSeen] = useState(() =>
+    !!localStorage.getItem(`bank_tutorial_seen_${session.id}`)
+  );
   const fileRefs                      = useRef({});
+  const summaryNoteTimerRef           = useRef<any>(null);
+
+  // load submission_notes (summary note) on mount
+  useEffect(() => {
+    supabase.from("clients").select("submission_notes").eq("id", session.id).maybeSingle()
+      .then(({ data }) => { if (data?.submission_notes) setSummaryNote(data.submission_notes); });
+  }, [session.id]);
+
+  const handleSummaryNoteChange = (val: string) => {
+    setSummaryNote(val);
+    clearTimeout(summaryNoteTimerRef.current);
+    summaryNoteTimerRef.current = setTimeout(async () => {
+      setSummaryNoteSaving(true);
+      await supabase.from("clients").update({ submission_notes: val.trim() || null }).eq("id", session.id);
+      setSummaryNoteSaving(false);
+    }, 1200);
+  };
 
   // load questionnaire done status
   useEffect(() => {
@@ -1358,8 +1632,19 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
     })();
   }, [session.id, requiredDocs]);
 
-  const txsDone      = finalizedMonths.length >= 3;
-  const payslipsDone = payslips.length >= 3;
+  const txsDone = finalizedMonths.length >= 3;
+
+  // תלושי שכר — מעקב לפי בן/בת זוג
+  const hasSpouse2 = !!spouseNames.s2;
+  // דוח רווח והפסד — לפי סוג עיסוק
+  const needsPL = (type: string|null) => type === "עצמאי" || type === "גם וגם";
+  const s1NeedsPL = needsPL(employmentTypes.s1);
+  const s2NeedsPL = hasSpouse2 && needsPL(employmentTypes.s2);
+  const s1Payslips = payslips.filter(p => !p.spouse_index || p.spouse_index === 1);
+  const s2Payslips = payslips.filter(p => p.spouse_index === 2);
+  const s1PayslipsDone = s1Payslips.length >= 3 || !!noPayslipReasons.s1;
+  const s2PayslipsDone = !hasSpouse2 || s2Payslips.length >= 3 || !!noPayslipReasons.s2;
+  const payslipsDone = s1PayslipsDone && s2PayslipsDone;
 
   const needsQuestionnaire = requiredDocs && requiredDocs.includes("questionnaire");
   const spousesCount       = questionnaireSpouses || 1;
@@ -1372,17 +1657,32 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
   const ALL_OPTIONAL = ["loans","provident","pl","savings","retirement","checks","debts_other"];
   const visibleOptional = requiredDocs ? ALL_OPTIONAL.filter(s => requiredDocs.includes(s)) : ALL_OPTIONAL;
 
-  const optDoneMap = { loans: isDone("loans_section"), provident: isDone("provident_fund"), pl: isDone("profit_loss"), savings: isDone("savings_pension"), retirement: isDone("retirement_forecast"), checks: isDone("deferred_checks"), debts_other: isDone("debts_other") };
+  const optDoneMap = { loans: isDone("loans_section"), provident: isDone("provident_fund"), pl: (s1NeedsPL || s2NeedsPL) ? ((!s1NeedsPL || isDone("profit_loss_1")) && (!s2NeedsPL || isDone("profit_loss_2"))) : isDone("profit_loss"), savings: isDone("savings_pension"), retirement: isDone("retirement_forecast"), checks: isDone("deferred_checks"), debts_other: isDone("debts_other") };
   const allOptDone    = visibleOptional.every(s => optDoneMap[s]);
-  const requiredDone  = txsDone && payslipsDone && allOptDone && questDone;
+
+  const needsBankStmt = !!(requiredDocs && requiredDocs.includes("bank_stmt"));
+  const bankAcctsDone = Array.from({ length: bankAccountCount }, (_, i) => i + 1).every(n => isDone(`bank_stmt_${n}`));
+  const bankStmtDone  = !needsBankStmt || bankAcctsDone;
+  const bankStmtPartial = needsBankStmt && !bankStmtDone &&
+    Array.from({ length: bankAccountCount }, (_, i) => i + 1).some(n => hasFiles(`bank_stmt_${n}`) || isDone(`bank_stmt_${n}`));
+
+  const requiredDone  = txsDone && payslipsDone && allOptDone && questDone && bankStmtDone;
 
   const REQUIRED_MONTHS = 3;
-  const totalItems     = REQUIRED_MONTHS + REQUIRED_MONTHS + visibleOptional.length + (needsQuestionnaire ? 1 : 0);
+  const payslipPersonCount = hasSpouse2 ? 2 : 1;
+  const totalItems     = REQUIRED_MONTHS + payslipPersonCount + visibleOptional.length + (needsQuestionnaire ? 1 : 0) + (needsBankStmt ? 1 : 0);
   const completedItems = Math.min(finalizedMonths.length, REQUIRED_MONTHS)
-    + Math.min(payslips.length, REQUIRED_MONTHS)
+    + (s1PayslipsDone ? 1 : 0) + (hasSpouse2 && s2PayslipsDone ? 1 : 0)
     + visibleOptional.filter(s => optDoneMap[s]).length
-    + (needsQuestionnaire && questDone ? 1 : 0);
+    + (needsQuestionnaire && questDone ? 1 : 0)
+    + (needsBankStmt && bankStmtDone ? 1 : 0);
   const progressPct    = totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0;
+
+  // load bankAccountCount from bank_stmt_meta extra_data
+  useEffect(() => {
+    const meta = docs.find(d => d.category === "bank_stmt_meta");
+    if (meta?.extra_data?.num_accounts) setBankAccountCount(meta.extra_data.num_accounts);
+  }, [docs]);
 
   // init active loan types from existing docs
   useEffect(() => {
@@ -1400,7 +1700,10 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
   const loansDone = isDone("loans_section");
   const loansHasAny = activeLoanTypes.length > 0;
 
-  const toggle = id => setExpanded(e => e === id ? null : id);
+  const toggle = id => {
+    setExpanded(e => e === id ? null : id);
+    if (id !== "pays") setNoPayslipInput(null);
+  };
 
   const openEditMonth = (entry) => {
     const [y, m] = (entry.month_key || "").split("-");
@@ -1518,28 +1821,98 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
     setSaving(null);
   };
 
+  const saveBankAccount = async (n: number) => {
+    const cat = `bank_stmt_${n}`;
+    setSaving(cat);
+    // upload files
+    const existing = getDoc(cat);
+    const pending  = pendingFiles[cat] || [];
+    const uploaded = await Promise.all(pending.map(f => uploadToStorage(f, cat)));
+    const allFiles = [...(existing?.files || []), ...uploaded];
+    // try to detect bank from PDF files (best-effort — never block upload)
+    const pdfFile = pending.find(f => f.name.toLowerCase().endsWith(".pdf"));
+    if (pdfFile) {
+      try {
+        const buf = await pdfFile.arrayBuffer();
+        await parseBankPDF(buf, pdfFile.name, {}, []);
+        setBankParseWarnings(prev => { const n2 = {...prev}; delete n2[n]; return n2; });
+      } catch (err: any) {
+        setBankParseWarnings(prev => ({ ...prev, [n]: `הבנק לא זוהה אוטומטית — הקובץ הועלה, אבל לא ניתן לנתח אותו. ${err?.message || ""}` }));
+      }
+    }
+    // save account doc as done
+    if (existing) {
+      await supabase.from("client_documents").update({ files: allFiles, marked_done: true }).eq("id", existing.id);
+    } else {
+      await supabase.from("client_documents").insert([{ client_id: session.id, category: cat, label: `פירוט עו"ש — חשבון ${n}`, files: allFiles, marked_done: true }]);
+    }
+    setPendingFiles(prev => { const nv={...prev}; delete nv[cat]; return nv; });
+    // upsert bank_stmt_meta with num_accounts
+    const metaExisting = getDoc("bank_stmt_meta");
+    const allNDone = Array.from({ length: bankAccountCount }, (_, i) => i + 1)
+      .every(idx => idx === n ? true : isDone(`bank_stmt_${idx}`));
+    if (metaExisting) {
+      await supabase.from("client_documents").update({ extra_data: { num_accounts: bankAccountCount }, marked_done: allNDone }).eq("id", metaExisting.id);
+    } else {
+      await supabase.from("client_documents").insert([{ client_id: session.id, category: "bank_stmt_meta", label: `פירוט עו"ש`, files: [], extra_data: { num_accounts: bankAccountCount }, marked_done: allNDone }]);
+    }
+    await onDocsChange();
+    if (allNDone) setExpanded(null);
+    setSaving(null);
+  };
+
+  const addBankAccount = async () => {
+    const newCount = bankAccountCount + 1;
+    setBankAccountCount(newCount);
+    // persist new count in meta
+    const metaExisting = getDoc("bank_stmt_meta");
+    if (metaExisting) {
+      await supabase.from("client_documents").update({ extra_data: { num_accounts: newCount }, marked_done: false }).eq("id", metaExisting.id);
+    } else {
+      await supabase.from("client_documents").insert([{ client_id: session.id, category: "bank_stmt_meta", label: `פירוט עו"ש`, files: [], extra_data: { num_accounts: newCount }, marked_done: false }]);
+    }
+    await onDocsChange();
+  };
+
   const handleSubmit = async () => {
     if (!requiredDone || submitting) return;
     setSubmitting(true);
-    await onSubmit();
+    await onSubmit(summaryNote);
     setSubmitting(false);
   };
 
   const NoteBar = ({ docKey }: { docKey: string }) => {
     const note = docNotes[docKey];
     if (!note) return null;
-    return <div style={{ fontSize: 14, color:"var(--text-mid)", background:"rgba(46,125,82,0.07)", borderRadius:6, padding:"6px 12px", marginBottom:6, borderRight:"3px solid var(--green-mid)" }}>📌 {note}</div>;
+    return <div style={{ fontSize: 14, color:"var(--text-mid)", background:"rgba(46,125,82,0.07)", borderRadius:6, padding:"6px 12px", marginBottom:6, borderRight:"3px solid var(--green-mid)", display:"flex", alignItems:"center", gap:6 }}><DocIcon name="pin" color="var(--green-mid)" size={14} />{note}</div>;
   };
 
-  const SectionHeader = ({ id, icon, label, required = false, done, partial, onClick }) => (
-    <div onClick={onClick} style={{ display:"flex", alignItems:"center", gap:12, padding:"14px 18px", background: done?"rgba(46,204,138,0.06)":"var(--surface2)", borderRadius: expanded===id?"10px 10px 0 0":10, border:`1px solid ${done?"rgba(46,204,138,0.3)":partial?"rgba(79,142,247,0.3)":"var(--border)"}`, cursor:"pointer", userSelect:"none" }}>
-      <span style={{ fontSize: 22 }}>{icon}</span>
+
+  const SectionHeader = ({ id, icon, label, required = false, done, partial, onClick, onInfo = null }) => (
+    <div
+      role="button" tabIndex={0}
+      onClick={onClick}
+      onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }}
+      style={{ display:"flex", alignItems:"center", gap:12, padding:"14px 18px", background: done?"rgba(46,204,138,0.06)":"var(--surface2)", borderRadius: expanded===id?"10px 10px 0 0":10, border:`1px solid ${done?"rgba(46,204,138,0.3)":partial?"rgba(79,142,247,0.3)":"var(--border)"}`, cursor:"pointer", userSelect:"none" }}>
+      <span style={{ display:"flex", alignItems:"center", flexShrink:0 }}>{icon}</span>
       <div style={{ flex:1 }}>
         <div style={{ fontWeight:600, fontSize: 16 }}>{label}</div>
-        {required && <div style={{ fontSize: 13, color:"var(--text-dim)" }}>חובה</div>}
+        {required && <div style={{ fontSize: 11, fontWeight: 700, color: "#dc2626", background: "rgba(220,38,38,0.1)", borderRadius: 20, padding: "2px 8px", display: "inline-block" }}>חובה</div>}
       </div>
-      {done && <span style={{ background:"rgba(46,204,138,0.15)", color:"#22c55e", borderRadius:20, padding:"3px 12px", fontSize: 14, fontWeight:700 }}>✓ הושלם</span>}
+      {done && <span style={{ background:"rgba(46,204,138,0.15)", color:"#22c55e", borderRadius:20, padding:"3px 12px", fontSize: 14, fontWeight:700, display:"inline-flex", alignItems:"center", gap:4 }}><DocIcon name="check-circle" color="#22c55e" size={14} /> הושלם</span>}
       {!done && partial && <span style={{ background:"rgba(79,142,247,0.12)", color:"var(--green-mid)", borderRadius:20, padding:"3px 12px", fontSize: 14 }}>בתהליך</span>}
+      {onInfo && (
+        <button
+          onClick={e => { e.stopPropagation(); onInfo(); }}
+          title="צפה שוב בהדרכה"
+          aria-label="צפה שוב בהדרכה"
+          style={{ background:"none", border:"none", cursor:"pointer", color:"var(--text-dim)", padding:"4px", borderRadius:6, display:"flex", alignItems:"center", flexShrink:0, transition:"color 0.15s" }}
+          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "var(--green-mid)"; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = "var(--text-dim)"; }}
+        >
+          <DocIcon name="play-circle" size={15} color="currentColor" />
+        </button>
+      )}
       <span style={{ color:"var(--text-dim)", fontSize: 16, marginRight:4 }}>{expanded===id?"▲":"▼"}</span>
     </div>
   );
@@ -1560,38 +1933,39 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
       <div style={{ marginTop:8, marginBottom:4 }}>
         {saved.map((f,i) => (
           <div key={i} style={{ display:"flex", alignItems:"center", gap:8, fontSize: 14, color:"var(--text)", padding:"3px 0" }}>
-            <span>📎 {f.filename}</span>
-            {f.path && <button onClick={() => openFile(f.path)} style={{ background:"none", border:"none", color:"var(--green-mid)", cursor:"pointer", fontSize: 13, padding:"0 2px" }} title="צפה">👁</button>}
+            <span style={{ display:"flex", alignItems:"center", gap:4 }}><DocIcon name="paperclip" color="var(--text-dim)" size={14} />{f.filename}</span>
+            {f.path && <button onClick={() => openFile(f.path)} style={{ background:"none", border:"none", color:"var(--green-mid)", cursor:"pointer", fontSize: 13, padding:"0 2px", display:"inline-flex", alignItems:"center" }} title="צפה"><DocIcon name="eye" color="var(--green-mid)" size={13} /></button>}
             <button onClick={() => deleteFile(cat, i)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize: 13, padding:"0 2px" }} title="מחק">✕</button>
           </div>
         ))}
         {pend.map((f,i) => (
-          <div key={i} style={{ fontSize: 14, color:"var(--green-mid)", padding:"3px 0" }}>📎 {f.name} <span style={{ color:"var(--text-dim)" }}>(ממתין לשמירה)</span></div>
+          <div key={i} style={{ fontSize: 14, color:"var(--green-mid)", padding:"3px 0", display:"flex", alignItems:"center", gap:4 }}><DocIcon name="paperclip" color="var(--green-mid)" size={14} />{f.name} <span style={{ color:"var(--text-dim)" }}>(ממתין לשמירה)</span></div>
         ))}
       </div>
     );
   };
 
-  const UploadArea = ({ cat }) => (
+  const UploadArea = ({ cat, accept = ".pdf,.jpg,.jpeg,.png" }) => (
     <div>
-      <input ref={el => fileRefs.current[cat]=el} type="file" multiple accept=".pdf,.jpg,.jpeg,.png" style={{ display:"none" }} onChange={e => onFileChange(cat, e)} />
+      <input ref={el => fileRefs.current[cat]=el} type="file" multiple accept={accept} style={{ display:"none" }} onChange={e => onFileChange(cat, e)} />
       <FileList cat={cat} />
-      <Btn size="sm" variant="secondary" onClick={() => pickFile(cat)} style={{ marginTop:6 }}>📎 הוסף קובץ</Btn>
+      <Btn size="sm" variant="secondary" onClick={() => pickFile(cat)} style={{ marginTop:6, display:"inline-flex", alignItems:"center", gap:6 }}><DocIcon name="paperclip" color="var(--green-deep)" size={15} />הוסף קובץ</Btn>
     </div>
   );
 
   const fldStyle = { width:"100%", boxSizing:"border-box", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"8px 10px", color:"var(--text)", fontSize: 14, fontFamily:"inherit", outline:"none" };
-  const bodyStyle = { border:"1px solid var(--border)", borderTop:"none", borderRadius:"0 0 10px 10px", padding:"16px 18px", background:"var(--surface)", marginBottom:2 };
+  const bodyStyle = { border:"1px solid var(--border)", borderTop:"none", borderRadius:"0 0 10px 10px", padding:"16px 18px", background:"var(--surface)", marginBottom:2, animation:"accordionIn 0.18s ease-out" };
   const descStyle = { fontSize: 15, color:"var(--text)", opacity:0.8, marginBottom:12 };
 
   return (
     <div style={{ marginBottom:28 }}>
+      <style>{`@keyframes accordionIn { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }`}</style>
       {/* Edit month modal */}
       {editMonthEntry && (
         <>
           <div onClick={() => setEditMonthEntry(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:9000 }} />
           <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:16, padding:28, zIndex:9001, width:300, boxShadow:"0 20px 60px rgba(0,0,0,0.5)" }}>
-            <div style={{ fontWeight:700, fontSize: 18, marginBottom:16 }}>✏️ ערוך חודש</div>
+            <div style={{ fontWeight:700, fontSize: 18, marginBottom:16, display:"flex", alignItems:"center", gap:8 }}><DocIcon name="pencil" color="var(--green-deep)" />ערוך חודש</div>
             <div style={{ marginBottom:12 }}>
               <div style={{ fontSize: 14, color:"var(--text-mid)", marginBottom:5, fontWeight:600 }}>חודש</div>
               <select value={editMonthVal.month} onChange={e => { setEditMonthVal(p => ({...p, month: Number(e.target.value)})); setEditMonthErr(""); }} style={{ width:"100%", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"9px 12px", color:"var(--text)", fontFamily:"inherit", fontSize: 15, direction:"rtl" }}>
@@ -1622,37 +1996,188 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
         <div style={{ background:"var(--surface2)", borderRadius:20, height:10, overflow:"hidden" }}>
           <div style={{ width:`${progressPct}%`, height:"100%", background:"linear-gradient(90deg,var(--green-mid),var(--green-soft))", borderRadius:20, transition:"width .4s" }} />
         </div>
+        <div style={{ fontSize: 13, color:"var(--text-dim)", marginTop:6, display:"flex", gap:12, flexWrap:"wrap" }}>
+          <span style={{ color: txsDone ? "var(--green-soft)" : "var(--text-dim)" }}>{txsDone ? "✓" : "○"} תנועות {Math.min(finalizedMonths.length, REQUIRED_MONTHS)}/{REQUIRED_MONTHS}</span>
+          {needsBankStmt && <span style={{ color: bankStmtDone ? "var(--green-soft)" : "var(--text-dim)" }}>{bankStmtDone ? "✓" : "○"} פירוט עו"ש</span>}
+          <span style={{ color: payslipsDone ? "var(--green-soft)" : "var(--text-dim)" }}>{payslipsDone ? "✓" : "○"} תלושי שכר {Math.min(payslips.length, REQUIRED_MONTHS)}/{REQUIRED_MONTHS}</span>
+          {needsQuestionnaire && <span style={{ color: questDone ? "var(--green-soft)" : "var(--text-dim)" }}>{questDone ? "✓" : "○"} שאלון אישי</span>}
+        </div>
       </div>
 
-      <div style={{ fontWeight:700, fontSize: 18, marginBottom:16 }}>📋 מסמכים נדרשים</div>
+      <div style={{ fontWeight:700, fontSize: 18, marginBottom:16, display:"flex", alignItems:"center", gap:8 }}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--green-deep)" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>
+        מסמכים נדרשים
+      </div>
 
       {/* 1. פירוט תנועות */}
       <div style={{ marginBottom:8 }}>
-        <SectionHeader id="txs" icon="📂" label="פירוט תנועות — 3 חודשים" required done={txsDone} partial={finalizedMonths.length>0&&!txsDone} onClick={()=>toggle("txs")} />
+        <SectionHeader id="txs" icon={<DocIcon name="folder" />} label="פירוט תנועות — 3 חודשים" required done={txsDone} partial={finalizedMonths.length>0&&!txsDone} onClick={()=>toggle("txs")} />
         <DoneLine done={txsDone} />
         {expanded==="txs" && (
           <div style={bodyStyle}>
             {finalizedMonths.map(m => (
               <div key={m.id} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", fontSize: 15, color:"var(--text)", padding:"3px 0" }}>
                 <span>✓ {m.label}</span>
-                <button onClick={() => openEditMonth(m)} style={{ background:"none", border:"none", color:"var(--text-mid)", cursor:"pointer", fontSize: 14, padding:"2px 6px" }} title="ערוך שם חודש">✏️</button>
+                <button onClick={() => openEditMonth(m)} style={{ background:"none", border:"none", color:"var(--text-mid)", cursor:"pointer", padding:"2px 6px", display:"inline-flex", alignItems:"center" }} title="ערוך שם חודש"><DocIcon name="pencil" color="var(--text-dim)" size={14} /></button>
+              </div>
+            ))}
+            {(inProgressMonths||[]).map(m => (
+              <div key={m.id} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", fontSize: 15, color:"var(--text-mid)", padding:"3px 0" }}>
+                <span>⏳ {m.label} — בתהליך</span>
+                <Btn size="sm" variant="ghost" onClick={()=>{setExpanded(null);onOpenExistingMonth&&onOpenExistingMonth(m);}} style={{ fontSize:12, padding:"2px 8px" }}>המשך וסיים →</Btn>
               </div>
             ))}
             <div style={{ ...descStyle, marginTop:6 }}>{txsDone ? "3 חודשי פירוט הושלמו ✓" : `הושלמו ${finalizedMonths.length} מתוך 3 חודשים`}</div>
-            {!txsDone && <Btn size="sm" onClick={()=>{setExpanded(null);onNavigateTxs();}}>📂 הוסף חודש →</Btn>}
+            {!txsDone && <Btn size="sm" onClick={()=>{setExpanded(null);onNavigateTxs();}} style={{ display:"inline-flex", alignItems:"center", gap:6 }}><DocIcon name="folder" color="#fff" /> הוסף חודש →</Btn>}
           </div>
         )}
       </div>
 
-      {/* 2. תלושי שכר */}
+      {/* 2. פירוט עו"ש */}
+      {needsBankStmt && (
+        <div style={{ marginBottom:8 }}>
+          <SectionHeader id="bank_stmt" icon={<DocIcon name="building" />} label='פירוט עו"ש' required done={bankStmtDone} partial={bankStmtPartial} onClick={()=>toggle("bank_stmt")} />
+          <DoneLine done={bankStmtDone} />
+          {expanded==="bank_stmt" && !bankTutorialSeen && (
+            <BankTutorial onDone={() => {
+              localStorage.setItem(`bank_tutorial_seen_${session.id}`, "1");
+              setBankTutorialSeen(true);
+            }} />
+          )}
+          {expanded==="bank_stmt" && bankTutorialSeen && (
+            <div style={bodyStyle}>
+              <div style={{ marginBottom:12 }}>
+                <div style={descStyle}>העלה פירוט עו"ש מהבנק — PDF או Excel. אם יש לך יותר מחשבון בנק אחד, הוסף חשבון נוסף.</div>
+                <button
+                  onClick={() => setBankTutorialSeen(false)}
+                  style={{ display:"flex", alignItems:"center", gap:10, width:"100%", marginTop:10, padding:"12px 14px", background:"rgba(45,106,79,0.05)", border:"1px solid rgba(82,183,136,0.22)", borderRight:"3px solid var(--green-soft)", borderRadius:10, cursor:"pointer", direction:"rtl" as const, transition:"background 0.15s, box-shadow 0.15s" }}
+                  onMouseEnter={e => { const el = e.currentTarget as HTMLElement; el.style.background = "rgba(45,106,79,0.1)"; el.style.boxShadow = "0 2px 8px rgba(45,106,79,0.1)"; }}
+                  onMouseLeave={e => { const el = e.currentTarget as HTMLElement; el.style.background = "rgba(45,106,79,0.05)"; el.style.boxShadow = "none"; }}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" stroke="var(--green-soft)" strokeWidth="1.75"/><polygon points="10 8 16 12 10 16 10 8" fill="var(--green-mid)"/></svg>
+                  <span style={{ fontSize:13, color:"var(--green-mid)", fontWeight:500 }}>לא בטוח איך להעלות? צפה שוב בהדרכה</span>
+                </button>
+              </div>
+              {Array.from({ length: bankAccountCount }, (_, i) => i + 1).map(n => (
+                <div key={n} style={{ marginBottom: n < bankAccountCount ? 16 : 0, paddingBottom: n < bankAccountCount ? 16 : 0, borderBottom: n < bankAccountCount ? "1px solid var(--border)" : "none" }}>
+                  {bankAccountCount > 1 && (
+                    <div style={{ fontSize:14, fontWeight:600, color:"var(--text-mid)", marginBottom:8, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                      <span>חשבון {n}</span>
+                      {!isDone(`bank_stmt_${n}`) && n === bankAccountCount && n > 1 && (
+                        <button
+                          onClick={async () => {
+                            const newCount = bankAccountCount - 1;
+                            setBankAccountCount(newCount);
+                            setPendingFiles(prev => { const nv={...prev}; delete nv[`bank_stmt_${n}`]; return nv; });
+                            const metaEx = getDoc("bank_stmt_meta");
+                            if (metaEx) await supabase.from("client_documents").update({ extra_data: { num_accounts: newCount } }).eq("id", metaEx.id);
+                            await onDocsChange();
+                          }}
+                          style={{ background:"none", border:"none", cursor:"pointer", color:"var(--text-dim)", fontSize:16, lineHeight:1, padding:"0 4px" }}
+                          title="הסר חשבון"
+                        >×</button>
+                      )}
+                    </div>
+                  )}
+                  {isDone(`bank_stmt_${n}`) ? (
+                    <div style={{ fontSize:14, color:"var(--green-mid)", display:"flex", alignItems:"center", gap:6 }}>✓ {bankAccountCount > 1 ? `חשבון ${n} הושלם` : "הועלה ואושר"}</div>
+                  ) : (
+                    <>
+                      {bankParseWarnings[n] && (
+                        <div style={{ fontSize:13, color:"#d97706", background:"rgba(217,119,6,0.1)", borderRadius:6, padding:"6px 10px", marginBottom:8, borderRight:"3px solid #d97706" }}>
+                          ⚠️ הבנק לא זוהה אוטומטית — הקובץ הועלה בהצלחה, אך לא ניתן לנתח אותו בצורה אוטומטית. אלון יבדוק אותו ידנית.
+                        </div>
+                      )}
+                      <UploadArea cat={`bank_stmt_${n}`} accept=".pdf,.xlsx,.xls,.csv,.jpg,.jpeg,.png" />
+                      <Btn
+                        onClick={() => saveBankAccount(n)}
+                        disabled={!hasFiles(`bank_stmt_${n}`) || saving === `bank_stmt_${n}`}
+                        style={{ marginTop:10, width:"100%" }}
+                      >
+                        {saving === `bank_stmt_${n}` ? "שומר..." : bankAccountCount > 1 ? `סיימתי חשבון ${n}` : "סיימתי"}
+                      </Btn>
+                    </>
+                  )}
+                </div>
+              ))}
+              {!bankStmtDone && (
+                <Btn size="sm" variant="ghost" onClick={addBankAccount} style={{ marginTop:12, display:"inline-flex", alignItems:"center", gap:6 }}>
+                  + הוסף חשבון נוסף
+                </Btn>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 3. תלושי שכר */}
       <div style={{ marginBottom:8 }}>
-        <SectionHeader id="pays" icon="💼" label="תלושי שכר — 3 חודשים" required done={payslipsDone} partial={payslips.length>0&&!payslipsDone} onClick={()=>toggle("pays")} />
+        <SectionHeader id="pays" icon={<DocIcon name="payslip" />} label={hasSpouse2 ? "תלושי שכר — 3 חודשים לכל אחד" : "תלושי שכר — 3 חודשים"} required done={payslipsDone} partial={(s1Payslips.length>0||s2Payslips.length>0||!!noPayslipReasons.s1||!!noPayslipReasons.s2)&&!payslipsDone} onClick={()=>toggle("pays")} />
         <DoneLine done={payslipsDone} />
         {expanded==="pays" && (
           <div style={bodyStyle}>
-            {payslips.map(p => <div key={p.id} style={{ fontSize: 15, color:"var(--text)", padding:"3px 0" }}>✓ {p.month_label || p.label || new Date(p.created_at).toLocaleDateString("he-IL",{month:"long",year:"numeric"})}</div>)}
-            <div style={{ ...descStyle, marginTop:6 }}>{payslipsDone ? "3 תלושים הועלו ✓" : `הועלו ${payslips.length} מתוך 3 תלושים`}</div>
-            {!payslipsDone && <Btn size="sm" variant="secondary" onClick={()=>{setExpanded(null);onNavigatePayslips();}}>💼 העלה תלוש →</Btn>}
+            {/* שורה לכל בן/בת זוג */}
+            {[
+              { idx: 1 as 1|2, name: spouseNames.s1, slips: s1Payslips, done: s1PayslipsDone, reason: noPayslipReasons.s1 },
+              ...(hasSpouse2 ? [{ idx: 2 as 1|2, name: spouseNames.s2, slips: s2Payslips, done: s2PayslipsDone, reason: noPayslipReasons.s2 }] : [])
+            ].map(({ idx, name, slips, done, reason }) => (
+              <div key={idx} style={{ marginBottom:12 }}>
+                <div style={{ fontWeight:600, fontSize:14, marginBottom:4, color:"var(--text)" }}>
+                  {name ? `תלושי משכורת — ${name}` : "תלושי משכורת"}
+                </div>
+                {reason ? (
+                  <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                    <span style={{ fontSize:13, color:"var(--text-mid)", background:"var(--surface2)", borderRadius:6, padding:"3px 10px" }}>אין תלושים: {reason}</span>
+                    {cancelConfirmSpouse === idx ? (
+                      <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+                        <span style={{ fontSize:12, color:"var(--text-mid)" }}>לבטל את ההצהרה?</span>
+                        <Btn size="sm" variant="ghost" onClick={() => { onNoPayslipReasonSave(idx, ""); setCancelConfirmSpouse(null); }} style={{ fontSize:12, color:"var(--red)" }}>כן, בטל</Btn>
+                        <Btn size="sm" variant="ghost" onClick={() => setCancelConfirmSpouse(null)} style={{ fontSize:12 }}>שמור</Btn>
+                      </div>
+                    ) : (
+                      <button onClick={() => setCancelConfirmSpouse(idx)} style={{ background:"none", border:"none", color:"var(--text-dim)", cursor:"pointer", fontSize:12 }}>× בטל</button>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    {slips.slice(0, 3).map(p => <div key={p.id} style={{ fontSize:14, color:"var(--text)", padding:"2px 0" }}>✓ {p.month_label || p.label || new Date(p.created_at).toLocaleDateString("he-IL",{month:"long",year:"numeric"})}</div>)}
+                    {slips.length > 3 && <div style={{ fontSize:13, color:"var(--text-dim)", padding:"2px 0" }}>ועוד {slips.length - 3} תלושים</div>}
+                    <div style={{ ...descStyle, marginTop:2 }}>{done ? "3 תלושים הועלו ✓" : `הועלו ${slips.length} מתוך 3`}</div>
+                    {!done && (
+                      <div style={{ marginTop:8 }}>
+                        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                          <Btn size="sm" variant="secondary" onClick={()=>{setExpanded(null);onNavigatePayslips(idx);}} style={{ display:"inline-flex", alignItems:"center", gap:6 }}>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--green-deep)" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+                            העלה תלוש →
+                          </Btn>
+                          {noPayslipInput?.spouse !== idx && (
+                            <Btn size="sm" variant="ghost" onClick={() => setNoPayslipInput({ spouse: idx, val: "" })} style={{ fontSize:13, color:"var(--text-dim)" }}>אין לי תלושים</Btn>
+                          )}
+                        </div>
+                        {noPayslipInput?.spouse === idx && (
+                          <div style={{ marginTop:10, padding:"14px 14px", background:"var(--surface2)", borderRadius:10, border:"1px solid var(--border)" }}>
+                            <div style={{ fontSize:13, color:"var(--text-mid)", marginBottom:8, fontWeight:600 }}>נא לפרט את הסיבה:</div>
+                            <textarea
+                              autoFocus
+                              value={noPayslipInput.val}
+                              onChange={e => setNoPayslipInput({ spouse: idx, val: e.target.value })}
+                              placeholder="למשל: אני עצמאי / חל הוראה מתקנת / יצאתי לחופשת לידה..."
+                              rows={3}
+                              maxLength={400}
+                              style={{ width:"100%", fontSize:14, padding:"10px 12px", borderRadius:8, border:"1px solid var(--border)", background:"var(--surface)", color:"var(--text)", fontFamily:"inherit", resize:"vertical", boxSizing:"border-box", direction:"rtl", outline:"none" }}
+                            />
+                            <div style={{ display:"flex", gap:8, marginTop:10, justifyContent:"flex-end" }}>
+                              <Btn size="sm" variant="ghost" onClick={() => setNoPayslipInput(null)}>ביטול</Btn>
+                              <Btn size="sm" onClick={() => { if (noPayslipInput.val.trim()) { onNoPayslipReasonSave(idx, noPayslipInput.val.trim()); setNoPayslipInput(null); } }} disabled={!noPayslipInput.val.trim()}>שמור</Btn>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -1660,7 +2185,7 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
       {/* 3. הלוואות */}
       {visibleOptional.includes("loans") && (
         <div style={{ marginBottom:8 }}>
-          <SectionHeader id="loans" icon="📋" label="מסמכי הלוואות" done={loansDone} partial={loansHasAny&&!loansDone} onClick={()=>toggle("loans")} />
+          <SectionHeader id="loans" icon={<DocIcon name="clipboard" />} label="מסמכי הלוואות" done={loansDone} partial={loansHasAny&&!loansDone} onClick={()=>toggle("loans")} />
           <NoteBar docKey="loans" />
           <DoneLine done={loansDone} />
           {expanded==="loans" && (
@@ -1674,7 +2199,7 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
                 const pend     = pendingFiles[cat] || [];
                 return (
                   <div key={cat} style={{ marginBottom:14, padding:"12px 14px", background:"var(--surface2)", borderRadius:8, border:"1px solid var(--border)" }}>
-                    <div style={{ fontWeight:600, fontSize: 15, marginBottom:8 }}>{lt.icon} {lt.label}</div>
+                    <div style={{ fontWeight:600, fontSize: 15, marginBottom:8, display:"flex", alignItems:"center", gap:6 }}><DocIcon name={lt.icon} />{lt.label}</div>
                     {lt.fileLabel && <div style={{ fontSize: 14, color:"var(--text)", opacity:.7, marginBottom:8 }}>נדרש: {lt.fileLabel}</div>}
                     {(isFields||isBoth) && <LoanFieldForm cat={cat} fields={loanFields[cat]} onChange={(c,k,v) => setLoanFields(prev => ({ ...prev, [c]: { ...(prev[c]||{}), [k]:v } }))} />}
                     {!isFields && (
@@ -1682,19 +2207,19 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
                         <input ref={el=>fileRefs.current[cat]=el} type="file" multiple accept=".pdf,.jpg,.jpeg,.png" style={{ display:"none" }} onChange={e=>onFileChange(cat,e)} />
                         {[...saved.map((f,i)=>({...f,_i:i})), ...pend.map(f=>({filename:f.name,_pending:true}))].map((f,i) => (
                           <div key={i} style={{ display:"flex", alignItems:"center", gap:8, fontSize: 14, color:f._pending?"var(--green-mid)":"var(--text)", padding:"2px 0" }}>
-                            <span>📎 {f.filename}{f._pending&&" (ממתין)"}</span>
-                            {!f._pending && f.path && <button onClick={()=>openFile(f.path)} style={{ background:"none", border:"none", color:"var(--green-mid)", cursor:"pointer", fontSize: 13 }}>👁</button>}
+                            <span style={{ display:"flex", alignItems:"center", gap:4 }}><DocIcon name="paperclip" color={f._pending?"var(--green-mid)":"var(--text-dim)"} size={14} />{f.filename}{f._pending&&" (ממתין)"}</span>
+                            {!f._pending && f.path && <button onClick={()=>openFile(f.path)} style={{ background:"none", border:"none", color:"var(--green-mid)", cursor:"pointer", fontSize: 13, display:"inline-flex", alignItems:"center" }}><DocIcon name="eye" color="var(--green-mid)" size={13} /></button>}
                             {!f._pending && <button onClick={()=>deleteFile(cat,f._i)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize: 13 }}>✕</button>}
                           </div>
                         ))}
                         <div style={{ display:"flex", gap:8, marginTop:8 }}>
-                          <Btn size="sm" variant="secondary" onClick={()=>pickFile(cat)}>{isBoth?"📎 קובץ (לא חובה)":"📎 הוסף קובץ"}</Btn>
+                          <Btn size="sm" variant="secondary" onClick={()=>pickFile(cat)} style={{ display:"inline-flex", alignItems:"center", gap:6 }}><DocIcon name="paperclip" color="var(--green-deep)" size={15} />{isBoth?"קובץ (לא חובה)":"הוסף קובץ"}</Btn>
                           {pend.length>0 && <Btn size="sm" onClick={()=>saveLoanFiles(cat,lt.label)} disabled={saving===cat}>{saving===cat?"שומר...":"שמור"}</Btn>}
                         </div>
                       </>
                     )}
                     {(isFields||isBoth) && (
-                      <Btn size="sm" onClick={()=>saveLoanFields(cat,lt.label)} disabled={saving===cat+"_f"} style={{ marginTop:4 }}>{saving===cat+"_f"?"שומר...":"✓ שמור"}</Btn>
+                      <Btn size="sm" onClick={()=>saveLoanFields(cat,lt.label)} disabled={saving===cat+"_f"} style={{ marginTop:4 }}>{saving===cat+"_f"?"שומר...":"שמור"}</Btn>
                     )}
                   </div>
                 );
@@ -1705,13 +2230,13 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
                     <div style={{ fontWeight:600, fontSize: 15, marginBottom:10 }}>בחר סוג הלוואה:</div>
                     <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
                       {LOAN_TYPES.filter(lt=>!activeLoanTypes.includes(lt.id)).map(lt => (
-                        <button key={lt.id} onClick={()=>{setActiveLoanTypes(p=>[...p,lt.id]);setShowLoanPicker(false);}} style={{ padding:"6px 14px", borderRadius:20, border:"1px solid var(--border)", background:"var(--surface)", fontSize: 14, cursor:"pointer", fontFamily:"inherit" }}>{lt.icon} {lt.label}</button>
+                        <button key={lt.id} onClick={()=>{setActiveLoanTypes(p=>[...p,lt.id]);setShowLoanPicker(false);}} style={{ padding:"6px 14px", borderRadius:20, border:"1px solid var(--border)", background:"var(--surface)", fontSize: 14, cursor:"pointer", fontFamily:"inherit", display:"inline-flex", alignItems:"center", gap:6 }}><DocIcon name={lt.icon} color="var(--text-mid)" size={16} />{lt.label}</button>
                       ))}
                     </div>
                     <button onClick={()=>setShowLoanPicker(false)} style={{ marginTop:10, fontSize: 15, color:"var(--text-dim)", background:"none", border:"none", cursor:"pointer" }}>ביטול</button>
                   </div>
               }
-              <Btn onClick={markLoansDone} disabled={!loansHasAny||saving==="loans_section"} style={{ width:"100%" }}>{saving==="loans_section"?"שומר...":"✓ סיימתי להוסיף הלוואות"}</Btn>
+              <Btn onClick={markLoansDone} disabled={!loansHasAny||saving==="loans_section"} style={{ width:"100%" }}>{saving==="loans_section"?"שומר...":"סיימתי להוסיף הלוואות"}</Btn>
             </div>
           )}
         </div>
@@ -1720,60 +2245,76 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
       {/* 4. קרן השתלמות */}
       {visibleOptional.includes("provident") && (
         <div style={{ marginBottom:8 }}>
-          <SectionHeader id="provident" icon="💰" label="יתרת קרן השתלמות" done={isDone("provident_fund")} partial={hasFiles("provident_fund")&&!isDone("provident_fund")} onClick={()=>toggle("provident")} />
+          <SectionHeader id="provident" icon={<DocIcon name="coins" />} label="יתרת קרן השתלמות" done={isDone("provident_fund")} partial={hasFiles("provident_fund")&&!isDone("provident_fund")} onClick={()=>toggle("provident")} />
           <NoteBar docKey="provident" />
           <DoneLine done={isDone("provident_fund")} />
-          {expanded==="provident" && <div style={bodyStyle}><div style={descStyle}>העלה דוח יתרה מחברת הביטוח / קרן הפנסיה</div><UploadArea cat="provident_fund" /><Btn onClick={()=>saveAndDone("provident_fund","קרן השתלמות")} disabled={!hasFiles("provident_fund")||saving==="provident_fund"} style={{ marginTop:14, width:"100%" }}>{saving==="provident_fund"?"שומר...":"✓ סיימתי"}</Btn></div>}
+          {expanded==="provident" && <div style={bodyStyle}><div style={descStyle}>העלה דוח יתרה מחברת הביטוח / קרן הפנסיה</div><UploadArea cat="provident_fund" /><Btn onClick={()=>saveAndDone("provident_fund","קרן השתלמות")} disabled={!hasFiles("provident_fund")||saving==="provident_fund"} style={{ marginTop:14, width:"100%" }}>{saving==="provident_fund"?"שומר...":"סיימתי"}</Btn></div>}
         </div>
       )}
 
       {/* 5. דוח רווח והפסד */}
       {visibleOptional.includes("pl") && (
-        <div style={{ marginBottom:8 }}>
-          <SectionHeader id="pl" icon="📊" label="דוח רווח והפסד (לעצמאיים)" done={isDone("profit_loss")} partial={hasFiles("profit_loss")&&!isDone("profit_loss")} onClick={()=>toggle("pl")} />
-          <NoteBar docKey="pl" />
-          <DoneLine done={isDone("profit_loss")} />
-          {expanded==="pl" && <div style={bodyStyle}><div style={descStyle}>רלוונטי לעצמאיים — העלה דוח רווח והפסד שנתי + מאזן בוחן של שנה קודמת</div><UploadArea cat="profit_loss" /><Btn onClick={()=>saveAndDone("profit_loss","דוח רווח והפסד")} disabled={!hasFiles("profit_loss")||saving==="profit_loss"} style={{ marginTop:14, width:"100%" }}>{saving==="profit_loss"?"שומר...":"✓ סיימתי"}</Btn></div>}
-        </div>
+        <>
+          {[
+            { idx: 1, show: s1NeedsPL, name: spouseNames.s1, cat: "profit_loss_1" },
+            { idx: 2, show: s2NeedsPL, name: spouseNames.s2, cat: "profit_loss_2" },
+          ].filter(sp => sp.show).map(sp => (
+            <div key={sp.idx} style={{ marginBottom: 8 }}>
+              <SectionHeader id={`pl_${sp.idx}`} icon={<DocIcon name="bar-chart" />} label={sp.name ? `דוח רווח והפסד — ${sp.name}` : "דוח רווח והפסד"} done={isDone(sp.cat)} partial={hasFiles(sp.cat)&&!isDone(sp.cat)} onClick={()=>toggle(`pl_${sp.idx}`)} />
+              <NoteBar docKey="pl" />
+              <DoneLine done={isDone(sp.cat)} />
+              {expanded===`pl_${sp.idx}` && <div style={bodyStyle}><div style={descStyle}>העלה דוח רווח והפסד שנתי + מאזן בוחן של שנה קודמת</div><UploadArea cat={sp.cat} /><Btn onClick={()=>saveAndDone(sp.cat,"דוח רווח והפסד")} disabled={!hasFiles(sp.cat)||saving===sp.cat} style={{ marginTop:14, width:"100%" }}>{saving===sp.cat?"שומר...":"סיימתי"}</Btn></div>}
+            </div>
+          ))}
+          {/* Fallback: employment_type לא הוגדר — שורה כללית */}
+          {!s1NeedsPL && !s2NeedsPL && (
+            <div style={{ marginBottom:8 }}>
+              <SectionHeader id="pl" icon={<DocIcon name="bar-chart" />} label="דוח רווח והפסד (לעצמאיים)" done={isDone("profit_loss")} partial={hasFiles("profit_loss")&&!isDone("profit_loss")} onClick={()=>toggle("pl")} />
+              <NoteBar docKey="pl" />
+              <DoneLine done={isDone("profit_loss")} />
+              {expanded==="pl" && <div style={bodyStyle}><div style={descStyle}>רלוונטי לעצמאיים — העלה דוח רווח והפסד שנתי + מאזן בוחן של שנה קודמת</div><UploadArea cat="profit_loss" /><Btn onClick={()=>saveAndDone("profit_loss","דוח רווח והפסד")} disabled={!hasFiles("profit_loss")||saving==="profit_loss"} style={{ marginTop:14, width:"100%" }}>{saving==="profit_loss"?"שומר...":"סיימתי"}</Btn></div>}
+            </div>
+          )}
+        </>
       )}
 
       {/* 6. חסכונות ופנסיה */}
       {visibleOptional.includes("savings") && (
         <div style={{ marginBottom:8 }}>
-          <SectionHeader id="savings" icon="🏦" label="פירוט חסכונות ופנסיה" done={isDone("savings_pension")} partial={hasFiles("savings_pension")&&!isDone("savings_pension")} onClick={()=>toggle("savings")} />
+          <SectionHeader id="savings" icon={<DocIcon name="building" />} label="פירוט חסכונות ופנסיה" done={isDone("savings_pension")} partial={hasFiles("savings_pension")&&!isDone("savings_pension")} onClick={()=>toggle("savings")} />
           <NoteBar docKey="savings" />
           <DoneLine done={isDone("savings_pension")} />
-          {expanded==="savings" && <div style={bodyStyle}><div style={descStyle}>כולל: פנסיה, קופות גמל, ביטוח מנהלים, חסכונות בנקאיים, השקעות. ציין גם מועדי נזילות.</div><UploadArea cat="savings_pension" /><Btn onClick={()=>saveAndDone("savings_pension","חסכונות ופנסיה")} disabled={!hasFiles("savings_pension")||saving==="savings_pension"} style={{ marginTop:14, width:"100%" }}>{saving==="savings_pension"?"שומר...":"✓ סיימתי"}</Btn></div>}
+          {expanded==="savings" && <div style={bodyStyle}><div style={descStyle}>כולל: פנסיה, קופות גמל, ביטוח מנהלים, חסכונות בנקאיים, השקעות. ציין גם מועדי נזילות.</div><UploadArea cat="savings_pension" /><Btn onClick={()=>saveAndDone("savings_pension","חסכונות ופנסיה")} disabled={!hasFiles("savings_pension")||saving==="savings_pension"} style={{ marginTop:14, width:"100%" }}>{saving==="savings_pension"?"שומר...":"סיימתי"}</Btn></div>}
         </div>
       )}
 
       {/* 7. תחזית פרישה — ממש אחרי חסכונות */}
       {visibleOptional.includes("retirement") && (
         <div style={{ marginBottom:8 }}>
-          <SectionHeader id="retirement" icon="👴" label="דוח תחזית פרישה (מעל גיל 55)" done={isDone("retirement_forecast")} partial={hasFiles("retirement_forecast")&&!isDone("retirement_forecast")} onClick={()=>toggle("retirement")} />
+          <SectionHeader id="retirement" icon={<DocIcon name="user" />} label="דוח תחזית פרישה (מעל גיל 55)" done={isDone("retirement_forecast")} partial={hasFiles("retirement_forecast")&&!isDone("retirement_forecast")} onClick={()=>toggle("retirement")} />
           <NoteBar docKey="retirement" />
           <DoneLine done={isDone("retirement_forecast")} />
-          {expanded==="retirement" && <div style={bodyStyle}><div style={descStyle}>רלוונטי למי שמעל גיל 55 — דוח תחזית פרישה מסוכן הביטוח</div><UploadArea cat="retirement_forecast" /><Btn onClick={()=>saveAndDone("retirement_forecast","דוח תחזית פרישה")} disabled={!hasFiles("retirement_forecast")||saving==="retirement_forecast"} style={{ marginTop:14, width:"100%" }}>{saving==="retirement_forecast"?"שומר...":"✓ סיימתי"}</Btn></div>}
+          {expanded==="retirement" && <div style={bodyStyle}><div style={descStyle}>רלוונטי למי שמעל גיל 55 — דוח תחזית פרישה מסוכן הביטוח</div><UploadArea cat="retirement_forecast" /><Btn onClick={()=>saveAndDone("retirement_forecast","דוח תחזית פרישה")} disabled={!hasFiles("retirement_forecast")||saving==="retirement_forecast"} style={{ marginTop:14, width:"100%" }}>{saving==="retirement_forecast"?"שומר...":"סיימתי"}</Btn></div>}
         </div>
       )}
 
       {/* 8. שיקים דחויים */}
       {visibleOptional.includes("checks") && (
         <div style={{ marginBottom:8 }}>
-          <SectionHeader id="checks" icon="📄" label="שיקים דחויים" done={isDone("deferred_checks")} partial={hasFiles("deferred_checks")&&!isDone("deferred_checks")} onClick={()=>toggle("checks")} />
+          <SectionHeader id="checks" icon={<DocIcon name="file" />} label="שיקים דחויים" done={isDone("deferred_checks")} partial={hasFiles("deferred_checks")&&!isDone("deferred_checks")} onClick={()=>toggle("checks")} />
           <NoteBar docKey="checks" />
           <DoneLine done={isDone("deferred_checks")} />
-          {expanded==="checks" && <div style={bodyStyle}><div style={descStyle}>שיקים דחויים שאינם חלק מהוצאה שוטפת</div><UploadArea cat="deferred_checks" /><Btn onClick={()=>saveAndDone("deferred_checks","שיקים דחויים")} disabled={!hasFiles("deferred_checks")||saving==="deferred_checks"} style={{ marginTop:14, width:"100%" }}>{saving==="deferred_checks"?"שומר...":"✓ סיימתי"}</Btn></div>}
+          {expanded==="checks" && <div style={bodyStyle}><div style={descStyle}>שיקים דחויים שאינם חלק מהוצאה שוטפת</div><UploadArea cat="deferred_checks" /><Btn onClick={()=>saveAndDone("deferred_checks","שיקים דחויים")} disabled={!hasFiles("deferred_checks")||saving==="deferred_checks"} style={{ marginTop:14, width:"100%" }}>{saving==="deferred_checks"?"שומר...":"סיימתי"}</Btn></div>}
         </div>
       )}
 
       {/* 9. פיגורים וחובות */}
       {visibleOptional.includes("debts_other") && (
         <div style={{ marginBottom:8 }}>
-          <SectionHeader id="debts_other" icon="⚠️" label="פיגורי תשלומים וחובות אחרים" done={isDone("debts_other")} partial={hasFiles("debts_other")&&!isDone("debts_other")} onClick={()=>toggle("debts_other")} />
+          <SectionHeader id="debts_other" icon={<DocIcon name="alert" />} label="פיגורי תשלומים וחובות אחרים" done={isDone("debts_other")} partial={hasFiles("debts_other")&&!isDone("debts_other")} onClick={()=>toggle("debts_other")} />
           <NoteBar docKey="debts_other" />
           <DoneLine done={isDone("debts_other")} />
-          {expanded==="debts_other" && <div style={bodyStyle}><div style={descStyle}>חובות לאנשים פרטיים, גמ"ח, מקום עבודה, פיגורים בתשלומים</div><UploadArea cat="debts_other" /><Btn onClick={()=>saveAndDone("debts_other","פיגורי תשלומים וחובות")} disabled={!hasFiles("debts_other")||saving==="debts_other"} style={{ marginTop:14, width:"100%" }}>{saving==="debts_other"?"שומר...":"✓ סיימתי"}</Btn></div>}
+          {expanded==="debts_other" && <div style={bodyStyle}><div style={descStyle}>חובות לאנשים פרטיים, גמ"ח, מקום עבודה, פיגורים בתשלומים</div><UploadArea cat="debts_other" /><Btn onClick={()=>saveAndDone("debts_other","פיגורי תשלומים וחובות")} disabled={!hasFiles("debts_other")||saving==="debts_other"} style={{ marginTop:14, width:"100%" }}>{saving==="debts_other"?"שומר...":"סיימתי"}</Btn></div>}
         </div>
       )}
 
@@ -1784,12 +2325,12 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
         const cdPartial = hasFiles(cat) && !cdDone;
         return (
           <div key={cd.id} style={{ marginBottom:8 }}>
-            <SectionHeader id={cd.id} icon={cd.icon||"📄"} label={cd.label} done={cdDone} partial={cdPartial} onClick={()=>toggle(cd.id)} />
+            <SectionHeader id={cd.id} icon={<DocIcon name="file" />} label={cd.label} done={cdDone} partial={cdPartial} onClick={()=>toggle(cd.id)} />
             <NoteBar docKey={cd.id} />
             {expanded===cd.id && (
               <div style={bodyStyle}>
                 <UploadArea cat={cd.id} />
-                <Btn onClick={()=>saveAndDone(cd.id, cd.label)} disabled={!hasFiles(cd.id)||saving===cd.id} style={{ marginTop:14, width:"100%" }}>{saving===cd.id?"שומר...":"✓ סיימתי"}</Btn>
+                <Btn onClick={()=>saveAndDone(cd.id, cd.label)} disabled={!hasFiles(cd.id)||saving===cd.id} style={{ marginTop:14, width:"100%" }}>{saving===cd.id?"שומר...":"סיימתי"}</Btn>
               </div>
             )}
           </div>
@@ -1799,17 +2340,48 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
       {/* שאלון אישי */}
       {needsQuestionnaire && (
         <div style={{ marginBottom:8 }}>
-          <div onClick={onNavigateQuestionnaire} style={{ display:"flex", alignItems:"center", gap:12, padding:"14px 18px", background: questDone?"rgba(46,204,138,0.06)":"var(--surface2)", borderRadius:10, border:`1px solid ${questDone?"rgba(46,204,138,0.3)":"var(--border)"}`, cursor:"pointer", userSelect:"none" }}>
-            <span style={{ fontSize: 22 }}>📝</span>
+          <div onClick={onNavigateQuestionnaire} style={{ display:"flex", alignItems:"center", gap:12, padding:"14px 18px", background: questDone?"rgba(46,204,138,0.06)":"rgba(46,204,138,0.03)", borderRadius:10, border:`1px solid ${questDone?"rgba(46,204,138,0.3)":"var(--green-mint)"}`, cursor:"pointer", userSelect:"none" }}>
+            <span style={{ display:"flex", alignItems:"center", flexShrink:0 }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--green-mid)" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            </span>
             <div style={{ flex:1 }}>
               <div style={{ fontWeight:600, fontSize: 16 }}>שאלון אישי</div>
               <div style={{ fontSize: 13, color:"var(--text-dim)" }}>לחץ כדי למלא את השאלון</div>
             </div>
             {questDone
-              ? <span style={{ background:"rgba(46,204,138,0.15)", color:"#22c55e", borderRadius:20, padding:"3px 12px", fontSize: 14, fontWeight:700 }}>✓ הושלם</span>
-              : <span style={{ color:"var(--text-dim)", fontSize: 15 }}>←</span>
+              ? <span style={{ background:"rgba(46,204,138,0.15)", color:"#22c55e", borderRadius:20, padding:"3px 12px", fontSize: 14, fontWeight:700, display:"inline-flex", alignItems:"center", gap:4 }}><DocIcon name="check-circle" color="#22c55e" size={14} /> הושלם</span>
+              : <span style={{ display:"flex", alignItems:"center", color:"var(--green-mid)" }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg></span>
             }
           </div>
+        </div>
+      )}
+
+      {/* הערות מסכמות — מוצג אחרי השלמת 3 חודשים (משימה 4ב) */}
+      {txsDone && (
+        <div style={{ marginTop: 20, padding: "18px 20px", background: "var(--surface2)", borderRadius: 12, border: "1px solid var(--border)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text)" }}>הערות מסכמות לאלון</div>
+            {summaryNoteSaving && <span style={{ fontSize: 12, color: "var(--text-dim)" }}>שומר...</span>}
+          </div>
+          <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 10, lineHeight: 1.6 }}>
+            אם היה חודש חריג, הוצאה חד-פעמית, או משהו שאלון צריך לדעת כדי להבין את התמונה — כתוב כאן.
+          </div>
+          <textarea
+            value={summaryNote}
+            onChange={e => handleSummaryNoteChange(e.target.value)}
+            placeholder='לדוגמה: "חודש פברואר אינו מייצג כי אירחנו משפחה — הוצאות יוצאות דופן של ₪8,000"'
+            rows={3}
+            style={{
+              width: "100%", boxSizing: "border-box",
+              padding: "10px 12px", fontSize: 14, lineHeight: 1.6,
+              borderRadius: 10, border: "1px solid var(--border)",
+              background: "var(--surface)", color: "var(--text)",
+              fontFamily: "inherit", resize: "vertical", outline: "none",
+              transition: "border-color 0.15s",
+            }}
+            onFocus={e => { e.target.style.borderColor = "var(--green-mid)"; }}
+            onBlur={e => { e.target.style.borderColor = "var(--border)"; }}
+          />
         </div>
       )}
 
@@ -1819,13 +2391,152 @@ function OnboardingChecklist({ session, finalizedMonths, payslips, docs, submitt
           <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:10, textAlign:"center", lineHeight:1.6 }}>
             להגשה יש להשלים קודם:
             {!txsDone && <span> · פירוט תנועות</span>}
+            {needsBankStmt && !bankStmtDone && <span> · פירוט עו"ש</span>}
             {!payslipsDone && <span> · תלושי שכר</span>}
             {!allOptDone && <span> · כל הסעיפים הנדרשים</span>}
             {!questDone && <span> · שאלון אישי</span>}
           </div>
         )}
-        <Btn onClick={handleSubmit} disabled={!requiredDone||submitting} style={{ width:"100%", padding:"14px", fontSize: 17, fontWeight:700, opacity:requiredDone?1:0.45 }}>{submitting?"מגיש...":"✅ הגש לאלון"}</Btn>
+        <Btn onClick={handleSubmit} disabled={!requiredDone||submitting} title={!requiredDone?"השלם את כל הסעיפים הנדרשים כדי להגיש":undefined} style={{ width:"100%", padding:"14px", fontSize: 17, fontWeight:700, opacity:requiredDone?1:0.45 }}>{submitting?"מגיש...":"הגש לאלון"}</Btn>
       </div>
+    </div>
+  );
+}
+
+// ── FinalizeCheckModal — popup A (חודשים 1-2) ו-B (חודש 3) ─────────────────────
+function FinalizeCheckModal({ monthLabel, emptyCats, isMonth3, estimates, onEstimateChange, openSections, onToggleSection, finalizeNote, onFinalizeNoteChange, pending, onBack, onConfirm }) {
+  const grouped: Record<string, typeof emptyCats> = {};
+  emptyCats.forEach(r => {
+    const sec = r.section || "כללי";
+    if (!grouped[sec]) grouped[sec] = [];
+    grouped[sec].push(r);
+  });
+  const sections = Object.keys(grouped);
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.55)", zIndex:10000, display:"flex", alignItems:"center", justifyContent:"center", padding:20, overflowY:"auto" }}>
+      <div style={{ background:"var(--surface)", borderRadius:18, padding:"32px 28px", maxWidth:560, width:"100%", boxShadow:"0 24px 64px rgba(0,0,0,0.35)", direction:"rtl", maxHeight:"85vh", display:"flex", flexDirection:"column" }}>
+
+        {/* כותרת */}
+        <div style={{ marginBottom:18 }}>
+          <div style={{ fontSize:22, fontWeight:700, marginBottom:6 }}>
+            {isMonth3 ? "סיכום 3 חודשים — לפני שמגישים 📋" : "רגע לפני שמסמנים הושלם 🔍"}
+          </div>
+          <div style={{ fontSize:15, color:"var(--text-dim)", lineHeight:1.7 }}>
+            {isMonth3
+              ? <>הקטגוריות הבאות לא קיבלו אף תנועה לאורך 3 חודשים. אם יש לך הוצאה שקיימת בחייך אבל לא הופיעה בתקופה זו — כדאי להוסיף הערכה חודשית.<br/><span style={{ fontSize:13, color:"var(--text-dim)", display:"block", marginTop:6 }}>לדוגמה: טיסות לחו"ל בתקציב ₪12,000 בשנה = ₪1,000 לחודש</span></>
+              : <>עבור על הקטגוריות הריקות וודא שלא פספסת כלום. אם קטגוריה לא הייתה רלוונטית החודש — זה בסדר, היא עשויה להופיע בחודשים הבאים.</>
+            }
+          </div>
+        </div>
+
+        {/* רשימת קטגוריות */}
+        {emptyCats.length === 0 ? (
+          <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:8, color:"var(--green-soft)", padding:"24px 0" }}>
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            <div style={{ fontWeight:600, fontSize:16 }}>כל הקטגוריות כוסו!</div>
+          </div>
+        ) : (
+          <div style={{ flex:1, overflowY:"auto", marginBottom:20, marginTop:4 }}>
+            {sections.map(sec => {
+              const isOpen = openSections[sec] !== false; // פתוח כברירת מחדל
+              return (
+                <div key={sec} style={{ marginBottom:8, border:"1px solid var(--border)", borderRadius:10, overflow:"hidden" }}>
+                  {/* accordion header */}
+                  <button
+                    onClick={() => onToggleSection(sec)}
+                    style={{ width:"100%", padding:"10px 14px", background:"var(--surface2)", border:"none", cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center", fontFamily:"inherit", fontSize:14, fontWeight:600, color:"var(--text)" }}
+                  >
+                    <span>{sec}</span>
+                    <span style={{ display:"flex", alignItems:"center", gap:6, color:"var(--text-dim)", fontWeight:400, fontSize:13 }}>
+                      {grouped[sec].length} קטגוריות
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: isOpen ? "rotate(180deg)" : "rotate(0deg)", transition:"transform 0.2s" }}><polyline points="6 9 12 15 18 9"/></svg>
+                    </span>
+                  </button>
+                  {/* accordion body */}
+                  {isOpen && (
+                    <div style={{ padding:"4px 0" }}>
+                      {grouped[sec].map(cat => (
+                        <div key={cat.name} style={{ padding:"10px 14px", borderTop:"1px solid var(--border)", display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:12 }}>
+                          <div style={{ flex:1 }}>
+                            <div style={{ fontWeight:600, fontSize:14 }}>{cat.name}</div>
+                            {cat.description && <div style={{ fontSize:12, color:"var(--text-dim)", marginTop:2 }}>{cat.description}</div>}
+                          </div>
+                          {isMonth3 && (
+                            <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
+                              {estimates[cat.name] ? (
+                                <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                                  <span style={{ fontSize:13, color:"var(--green-soft)", fontWeight:600 }}>✓ ₪{Number(estimates[cat.name]).toLocaleString()}/חודש</span>
+                                  <button onClick={() => onEstimateChange(cat.name, "")} style={{ background:"none", border:"none", cursor:"pointer", color:"var(--text-dim)", fontSize:12, padding:"2px 4px" }}>✕</button>
+                                </div>
+                              ) : (
+                                <EstimateInlineInput catName={cat.name} onChange={onEstimateChange} />
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* הערה חופשית לפני סיום חודש — משימה 4א */}
+        <div style={{ marginTop: 4, marginBottom: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-mid)", marginBottom: 6 }}>
+            הערה לאלון (אופציונלי)
+          </div>
+          <textarea
+            value={finalizeNote}
+            onChange={e => onFinalizeNoteChange(e.target.value)}
+            placeholder='לדוגמה: "לא היה לי סעיף גינון אז שמתי תחת שכר דירה — התשלום החודשי הוא ₪300 לגנן"'
+            rows={3}
+            style={{
+              width: "100%", boxSizing: "border-box",
+              padding: "10px 12px", fontSize: 14, lineHeight: 1.6,
+              borderRadius: 10, border: "1px solid var(--border)",
+              background: "var(--surface2)", color: "var(--text)",
+              fontFamily: "inherit", resize: "vertical", outline: "none",
+              transition: "border-color 0.15s",
+            }}
+            onFocus={e => { e.target.style.borderColor = "var(--green-mid)"; }}
+            onBlur={e => { e.target.style.borderColor = "var(--border)"; }}
+          />
+        </div>
+
+        {/* כפתורים */}
+        <div style={{ display:"flex", gap:10, justifyContent:"flex-end", borderTop:"1px solid var(--border)", paddingTop:16, marginTop:"auto" }}>
+          <Btn variant="ghost" onClick={onBack} disabled={pending}>חזור לעריכה</Btn>
+          <Btn onClick={onConfirm} disabled={pending}>
+            {pending ? "שומר..." : isMonth3 ? "סיימתי" : "הכל בסדר, המשך"}
+          </Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EstimateInlineInput({ catName, onChange }) {
+  const [open, setOpen]   = useState(false);
+  const [val, setVal]     = useState("");
+  if (!open) return (
+    <button onClick={() => setOpen(true)} style={{ background:"none", border:"1px dashed var(--border)", borderRadius:6, padding:"3px 8px", fontSize:12, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}>+ הוסף הערכה</button>
+  );
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:4 }}>
+      <input
+        autoFocus
+        type="number"
+        value={val}
+        onChange={e => setVal(e.target.value)}
+        placeholder="₪ לחודש"
+        style={{ width:90, padding:"3px 8px", fontSize:13, borderRadius:6, border:"1px solid var(--green-mid)", background:"var(--surface2)", color:"var(--text)", fontFamily:"inherit", outline:"none" }}
+        onKeyDown={e => { if (e.key === "Enter" && val) { onChange(catName, val); setOpen(false); } if (e.key === "Escape") setOpen(false); }}
+      />
+      <button onClick={() => { if (val) { onChange(catName, val); setOpen(false); } }} disabled={!val} style={{ background:"var(--green-mid)", border:"none", borderRadius:6, padding:"3px 8px", fontSize:12, color:"#fff", cursor:"pointer", opacity: val ? 1 : 0.4 }}>✓</button>
     </div>
   );
 }
@@ -1838,8 +2549,8 @@ function OnboardingProgress({ subsCount, payslipsCount, total }) {
   return (
     <div style={{ background:"var(--surface2)", borderRadius:12, padding:"16px 20px", marginBottom:20, border:`1px solid ${"var(--border)"}` }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
-        <div style={{ fontWeight:700, fontSize: 18 }}>📋 השלמת נתונים ראשוניים</div>
-        <div style={{ fontSize: 14, color:done?"var(--green-soft)":"var(--text-dim)" }}>{done?"✅ הכל הושלם!":`${completedSteps}/${totalSteps} שלבים`}</div>
+        <div style={{ fontWeight:700, fontSize: 18, display:"flex", alignItems:"center", gap:8 }}><DocIcon name="clipboard" color="var(--green-deep)" size={18} /> השלמת נתונים ראשוניים</div>
+        <div style={{ fontSize: 14, color:done?"var(--green-soft)":"var(--text-dim)", display:"flex", alignItems:"center", gap:4 }}>{done ? <><DocIcon name="check-circle" color="var(--green-soft)" size={14} /> הכל הושלם!</> : `${completedSteps}/${totalSteps} שלבים`}</div>
       </div>
       <div style={{ background:"var(--surface)", borderRadius:20, height:8, overflow:"hidden" }}>
         <div style={{ width:`${(completedSteps/totalSteps)*100}%`, height:"100%", background:`linear-gradient(90deg,${"var(--green-mid)"},${"var(--green-soft)"})`, borderRadius:20, transition:"width .4s" }} />
@@ -1864,6 +2575,7 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
   const [editTx, setEditTx]         = useState([]);
   const [editCatOpen, setEditCatOpen] = useState(null);
   const [catSearch, setCatSearch]   = useState("");
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string|null>(null);
 
   const startEdit = (sub) => { setEditingSub(sub.id); setEditTx(sub.transactions || []); };
   const saveEdit  = async () => {
@@ -1884,7 +2596,7 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
           <div style={{ display:"flex", alignItems:"center", gap:10 }}>
             <div style={{ fontWeight:700, fontSize: 22 }}>{entry.label}</div>
             {entry.is_finalized
-              ? <span style={{ background:"rgba(46,204,138,0.15)", color:"var(--green-soft)", borderRadius:20, padding:"3px 12px", fontSize: 14, fontWeight:700 }}>✓ הושלם</span>
+              ? <span style={{ background:"rgba(46,204,138,0.15)", color:"var(--green-soft)", borderRadius:20, padding:"3px 12px", fontSize: 14, fontWeight:700, display:"inline-flex", alignItems:"center", gap:4 }}><DocIcon name="check-circle" color="var(--green-soft)" size={14} /> הושלם</span>
               : <span style={{ background:"rgba(255,183,77,0.12)", color:"var(--gold)", borderRadius:20, padding:"3px 12px", fontSize: 14 }}>בתהליך</span>
             }
           </div>
@@ -1893,15 +2605,15 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
           <Btn size="sm" onClick={onAddSource}>+ הוסף מקור</Btn>
           {entry.is_finalized
-            ? <Btn variant="ghost" size="sm" onClick={onReopen}>🔓 פתח לעריכה</Btn>
-            : <Btn size="sm" onClick={onFinalize} disabled={subs.length === 0}>✅ סיימתי את החודש</Btn>
+            ? <Btn variant="ghost" size="sm" onClick={onReopen}>פתח לעריכה</Btn>
+            : <Btn size="sm" onClick={onFinalize} disabled={subs.length === 0} style={{ display:"inline-flex", alignItems:"center", gap:6 }}><DocIcon name="check-circle" color="#fff" size={15} />סיימתי את החודש</Btn>
           }
         </div>
       </div>
 
       {subs.length === 0 ? (
         <Card style={{ textAlign:"center", padding:48, color:"var(--text-dim)" }}>
-          <div style={{ fontSize:36, marginBottom:12 }}>📂</div>
+          <div style={{ display:"flex", justifyContent:"center", marginBottom:12, opacity:0.4 }}><DocIcon name="folder" color="var(--text-dim)" size={36} /></div>
           <div style={{ marginBottom:16 }}>עוד לא הוספת מקורות לחודש זה</div>
           <Btn onClick={onAddSource}>+ הוסף מקור ראשון</Btn>
         </Card>
@@ -1909,7 +2621,7 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
         <>
           {/* Category summary — compact */}
           <Card style={{ marginBottom:16 }}>
-            <div style={{ fontWeight:700, marginBottom:10, fontSize: 18 }}>📊 סיכום לפי סעיף</div>
+            <div style={{ fontWeight:700, marginBottom:10, fontSize: 18, display:"flex", alignItems:"center", gap:8 }}><DocIcon name="bar-chart" color="var(--green-deep)" size={18} /> סיכום לפי סעיף</div>
             <div style={{ display:"flex", flexWrap:"wrap", gap:"4px 16px" }}>
               {catSummary.filter(([cat]) => !ignoredCats.has(cat)).slice(0,10).map(([cat, amt]) => (
                 <div key={cat} style={{ display:"flex", gap:6, fontSize: 14, alignItems:"center" }}>
@@ -1948,13 +2660,13 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
                     </div>
                   </div>
                   <div style={{ display:"flex", gap:8, alignItems:"center" }} onClick={e => e.stopPropagation()}>
-                    <Btn size="sm" onClick={() => isOpen ? setEditingSub(null) : startEdit(sub)}>
-                      {isOpen ? "סגור ▲" : "✏️ ערוך תנועות"}
+                    <Btn size="sm" onClick={() => isOpen ? setEditingSub(null) : startEdit(sub)} style={{ display:"inline-flex", alignItems:"center", gap:6 }}>
+                      {isOpen ? "סגור ▲" : <><DocIcon name="pencil" color="#fff" size={14} /> ערוך תנועות</>}
                     </Btn>
                     <button
-                      onClick={() => { if (window.confirm("למחוק מקור זה?")) onDeleteSub(sub.id); }}
-                      style={{ background:"none", border:"1px solid rgba(247,92,92,0.4)", borderRadius:7, padding:"5px 10px", fontSize: 14, color:"var(--red)", cursor:"pointer", fontFamily:"inherit" }}
-                    >🗑</button>
+                      onClick={() => setConfirmDeleteId(sub.id)}
+                      style={{ background:"none", border:"1px solid rgba(247,92,92,0.4)", borderRadius:7, padding:"5px 10px", fontSize: 14, color:"var(--red)", cursor:"pointer", fontFamily:"inherit", display:"inline-flex", alignItems:"center", justifyContent:"center" }}
+                    ><DocIcon name="trash" color="var(--red)" size={15} /></button>
                   </div>
                 </div>
 
@@ -1973,7 +2685,7 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
                           <div style={{ flex:1, minWidth:120 }}>
                             <div style={{ fontWeight:600, fontSize: 15, textDecoration: isIgnored ? "line-through" : "none", color: isIgnored ? "var(--text-dim)" : "var(--text)" }}>{tx.name}</div>
                             <div style={{ fontSize: 13, color:"var(--text-dim)" }}>{tx.date}</div>
-                            {tx.note && <div style={{ fontSize: 13, color:"var(--text-mid)", fontStyle:"italic", marginTop:2 }}>📝 {tx.note}</div>}
+                            {tx.note && <div style={{ fontSize: 13, color:"var(--text-mid)", fontStyle:"italic", marginTop:2, display:"flex", alignItems:"center", gap:4 }}><DocIcon name="pencil" color="var(--text-dim)" size={12} />{tx.note}</div>}
                           </div>
                           <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }} onClick={e => e.stopPropagation()}>
                             <span style={{ fontWeight:700, fontSize: 15, color: isIgnored ? "var(--text-dim)" : "var(--red)" }}>₪{tx.amount?.toLocaleString()}</span>
@@ -1994,8 +2706,8 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
                             <button
                               onClick={() => setEditCatOpen(editCatOpen === `note_${tx.id||i}` ? null : `note_${tx.id||i}`)}
                               title="הערה"
-                              style={{ background:"transparent", border:"1px solid var(--border)", borderRadius:8, padding:"4px 8px", fontSize: 15, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}
-                            >📝</button>
+                              style={{ background:"transparent", border:"1px solid var(--border)", borderRadius:8, padding:"4px 8px", display:"inline-flex", alignItems:"center", justifyContent:"center", color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}
+                            ><DocIcon name="pencil" color="var(--text-dim)" size={14} /></button>
                           </div>
                         </div>
                         {editCatOpen === (tx.id||i) && (
@@ -2030,7 +2742,7 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
                       );
                     })}
                     <div style={{ display:"flex", justifyContent:"center", gap:10, marginTop:12, paddingTop:12, borderTop:"1px solid var(--border)" }}>
-                      <Btn onClick={saveEdit}>💾 שמור שינויים</Btn>
+                      <Btn onClick={saveEdit} style={{ display:"inline-flex", alignItems:"center", gap:6 }}><DocIcon name="save" color="#fff" size={15} /> שמור שינויים</Btn>
                       <Btn variant="ghost" onClick={() => setEditingSub(null)}>ביטול</Btn>
                     </div>
                   </div>
@@ -2039,6 +2751,16 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
             );
           })}
         </>
+      )}
+      {confirmDeleteId && (
+        <ConfirmModal
+          title="מחיקת מקור"
+          body="האם למחוק מקור זה ואת כל התנועות שלו? פעולה זו אינה הפיכה."
+          confirmText="מחק"
+          danger
+          onConfirm={() => { onDeleteSub(confirmDeleteId); setConfirmDeleteId(null); }}
+          onCancel={() => setConfirmDeleteId(null)}
+        />
       )}
     </div>
   );
@@ -2233,7 +2955,10 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
   const [dragOver, setDragOver]       = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const usedKeys = portfolioMonths.filter(e => !deletedMonthKeys.has(e.month_key)).map(e => e.month_key);
+  // חודש נחשב "תפוס" רק אם יש לו לפחות submission אחד — ghost entries לא חוסמים בחירה מחדש
+  const usedKeys = portfolioMonths
+    .filter(e => !deletedMonthKeys.has(e.month_key) && portfolioSubs.some(s => s.month_key === e.month_key))
+    .map(e => e.month_key);
 
   // ── helpers ──
   const loadEntrySubs = async (monthKey) => {
@@ -2377,7 +3102,7 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
     setConfirmModal({
       title: "מחיקת מקור",
       body: `האם למחוק את "${sub.source_label || sub.label}" ואת כל ${txCount} התנועות שלו?\nפעולה זו אינה הפיכה.`,
-      confirmText: "🗑 מחק",
+      confirmText: "מחק",
       danger: true,
       onConfirm: async () => {
         setConfirmModal(null);
@@ -2396,7 +3121,7 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
     setConfirmModal({
       title: "עריכת סיווגי תנועות",
       body: `כניסה לעריכת הסיווגים של "${label}".\nתוכל לשנות קטגוריה לכל תנועה ולשמור בסיום.`,
-      confirmText: "✏️ ערוך",
+      confirmText: "ערוך",
       danger: false,
       onConfirm: () => {
         setConfirmModal(null);
@@ -2457,7 +3182,7 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
 
       {portfolioMonths.length === 0 ? (
         <Card style={{ textAlign:"center", padding:48, color:"var(--text-dim)" }}>
-          <div style={{ fontSize:36, marginBottom:12 }}>📂</div>
+          <div style={{ display:"flex", justifyContent:"center", marginBottom:12, opacity:0.4 }}><DocIcon name="folder" color="var(--text-dim)" size={36} /></div>
           <div style={{ marginBottom:16 }}>הוסף את החודש הראשון לתיק</div>
           <Btn onClick={() => setShowPicker(true)}>+ הוסף חודש</Btn>
         </Card>
@@ -2472,7 +3197,7 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
                 <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
                   <span style={{ fontWeight:700 }}>{entry.label}</span>
                   {entry.is_finalized
-                    ? <span style={{ background:"rgba(46,204,138,0.15)", color:"var(--green-soft)", borderRadius:20, padding:"2px 10px", fontSize: 13 }}>✓ הושלם</span>
+                    ? <span style={{ background:"rgba(46,204,138,0.15)", color:"var(--green-soft)", borderRadius:20, padding:"2px 10px", fontSize: 13, display:"inline-flex", alignItems:"center", gap:4 }}><DocIcon name="check-circle" color="var(--green-soft)" size={13} /> הושלם</span>
                     : <span style={{ background:"rgba(255,183,77,0.12)", color:"var(--gold)", borderRadius:20, padding:"2px 10px", fontSize: 13 }}>בתהליך</span>
                   }
                 </div>
@@ -2481,7 +3206,7 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
               <button
                 onClick={e => deleteMonth(entry, e)}
                 style={{ background:"none", border:"1px solid rgba(247,92,92,0.4)", borderRadius:7, padding:"4px 12px", fontSize: 14, color:"var(--red)", cursor:"pointer", fontFamily:"inherit", flexShrink:0, marginRight:8 }}
-              >🗑 מחק</button>
+              >מחק</button>
             </div>
           </Card>
         );
@@ -2518,7 +3243,7 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
             <div style={{ display:"flex", alignItems:"center", gap:8 }}>
               <span style={{ fontWeight:700, fontSize: 20 }}>{activeEntry.label}</span>
               {activeEntry.is_finalized
-                ? <span style={{ background:"rgba(46,204,138,0.15)", color:"var(--green-soft)", borderRadius:20, padding:"2px 10px", fontSize: 14 }}>✓ הושלם</span>
+                ? <span style={{ background:"rgba(46,204,138,0.15)", color:"var(--green-soft)", borderRadius:20, padding:"2px 10px", fontSize: 14, display:"inline-flex", alignItems:"center", gap:4 }}><DocIcon name="check-circle" color="var(--green-soft)" size={14} /> הושלם</span>
                 : entrySubs.length === 0
                   ? <span style={{ background:"rgba(255,183,77,0.12)", color:"var(--gold)", borderRadius:20, padding:"2px 10px", fontSize: 14 }}>בתהליך</span>
                   : null
@@ -2527,14 +3252,14 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
             <div style={{ fontSize: 15, color:"var(--text-dim)" }}>{entrySubs.length} מקורות · {allTx.length} תנועות · ₪{Math.round(total).toLocaleString()}</div>
           </div>
           {activeEntry.is_finalized && (
-            <Btn variant="ghost" size="sm" onClick={reopenMonth}>🔓 פתח לעריכה</Btn>
+            <Btn variant="ghost" size="sm" onClick={reopenMonth}><DocIcon name="unlock" size={13} /> פתח לעריכה</Btn>
           )}
         </div>
 
         <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))", gap:16 }}>
           {/* סיכום לפי סעיף */}
           <Card>
-            <div style={{ fontWeight:700, marginBottom:12, fontSize: 18 }}>📊 סיכום לפי סעיף</div>
+            <div style={{ fontWeight:700, marginBottom:12, fontSize: 18, display:"flex", alignItems:"center", gap:6 }}><DocIcon name="bar-chart" size={16} /> סיכום לפי סעיף</div>
             {allTx.length === 0 ? (
               <div style={{ color:"var(--text-dim)", fontSize:14, textAlign:"center", padding:"16px 0" }}>אין תנועות עדיין</div>
             ) : (
@@ -2552,7 +3277,7 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
           {/* מקורות */}
           <Card>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
-              <div style={{ fontWeight:700, fontSize: 18 }}>📋 מקורות</div>
+              <div style={{ fontWeight:700, fontSize: 18, display:"flex", alignItems:"center", gap:8 }}><DocIcon name="folder" color="var(--green-deep)" size={18} /> מקורות</div>
               <Btn size="sm" onClick={goToUpload}>+ הוסף מקור</Btn>
             </div>
             {entrySubs.length === 0 ? (
@@ -2569,12 +3294,12 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
                   <div style={{ display:"flex", gap:6 }}>
                     <button
                       onClick={() => editSub(sub)}
-                      style={{ background:"transparent", border:"1px solid var(--border)", borderRadius:7, padding:"3px 10px", fontSize:13, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}
-                    >✏️ ערוך</button>
+                      style={{ background:"transparent", border:"1px solid var(--border)", borderRadius:7, padding:"3px 10px", fontSize:13, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit", display:"inline-flex", alignItems:"center", gap:4 }}
+                    ><DocIcon name="pencil" color="var(--text-dim)" size={13} /> ערוך</button>
                     <button
                       onClick={() => confirmDeleteSub(sub)}
-                      style={{ background:"none", border:"1px solid rgba(247,92,92,0.4)", borderRadius:7, padding:"3px 10px", fontSize:13, color:"var(--red)", cursor:"pointer", fontFamily:"inherit" }}
-                    >🗑</button>
+                      style={{ background:"none", border:"1px solid rgba(247,92,92,0.4)", borderRadius:7, padding:"3px 10px", fontSize:13, color:"var(--red)", cursor:"pointer", fontFamily:"inherit", display:"inline-flex", alignItems:"center", justifyContent:"center" }}
+                    ><DocIcon name="trash" color="var(--red)" size={13} /></button>
                   </div>
                 </div>
               ))
@@ -2705,11 +3430,11 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:8 }}>
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
           <Btn variant="ghost" size="sm" onClick={() => { const wasEditing = !!editingSubId; setEditingSubId(null); setStep(wasEditing ? "month" : "upload"); }}>← חזור</Btn>
-          <div style={{ fontWeight:700 }}>✏️ {editingSubId ? "עריכת" : "סיווג"} תנועות — {sourceLabel}</div>
+          <div style={{ fontWeight:700, display:"inline-flex", alignItems:"center", gap:6 }}><DocIcon name="pencil" color="var(--text)" size={15} /> {editingSubId ? "עריכת" : "סיווג"} תנועות — {sourceLabel}</div>
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
           <span style={{ fontSize: 15, color:"var(--text-dim)" }}>{transactions.length} תנועות</span>
-          <Btn size="sm" onClick={saveSource} disabled={saving}>💾 {saving?"שומר...":"שמור"}</Btn>
+          <Btn size="sm" onClick={saveSource} disabled={saving}><DocIcon name="save" color="#fff" size={13} /> {saving?"שומר...":"שמור"}</Btn>
         </div>
       </div>
 
@@ -2773,7 +3498,7 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
                   }}>{isKnown ? "מוכר" : "חדש"}</span>
                 </div>
                 <div style={{ fontSize: 15, color:"var(--text-dim)" }}>{tx.date}</div>
-                {tx.note && <div style={{ fontSize: 14, color:"var(--text-mid)", marginTop:3, fontStyle:"italic" }}>📝 {tx.note}</div>}
+                {tx.note && <div style={{ fontSize: 14, color:"var(--text-mid)", marginTop:3, fontStyle:"italic", display:"flex", alignItems:"center", gap:4 }}><DocIcon name="pencil" color="var(--text-dim)" size={12} />{tx.note}</div>}
               </div>
               <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
                 <span style={{ fontWeight:700, color: tx.maxCat === 'הכנסות' ? "var(--green-mid)" : "var(--red)", fontSize: 16 }}>
@@ -2803,14 +3528,14 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
                 )}
                 <button
                   onClick={e => { e.stopPropagation(); setActiveTxId(activeTxId===`note_${tx.id}`?null:`note_${tx.id}`); }}
-                  style={{ background:"transparent", border:"1px solid var(--border)", borderRadius:8, padding:"5px 10px", fontSize: 15, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}
-                  title="הוסף הערה">📝</button>
+                  style={{ background:"transparent", border:"1px solid var(--border)", borderRadius:8, padding:"5px 10px", display:"inline-flex", alignItems:"center", justifyContent:"center", color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}
+                  title="הוסף הערה"><DocIcon name="pencil" color="var(--text-dim)" size={14} /></button>
                 {isPdf(tx) && (
                   <button
                     onClick={e => { e.stopPropagation(); toggleFlowType(tx.id); }}
                     title={inTransferSection ? "הזז להוצאות רגילות" : "סמן כחיוב אשראי — לא ייספר בהוצאות"}
                     style={{ background: inTransferSection ? "var(--green-mint)" : "transparent", border:`1px solid ${inTransferSection ? "var(--green-soft)" : "var(--border)"}`, borderRadius:8, padding:"5px 10px", fontSize: 14, color: inTransferSection ? "var(--green-deep)" : "var(--text-dim)", cursor:"pointer", fontFamily:"inherit", whiteSpace:"nowrap" }}
-                  >{inTransferSection ? "↩️ הוצאה" : "💳 כלול בכרטיס"}</button>
+                  >{inTransferSection ? "↩ הוצאה" : "כלול בכרטיס"}</button>
                 )}
               </div>
             </div>
@@ -2868,7 +3593,7 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
             {hasTransfers && (
               <>
                 <div style={{ fontWeight:800, fontSize: 20, color:"var(--text-dim)", marginBottom:6, marginTop:20, padding:"10px 14px", background:"var(--surface2)", borderRadius:10, display:"flex", alignItems:"center", gap:8, borderBottom:"2px solid var(--border)" }}>
-                  🔄 חיובי אשראי <span style={{ fontWeight:500, color:"var(--text-dim)", fontSize: 16 }}>({creditTransferTxs.length})</span>
+                  חיובי אשראי <span style={{ fontWeight:500, color:"var(--text-dim)", fontSize: 16 }}>({creditTransferTxs.length})</span>
                 </div>
                 <div style={{ fontSize: 15, color:"var(--text-dim)", background:"rgba(255,183,77,0.08)", border:"1px solid rgba(255,183,77,0.25)", borderRadius:8, padding:"8px 14px", marginBottom:10 }}>
                   ℹ️ תנועות אלו הן תשלומי כרטיס אשראי — <strong>לא נספרות כהוצאה</strong> כדי למנוע כפילות עם נתוני מקס/ישראכרט. לחץ על ↩️ כדי להעביר להוצאות.
@@ -2883,7 +3608,7 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
       {/* Save button at bottom */}
       <div style={{ position:"sticky", bottom:20, display:"flex", justifyContent:"center", marginTop:16 }}>
         <Btn onClick={saveSource} disabled={saving} style={{ boxShadow:"0 4px 20px rgba(45,106,79,0.3)", padding:"12px 36px", fontSize: 17 }}>
-          💾 {saving?"שומר...":"שמור את כל הסיווגים"}
+          <DocIcon name="save" color="#fff" size={15} /> {saving?"שומר...":"שמור את כל הסיווגים"}
         </Btn>
       </div>
     </div>
@@ -3339,8 +4064,8 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
               <span style={{ fontWeight:700, fontSize: 17, color:"var(--green-deep)" }}>{cycleStartDay}</span>
               <button onClick={() => { setEditingCycleDay(true); setTempDay(String(cycleStartDay)); }}
                 style={{ padding:"4px 12px", borderRadius:8, fontSize: 14, cursor:"pointer", fontFamily:"inherit",
-                  background:"transparent", color:"var(--text-dim)", border:"1px solid var(--border)" }}>
-                ✏️ שנה
+                  background:"transparent", color:"var(--text-dim)", border:"1px solid var(--border)", display:"inline-flex", alignItems:"center", gap:5 }}>
+                <DocIcon name="pencil" color="var(--text-dim)" size={13} /> שנה
               </button>
               <span style={{ fontSize: 15, color:"var(--text-dim)" }}>(שינוי ישפיע על החלוקה מעכשיו ואילך)</span>
             </>
@@ -3491,7 +4216,7 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
             direction:"rtl",
           }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
-              <div style={{ fontWeight:700, fontSize: 18 }}>📋 {title}</div>
+              <div style={{ fontWeight:700, fontSize: 18, display:"flex", alignItems:"center", gap:8 }}><DocIcon name="bar-chart" color="var(--green-deep)" size={18} /> {title}</div>
               <button onClick={() => setDrillDown(null)}
                 style={{ background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"6px 16px", fontSize: 15, cursor:"pointer", fontFamily:"inherit", fontWeight:700, color:"var(--text)" }}>
                 ← חזור
@@ -3562,15 +4287,15 @@ function RememberModal({ pendingRemember, onAlways, onThisSession, onJustHere })
         </div>
         <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
           <button onClick={onAlways} style={{ ...btnBase, borderColor:"var(--green-mid)", background:"var(--green-mint)", color:"var(--green-deep)", fontWeight:700 }}>
-            🔄 שנה תמיד לעסק זה
+            שנה תמיד לעסק זה
             <div style={{ fontSize: 13, color:"var(--green-deep)", opacity:0.7, fontWeight:400, marginTop:2 }}>ישמר לתמיד — יחול גם על תנועות עתידיות</div>
           </button>
           <button onClick={onThisSession} style={btnBase}>
-            📋 שנה לכל התנועות בהעלאה הנוכחית
+            שנה לכל התנועות בהעלאה הנוכחית
             <div style={{ fontSize: 13, color:"var(--text-dim)", marginTop:2 }}>עדכן את כל "{pendingRemember.name}" בסיווג הנוכחי בלבד</div>
           </button>
           <button onClick={onJustHere} style={{ ...btnBase, color:"var(--text-dim)" }}>
-            ✎ שנה כאן בלבד
+            שנה כאן בלבד
             <div style={{ fontSize: 13, color:"var(--text-dim)", marginTop:2 }}>רק תנועה זו — בלי לשנות שאר התנועות</div>
           </button>
         </div>
@@ -3994,7 +4719,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
           onClick={() => setConfirmDelete(null)}>
           <div style={{ background:"var(--surface)", borderRadius:14, padding:"28px 32px", maxWidth:360, width:"90%", textAlign:"center", boxShadow:"0 8px 32px rgba(0,0,0,0.18)" }}
             onClick={e => e.stopPropagation()}>
-            <div style={{ fontSize: 30, marginBottom:12 }}>🗑️</div>
+            <div style={{ marginBottom:12, display:"flex", justifyContent:"center" }}><DocIcon name="trash" color="var(--red)" size={30} /></div>
             <div style={{ fontWeight:700, fontSize: 18, marginBottom:8 }}>
               {confirmDelete.type === "all-imported" ? "מחק את כל תנועות המקס?" :
                confirmDelete.type === "cycle" ? `מחק תנועות מקס מ-${confirmDelete.label}?` :
@@ -4066,7 +4791,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
       {/* Source filter */}
       <div ref={filterBarRef} style={{ display:"flex", gap:8, marginBottom:8, flexWrap:"wrap", alignItems:"center" }}>
         <span style={{ fontSize: 15, color:"var(--text-dim)" }}>מקור:</span>
-        {[["all","הכל"], ["file","📁 קבצים"], ["ext","💳 מקס"], ["manual","✏️ ידני"]].map(([v,l]) => (
+        {[["all","הכל"], ["file","קבצים"], ["ext","מקס"], ["manual","ידני"]].map(([v,l]) => (
           <button key={v} onClick={() => { setFilterSource(v); setFilterProvider("all"); }}
             style={{ padding:"4px 12px", borderRadius:20, fontSize: 14, cursor:"pointer", fontFamily:"inherit",
               border:`1px solid ${filterSource===v?"var(--green-mid)":"var(--border)"}`,
@@ -4195,7 +4920,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                   <span style={{ padding:"1px 6px", borderRadius:10, fontSize: 13,
                     background: tx.source === "ext" ? "rgba(79,142,247,0.12)" : tx.source === "manual" ? "rgba(251,191,36,0.12)" : "rgba(46,204,138,0.12)",
                     color: tx.source === "ext" ? "var(--green-mid)" : tx.source === "manual" ? "var(--gold)" : "var(--green-deep)" }}>
-                    {tx.source === "ext" ? "💳" : tx.source === "manual" ? "✏️" : "📁"} {tx.source_label}
+                    {tx.source_label}
                   </span>
                 </div>
               </div>
@@ -4221,7 +4946,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                   }}
                   title="מחק תנועה"
                   style={{ padding:"3px 7px", borderRadius:6, border:"1px solid #ffcdd2", background:"#fff8f8", color:"#e53935", fontSize: 14, cursor:"pointer", fontFamily:"inherit" }}>
-                  🗑️
+                  <DocIcon name="trash" color="#e53935" size={14} />
                 </button>
               </div>
             </div>
@@ -4309,7 +5034,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                             style={{ padding:"6px 16px", fontSize: 15, borderRadius:8, fontFamily:"inherit", cursor:"pointer",
                               border:"1.5px solid #e53935", background:"#e53935", color:"#fff", fontWeight:700,
                               display:"flex", alignItems:"center", gap:5 }}>
-                            🗑 מחק ({monthSelectedCount})
+                            מחק ({monthSelectedCount})
                           </button>
                           <button onClick={() => setSelectedUids(new Set())}
                             style={{ background:"transparent", border:"none", color:"var(--text-dim)", cursor:"pointer", fontSize: 20, padding:"0 4px", lineHeight:1 }}>×</button>
@@ -4319,7 +5044,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                           title="מחק את כל תנועות החודש"
                           style={{ padding:"4px 12px", fontSize: 14, borderRadius:7, fontFamily:"inherit", cursor:"pointer",
                             border:"1px solid rgba(229,57,53,0.4)", background:"rgba(229,57,53,0.06)", color:"#e53935" }}>
-                          🗑 מחק חודש
+                          מחק חודש
                         </button>
                       )}
                     </div>
@@ -4391,7 +5116,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                       <div style={{ display:"flex", alignItems:"center", gap:10, margin:"14px 0 8px", padding:"12px 16px", borderRadius:10,
                         background: groupBg, border:`1.5px solid ${groupColor}33`, boxShadow:"0 1px 4px rgba(30,77,53,0.06)" }}>
                         <span style={{ fontSize: 17, fontWeight:700, color: groupColor }}>
-                          {g.source === "ext" ? "💳" : g.source === "manual" ? "✏️" : "📁"} {g.label}
+                          {g.label}
                         </span>
                         <span style={{ fontSize: 15, color:"var(--text-dim)", fontWeight:500 }}>{g.txs.length} תנועות</span>
                         <span style={{ fontFamily:"'Frank Ruhl Libre', serif", fontSize: 20, fontWeight:700, marginRight:"auto", color: groupTotal <= 0 ? "var(--green-mid)" : "var(--red)", letterSpacing:"-0.3px", direction:"ltr", unicodeBidi:"embed" }}>
@@ -4410,7 +5135,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                         <button onClick={deleteGroup}
                           style={{ padding:"4px 12px", fontSize: 14, borderRadius:7, fontFamily:"inherit", cursor:"pointer",
                             border:"1px solid rgba(229,57,53,0.4)", background:"rgba(229,57,53,0.06)", color:"#e53935", fontWeight:600 }}>
-                          🗑 מחק מקור
+                          מחק מקור
                         </button>
                       </div>
                       {g.txs.map(tx => renderTxRow(tx, false))}
@@ -4447,7 +5172,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                     <div style={{ marginTop:10, marginBottom:4 }}>
                       <button onClick={() => setMonthAddMode(key, "menu")}
                         style={{ padding:"5px 14px", fontSize: 14, fontFamily:"inherit", borderRadius:8, border:"1.5px dashed var(--green-mid)", background:"var(--green-mint)", color:"var(--green-deep)", cursor:"pointer" }}>
-                        ✏️ הוסף תנועה
+                        + הוסף תנועה
                       </button>
                     </div>
                   );
@@ -4501,11 +5226,11 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                       <span style={{ fontSize: 15, color:"var(--text-dim)" }}>צורת תשלום:</span>
                       <button onClick={() => { setMonthAddMode(key, "expense-cash"); updateForm(key, "payment_method", "מזומן"); }}
                         style={{ padding:"5px 14px", fontSize: 14, fontFamily:"inherit", borderRadius:8, border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text)", cursor:"pointer" }}>
-                        💵 מזומן
+                        מזומן
                       </button>
                       <button onClick={() => setMonthAddMode(key, "expense-other")}
                         style={{ padding:"5px 14px", fontSize: 14, fontFamily:"inherit", borderRadius:8, border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text)", cursor:"pointer" }}>
-                        💳 אחר
+                        אחר
                       </button>
                       <button onClick={() => resetAdd(key)} style={{ background:"none", border:"none", color:"var(--text-dim)", cursor:"pointer", fontSize: 20, lineHeight:1 }}>×</button>
                     </div>
@@ -4580,7 +5305,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                           title="החלף קובץ — העלה קובץ חדש לחודש זה"
                           style={{ padding:"4px 10px", borderRadius:8, fontSize: 14, cursor:"pointer", fontFamily:"inherit",
                             border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text-mid)" }}>
-                          📁 {subLabel} — החלף
+                          {subLabel} — החלף
                         </button>
                         <button onClick={() => setConfirmDelete({ type:"submission", submissionId:subId, label:subLabel, count:subCount })}
                           style={{ padding:"4px 8px", borderRadius:8, fontSize: 14, cursor:"pointer", fontFamily:"inherit",
@@ -4594,7 +5319,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                     <button onClick={() => setConfirmDelete({ type:"cycle", cycleKey:key, label, count:cycleTxs.filter(t=>t.source==="ext").length })}
                       style={{ padding:"4px 10px", borderRadius:8, fontSize: 14, cursor:"pointer", fontFamily:"inherit",
                         border:"1px solid #ffcdd2", background:"#fff8f8", color:"#e53935" }}>
-                      💳 מחק תנועות מקס מחודש זה
+                      מחק תנועות מקס מחודש זה
                     </button>
                   )}
                   <button onClick={onNavigateToUpload}
@@ -4635,7 +5360,7 @@ function classifyImported(tx, rememberedMappings, categoryRules = []) {
 
 
 // ── Payslips Screen ───────────────────────────────────────────────────────────
-function PayslipsScreen({ clientId, payslips, subsCount, clientName, onDone, onBack }) {
+function PayslipsScreen({ clientId, payslips, spouseIndex, spouseName, subsCount, clientName, onDone, onBack }) {
   const currentYear = new Date().getFullYear();
   const [showPicker, setShowPicker] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
@@ -4645,7 +5370,12 @@ function PayslipsScreen({ clientId, payslips, subsCount, clientName, onDone, onB
   const [msg, setMsg] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const usedKeys = payslips.map(p => p.month_key).filter(Boolean);
+  // סינון תלושים לפי בן/בת הזוג הנוכחי
+  // spouse_index === null = רשומות ישנות (לפני הפיצ'ר) — נחשבות כספאוס 1
+  const myPayslips = spouseIndex === 2
+    ? payslips.filter(p => p.spouse_index === 2)
+    : payslips.filter(p => !p.spouse_index || p.spouse_index === 1);
+  const usedKeys = myPayslips.map(p => p.month_key).filter(Boolean);
   const monthKey = `${selectedYear}-${String(selectedMonth+1).padStart(2,"0")}`;
   const alreadyUploaded = usedKeys.includes(monthKey);
   const years = [currentYear, currentYear-1, currentYear-2];
@@ -4659,8 +5389,9 @@ function PayslipsScreen({ clientId, payslips, subsCount, clientName, onDone, onB
     const storagePath = `${clientId}/payslips/${monthKey}_${Date.now()}_${pendingFile.name}`;
     let savedPath = null;
     const { error: storageErr } = await supabase.storage.from("client-documents").upload(storagePath, pendingFile, { upsert: false });
-    if (!storageErr) savedPath = storagePath;
-    const { error } = await supabase.from("payslips").insert([{ client_id: clientId, label, month_key: monthKey, filename: pendingFile.name, path: savedPath, created_at: new Date().toISOString() }]);
+    if (storageErr) { setMsg("❌ שגיאה בהעלאת הקובץ — נסה שנית"); setUploading(false); return; }
+    savedPath = storagePath;
+    const { error } = await supabase.from("payslips").insert([{ client_id: clientId, label, month_key: monthKey, filename: pendingFile.name, path: savedPath, spouse_index: spouseIndex || null, created_at: new Date().toISOString() }]);
     if (error) { setMsg("❌ שגיאה בשמירה"); setUploading(false); return; }
     setPendingFile(null); setShowPicker(false); setMsg("✅ תלוש נשמר!");
     setTimeout(() => setMsg(""), 2000);
@@ -4668,27 +5399,30 @@ function PayslipsScreen({ clientId, payslips, subsCount, clientName, onDone, onB
     setUploading(false);
   };
 
+  const screenTitle = spouseName ? `💼 תלושי משכורת — ${spouseName}` : "💼 תלושי משכורת";
+  const remaining = 3 - myPayslips.length;
+
   return (
     <div style={{ maxWidth:700, margin:"0 auto", padding:"28px 20px" }}>
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:24 }}>
         <Btn variant="ghost" size="sm" onClick={onBack}>← חזור</Btn>
-        <div style={{ fontWeight:700, fontSize: 20 }}>💼 תלושי משכורת</div>
+        <div style={{ fontWeight:700, fontSize: 20 }}>{screenTitle}</div>
       </div>
       <Card style={{ marginBottom:20, textAlign:"center", padding:"32px 24px" }}>
         <div style={{ fontSize:36, marginBottom:12 }}>📄</div>
         <div style={{ fontWeight:700, fontSize: 18, marginBottom:8 }}>העלה תלוש משכורת</div>
-        <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:20 }}>צריך {3 - payslips.length} תלוש{3 - payslips.length !== 1 ? "ים" : ""} נוספים</div>
+        <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:20 }}>צריך {remaining} תלוש{remaining !== 1 ? "ים" : ""} נוספים</div>
         <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display:"none" }} onChange={handleFile} />
-        <Btn onClick={() => fileRef.current?.click()} disabled={payslips.length >= 3}>📎 בחר קובץ</Btn>
+        <Btn onClick={() => fileRef.current?.click()} disabled={myPayslips.length >= 3}>📎 בחר קובץ</Btn>
       </Card>
       {msg && <div style={{ background:msg.startsWith("✅")?"rgba(46,204,138,0.1)":"rgba(247,92,92,0.1)", border:`1px solid ${msg.startsWith("✅")?"rgba(46,204,138,0.3)":"rgba(247,92,92,0.3)"}`, borderRadius:10, padding:"10px 16px", marginBottom:16, fontSize: 15, color:msg.startsWith("✅")?"var(--green-soft)":"var(--red)" }}>{msg}</div>}
-      {payslips.length > 0 && (
+      {myPayslips.length > 0 && (
         <div>
           <div style={{ fontWeight:700, marginBottom:12 }}>תלושים שהועלו</div>
-          {payslips.map(p => (
+          {myPayslips.map(p => (
             <Card key={p.id} style={{ marginBottom:10, padding:"14px 20px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
               <div><div style={{ fontWeight:600 }}>📄 {p.label}</div><div style={{ fontSize: 13, color:"var(--text-dim)" }}>{p.filename} · {new Date(p.created_at).toLocaleDateString("he-IL")}</div></div>
-              <span style={{ background:"rgba(46,204,138,0.15)", color:"var(--green-soft)", borderRadius:20, padding:"3px 12px", fontSize: 14, fontWeight:700 }}>✓</span>
+              <span style={{ background:"rgba(46,204,138,0.15)", color:"var(--green-soft)", borderRadius:20, padding:"3px 12px", fontSize: 14, fontWeight:700, display:"inline-flex", alignItems:"center" }}><DocIcon name="check-circle" color="var(--green-soft)" size={14} /></span>
             </Card>
           ))}
         </div>
@@ -4797,6 +5531,20 @@ const QUESTIONNAIRE_QUESTIONS = [
   "מהי ההתנהלות הכלכלית שאתה/את הכי גאה/ה בה, ומהי ההתנהלות שאם היית חוזר/ת אחורה היית עושה אחרת?",
 ];
 
+const QUESTIONNAIRE_PLACEHOLDERS = [
+  "לדוגמה: חוזקה — אני עקבי בביצוע; חולשה — קשה לי לסרב לבזבוזים ספונטניים...",
+  "לדוגמה: ההוצאות עולות על ההכנסות בסוף החודש, קושי לחסוך לטווח ארוך...",
+  "לדוגמה: הרגלי ילדות, הכנסה לא יציבה, חוסר מודעות לאן הכסף הולך...",
+  "לדוגמה: לבנות בסיס כלכלי יציב שיאפשר לי לחיות ללא דאגות כסף...",
+  "לדוגמה: מוכן לעקוב אחרי תקציב חודשי, לדחות סיפוקים, להפסיק לקנות בהגעלה...",
+  "לדוגמה: קפה יומי, בגדים, ארוחות בחוץ, מנויים שלא משתמש בהם...",
+  "לדוגמה: לסיים את התהליך עם תוכנית כתובה ומספר חיסכון קבוע כל חודש...",
+  "לדוגמה: עם כרית ביטחון של 3 משכורות, ללא חובות צרכניים, עם השקעה קטנה...",
+  "לדוגמה: פנסיה מסודרת, ילדים שלי לא ייקחו הלוואות, חופש כלכלי אמיתי...",
+  "לדוגמה: אוכל בחוץ, קניות אונליין, בילויים — כל פעם שיש רגש שלילי...",
+  "לדוגמה: גאה ב: לא לקחתי הלוואה נוספת למרות הלחץ. הייתי עושה אחרת: מתחיל לחסוך בגיל 25...",
+];
+
 function CoachingQuestionnaire({ session, spousesCount = 1, onNavigateBack }) {
   const [spouseIndex, setSpouseIndex] = useState(1);
   const [answers, setAnswers]         = useState({ 1: {}, 2: {} });
@@ -4867,7 +5615,7 @@ function CoachingQuestionnaire({ session, spousesCount = 1, onNavigateBack }) {
 
   return (
     <div>
-      <div style={{ fontWeight:700, fontSize: 18, marginBottom:6 }}>📝 שאלון אישי</div>
+      <div style={{ fontWeight:700, fontSize: 18, marginBottom:6, display:"flex", alignItems:"center", gap:8 }}><DocIcon name="pencil" color="var(--green-mid)" />שאלון אישי</div>
       <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:16 }}>
         ענה על השאלות הבאות — הן יעזרו לאלון להכיר אותך לעומק ולהתאים את התהליך עבורך אישית.
       </div>
@@ -4883,7 +5631,7 @@ function CoachingQuestionnaire({ session, spousesCount = 1, onNavigateBack }) {
               cursor:"pointer", transition:"all .15s",
             }}>
               {idx === 1 ? "בן/בת זוג ראשון" : "בן/בת זוג שני"}
-              {doneMap[idx] ? <span style={{ marginRight:6 }}>✅</span> : countFilled(idx) > 0 && <span style={{ marginRight:6, fontSize: 13, opacity:.8 }}>({countFilled(idx)}/{QUESTIONNAIRE_QUESTIONS.length})</span>}
+              {doneMap[idx] ? <span style={{ marginRight:6, display:"inline-flex", verticalAlign:"middle" }}><DocIcon name="check-circle" color={spouseIndex===idx?"#fff":"var(--green-soft)"} size={14} /></span> : countFilled(idx) > 0 && <span style={{ marginRight:6, fontSize: 13, opacity:.8 }}>({countFilled(idx)}/{QUESTIONNAIRE_QUESTIONS.length})</span>}
             </button>
           ))}
         </div>
@@ -4891,14 +5639,14 @@ function CoachingQuestionnaire({ session, spousesCount = 1, onNavigateBack }) {
 
       {doneMap[spouseIndex] ? (
         <div style={{ padding:"24px", background:"rgba(46,183,124,0.08)", borderRadius:12, border:"1px solid rgba(46,183,124,0.25)", textAlign:"center", marginBottom:16 }}>
-          <div style={{ fontSize:36, marginBottom:10 }}>✅</div>
+          <div style={{ display:"flex", justifyContent:"center", marginBottom:10 }}><DocIcon name="check-circle" color="var(--green-soft)" size={40} /></div>
           <div style={{ fontWeight:700, fontSize: 18, color:"var(--green-deep)", marginBottom:6 }}>השאלון הושלם!</div>
           <div style={{ fontSize: 15, color:"var(--text-mid)", marginBottom:20 }}>סימנת "סיימתי" עבור בן/בת הזוג הזה</div>
           <div style={{ display:"flex", gap:10, justifyContent:"center", flexWrap:"wrap" }}>
             {onNavigateBack && (
               <Btn onClick={onNavigateBack}>← חזור להגשת המסמכים</Btn>
             )}
-            <Btn variant="ghost" onClick={() => setDoneMap(prev => ({ ...prev, [spouseIndex]: false }))}>✏️ ערוך תשובות</Btn>
+            <Btn variant="ghost" onClick={() => setDoneMap(prev => ({ ...prev, [spouseIndex]: false }))} style={{ display:"inline-flex", alignItems:"center", gap:6 }}><DocIcon name="pencil" color="var(--text-mid)" />ערוך תשובות</Btn>
           </div>
         </div>
       ) : (
@@ -4916,7 +5664,7 @@ function CoachingQuestionnaire({ session, spousesCount = 1, onNavigateBack }) {
                     value={answers[spouseIndex]?.[i] || ""}
                     onChange={e => { updateAnswer(i, e.target.value); setDoneError(""); }}
                     rows={3}
-                    placeholder="כתוב/י את תשובתך כאן..."
+                    placeholder={QUESTIONNAIRE_PLACEHOLDERS[i]}
                     style={{ width:"100%", boxSizing:"border-box", background:"var(--surface2)", border:`1px solid ${isEmpty?"var(--border)":"rgba(46,183,124,0.3)"}`, borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize: 15, fontFamily:"inherit", resize:"vertical", outline:"none", lineHeight:1.6 }}
                   />
                 </Card>
@@ -4925,16 +5673,16 @@ function CoachingQuestionnaire({ session, spousesCount = 1, onNavigateBack }) {
           </div>
 
           <div style={{ marginTop:20, display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-            <Btn onClick={save} disabled={saving} variant="ghost">{saving ? "שומר..." : "💾 שמור טיוטה"}</Btn>
-            <Btn onClick={markDone} disabled={markingDone}>{markingDone ? "שומר..." : "✅ סיימתי"}</Btn>
-            {saved && <span style={{ fontSize: 15, color:"var(--green-soft)" }}>נשמר בהצלחה</span>}
+            <Btn onClick={save} disabled={saving} variant="ghost" style={{ display:"inline-flex", alignItems:"center", gap:6 }}><DocIcon name="save" color="var(--text-mid)" />{saving ? "שומר..." : "שמור טיוטה"}</Btn>
+            <Btn onClick={markDone} disabled={markingDone} style={{ display:"inline-flex", alignItems:"center", gap:6 }}><DocIcon name="check-circle" color="#fff" />{markingDone ? "שומר..." : "סיימתי"}</Btn>
+            {saved && <span style={{ fontSize: 14, color:"var(--green-deep)", background:"rgba(46,183,124,0.12)", border:"1px solid rgba(46,183,124,0.3)", borderRadius:8, padding:"5px 14px", fontWeight:600 }}>✓ הטיוטה נשמרה</span>}
           </div>
-          {doneError && <div style={{ marginTop:10, fontSize: 15, color:"var(--red)", fontWeight:600 }}>⚠️ {doneError}</div>}
+          {doneError && <div style={{ marginTop:10, fontSize: 15, color:"var(--red)", fontWeight:600, display:"flex", alignItems:"center", gap:6 }}><DocIcon name="alert" color="var(--red)" />{doneError}</div>}
         </>
       )}
 
       <div style={{ marginTop:28, padding:"12px 16px", background:"rgba(46,183,124,0.06)", borderRadius:10, border:"1px solid rgba(46,183,124,0.2)", fontSize: 15, color:"var(--text-dim)", lineHeight:1.7 }}>
-        💡 <em>"הצלחה לא באה אליך — אתה הולך אליה"</em> — מריה קולינס
+        <span style={{ display:"inline-flex", alignItems:"center", gap:6, verticalAlign:"middle" }}><DocIcon name="lightbulb" color="var(--text-dim)" /></span> <em>"כשאתה יודע טוב יותר — אתה עושה טוב יותר."</em> — מאיה אנג'לו
       </div>
     </div>
   );
