@@ -1,9 +1,11 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useLayoutEffect } from "react";
 import { supabase } from "./supabase";
 import type { Session } from "./types";
 
 interface LoginScreenProps {
   onLogin: (session: Session) => void;
+  onLoginStart?: () => void;
+  onLoginFail?: () => void;
 }
 
 /* ── Icons ──────────────────────────────────────────────────────────── */
@@ -98,8 +100,17 @@ const GitBranchIcon = () => (
   </svg>
 );
 
+/* ── Animation guard ─────────────────────────────────────────────────
+   React.StrictMode בפיתוח מרים → מפרק → מרים מחדש כל קומפוננטה.
+   הפירוק + הרמה מחדש גורמים לכל אנימציות ה-CSS להתחיל מחדש —
+   כאילו הדף "התרענן". הדגל הזה מסמן שהאנימציות כבר שוחקו פעם אחת.
+   הדגל נשאר true לכל אורך חיי העמוד (לא מתאפס בפירוק) כך שה-mount
+   השני של StrictMode לא ישחק את האנימציות שוב.
+   מתאפס בטעינה מלאה של הדף (reload) — שאז ראוי שהאנימציות ישוחקו. */
+let _loginAnimated = false;
+
 /* ── Component ──────────────────────────────────────────────────────── */
-export default function LoginScreen({ onLogin }: LoginScreenProps) {
+export default function LoginScreen({ onLogin, onLoginStart, onLoginFail }: LoginScreenProps) {
   const [username, setUsername]         = useState("");
   const [password, setPassword]         = useState("");
   const [error, setError]               = useState("");
@@ -107,9 +118,20 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
   const [loading, setLoading]           = useState(false);
   const [focused, setFocused]           = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
+  const usernameRef  = useRef<HTMLInputElement>(null);
+  const passwordRef  = useRef<HTMLInputElement>(null);
+  const loginPageRef = useRef<HTMLDivElement>(null);
 
-  const usernameRef = useRef<HTMLInputElement>(null);
-  const passwordRef = useRef<HTMLInputElement>(null);
+  // useLayoutEffect רץ סינכרונית לפני ה-paint.
+  // StrictMode שומר את ה-state אבל מסיר ומחזיר את ה-DOM — כך שה-animation מתחיל מחדש.
+  // פה אנחנו מוסיפים no-animate לפני שהדפדפן מצייר, כך שה-animation השני לא נראה.
+  useLayoutEffect(() => {
+    if (_loginAnimated) {
+      loginPageRef.current?.classList.add('no-animate');
+    } else {
+      _loginAnimated = true;
+    }
+  }, []);
 
   useEffect(() => { usernameRef.current?.focus(); }, []);
 
@@ -120,7 +142,7 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
     if (Object.keys(errs).length > 0) { setFieldErrors(errs); return; }
 
     setLoading(true); setError(""); setFieldErrors({});
-    await supabase.auth.signOut({ scope: "local" }).catch(() => {});
+    onLoginStart?.(); // מעלה דגל — מונע פלאש של LoginScreen בזמן מעבר הסשן הפנימי
 
     function withTimeout<T>(p: Promise<T>, label: string): Promise<T> {
       return Promise.race([
@@ -131,6 +153,7 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
       ]);
     }
 
+    let authSessionOk = false; // הצלחה ב-signInWithPassword — כבר מחוברים, לא לקרוא signOut בcatch
     try {
       const email = `${username}@mazan.local`;
 
@@ -139,6 +162,7 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
       );
 
       if (!authErr && authData.session) {
+        authSessionOk = true; // auth הצליח — אל תנסה signOut בcatch
         const meta = authData.user?.app_metadata ?? {};
         if (meta.is_admin) {
           onLogin({ role: "admin", username: "admin" });
@@ -146,7 +170,7 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
           const { data: client } = await supabase
             .from("clients")
             .select("id, username, name, is_blocked, must_reset_password")
-            .eq("username", username)
+            .eq("auth_id", authData.user.id)
             .maybeSingle();
           if (!client) throw new Error("שם משתמש או סיסמה שגויים");
           if ((client as any).is_blocked) throw new Error("שם משתמש או סיסמה שגויים");
@@ -173,6 +197,7 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
         supabase.auth.signInWithPassword({ email, password }), "signIn2"
       );
       if (authErr2 || !authData2.session) throw new Error("שם משתמש או סיסמה שגויים");
+      authSessionOk = true; // auth migration הצליח
 
       if (migrateData.role === "admin") {
         onLogin({ role: "admin", username: "admin" });
@@ -180,6 +205,13 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
         onLogin({ role: "client", username: migrateData.username, name: migrateData.name, id: String(migrateData.id) });
       }
     } catch {
+      // אם auth לא הצליח בכלל — מוריד דגל ומנקה session
+      // אם auth הצליח אבל שאילתת הלקוח כישלה — לא נוגע ב-loginInProgress (הוא עדיין true)
+      // כי SIGNED_IN עדיין יגיע ו-buildSession יבנה את הסשן
+      if (!authSessionOk) {
+        onLoginFail?.();
+        supabase.auth.signOut({ scope: "local" }).catch(() => {});
+      }
       setError("שם משתמש או סיסמה שגויים");
     } finally {
       setLoading(false);
@@ -238,9 +270,9 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
           height: 100vh;
           display: flex;
           flex-direction: column;
-          justify-content: flex-start;
+          justify-content: center;
           gap: 20px;
-          padding: 44px 52px 40px 40px;
+          padding: 44px 52px 110px 40px;
           position: relative;
           z-index: 1;
           direction: rtl;
@@ -268,8 +300,8 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
         .lp-tagline {
           font-family: 'Rubik', sans-serif;
           font-weight: 400;
-          font-size: 1.05rem;
-          color: rgba(255,255,255,0.7);
+          font-size: 1.2rem;
+          color: rgba(255,255,255,0.88);
           margin: 0;
           letter-spacing: 0.01em;
           animation: fadeRight 0.5s ease 0.25s both;
@@ -279,9 +311,9 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
         .lp-grid {
           display: grid;
           grid-template-columns: 1fr 1fr;
-          gap: 40px;
+          gap: 24px;
           margin: 0;
-          margin-top: 40px;
+          margin-top: 32px;
         }
 
         .lp-feat-card {
@@ -296,13 +328,13 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
           transition: box-shadow 0.35s ease;
           animation: fadeRight 0.5s ease both, ba-spin 7s linear infinite;
           background-image:
-            linear-gradient(rgba(14,36,22,0.78), rgba(14,36,22,0.78)),
+            linear-gradient(rgba(30,60,38,0.55), rgba(30,60,38,0.55)),
             conic-gradient(
               from var(--ba),
               rgba(82,183,136,0.04) 0deg,
-              rgba(82,183,136,0.42) 55deg,
-              rgba(163,247,212,0.62) 90deg,
-              rgba(82,183,136,0.42) 125deg,
+              rgba(82,183,136,0.55) 55deg,
+              rgba(163,247,212,0.75) 90deg,
+              rgba(82,183,136,0.55) 125deg,
               rgba(82,183,136,0.04) 180deg,
               rgba(82,183,136,0.04) 360deg
             );
@@ -312,17 +344,17 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
 
         .lp-feat-card:hover {
           box-shadow:
-            0 0 26px rgba(82,183,136,0.18),
-            0 0 8px  rgba(82,183,136,0.08),
-            inset 0 0 18px rgba(82,183,136,0.04);
+            0 0 26px rgba(82,183,136,0.22),
+            0 0 8px  rgba(82,183,136,0.10),
+            inset 0 0 18px rgba(82,183,136,0.06);
           background-image:
-            linear-gradient(rgba(16,42,26,0.80), rgba(16,42,26,0.80)),
+            linear-gradient(rgba(35,70,44,0.58), rgba(35,70,44,0.58)),
             conic-gradient(
               from var(--ba),
               rgba(82,183,136,0.06) 0deg,
-              rgba(82,183,136,0.70) 55deg,
-              rgba(163,247,212,0.92) 90deg,
-              rgba(82,183,136,0.70) 125deg,
+              rgba(82,183,136,0.80) 55deg,
+              rgba(163,247,212,0.95) 90deg,
+              rgba(82,183,136,0.80) 125deg,
               rgba(82,183,136,0.06) 180deg,
               rgba(82,183,136,0.06) 360deg
             );
@@ -339,9 +371,9 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
           width: 42px;
           height: 42px;
           border-radius: 11px;
-          background: linear-gradient(145deg, rgba(82,183,136,0.22) 0%, rgba(30,77,53,0.32) 100%);
-          border: 1px solid rgba(82,183,136,0.38);
-          box-shadow: 0 2px 10px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.07);
+          background: linear-gradient(145deg, rgba(82,183,136,0.35) 0%, rgba(30,77,53,0.50) 100%);
+          border: 1px solid rgba(82,183,136,0.55);
+          box-shadow: 0 2px 10px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.10);
           display: flex;
           align-items: center;
           justify-content: center;
@@ -351,8 +383,8 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
         .lp-feat-text {
           font-family: 'Rubik', sans-serif;
           font-weight: 600;
-          font-size: 1.125rem;
-          color: rgba(255,255,255,0.85);
+          font-size: 1.2rem;
+          color: rgba(255,255,255,0.92);
           line-height: 1.4;
           text-align: right;
           flex: 1;
@@ -412,7 +444,7 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
         }
 
         .lp-ai-badge-label {
-          font-size: 1.125rem;
+          font-size: 1.3rem;
           font-weight: 600;
           color: rgba(255,255,255,0.85);
           font-family: 'Rubik', sans-serif;
@@ -466,6 +498,17 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
           display: flex;
           flex-direction: column;
           align-items: center;
+        }
+
+        .lp-card-wrapper::before {
+          content: '';
+          position: absolute;
+          top: 50%; left: 50%;
+          transform: translate(-50%, -50%);
+          width: 460px; height: 460px;
+          background: radial-gradient(circle, rgba(82,183,136,0.13) 0%, transparent 65%);
+          pointer-events: none;
+          z-index: 0;
         }
 
         .login-card {
@@ -640,6 +683,16 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
         }
 
         /* ── Responsive ─────────────────────────────────────────── */
+        @media (max-width: 1100px) {
+          .lp-right-col { display: none; }
+          .lp-left-col {
+            width: 100%;
+            align-items: center;
+            justify-content: center;
+          }
+          .login-card { width: 370px; }
+        }
+
         @media (max-width: 768px) {
           .login-page {
             flex-direction: column;
@@ -669,9 +722,28 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
           .lp-grid { display: none; }
           .lp-bottom-brand { align-items: center; }
         }
+
+        /* mount חוזר (StrictMode / HMR) — חוסם רק אנימציות כניסה, משאיר אינסופיות */
+        .no-animate .lp-h1,
+        .no-animate .lp-tagline,
+        .no-animate .login-card { animation: none !important; opacity: 1 !important; transform: none !important; }
+
+        /* כרטיסי feature: מסיר fadeRight, שומר ba-spin */
+        .no-animate .lp-feat-card { animation: ba-spin 7s linear infinite !important; opacity: 1 !important; transform: none !important; }
+        .no-animate .lp-feat-card:nth-child(1) { animation-delay:    0s !important; }
+        .no-animate .lp-feat-card:nth-child(2) { animation-delay: -1.2s !important; }
+        .no-animate .lp-feat-card:nth-child(3) { animation-delay: -2.4s !important; }
+        .no-animate .lp-feat-card:nth-child(4) { animation-delay: -3.5s !important; }
+        .no-animate .lp-feat-card:nth-child(5) { animation-delay: -4.7s !important; }
+        .no-animate .lp-feat-card:nth-child(6) { animation-delay: -5.9s !important; }
+
+        /* AI badge: מסיר fadeRight, שומר ba-spin */
+        .no-animate .lp-ai-badge { animation: ba-spin 9s linear infinite !important; animation-delay: -3.5s !important; opacity: 1 !important; transform: none !important; }
+
+        /* robot: floatRobot נשאר — לא מגעים */
       `}</style>
 
-      <div className="login-page">
+      <div className="login-page" ref={loginPageRef}>
 
         {/* Blobs */}
         <div style={{ position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none", zIndex: 0 }}>
@@ -696,7 +768,6 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
           </div>
 
           <div className="lp-grid">
-            {/* שורה 1: שליטה → ניתוח */}
             <div className="lp-feat-card">
               <span className="lp-feat-text">שליטה מלאה על התקציב החודשי</span>
               <div className="lp-feat-icon"><SlidersIcon /></div>
@@ -705,7 +776,6 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
               <span className="lp-feat-text">ניתוח אוטומטי של כל העסקאות</span>
               <div className="lp-feat-icon"><ActivityIcon /></div>
             </div>
-            {/* שורה 2: חובות → תחזיות */}
             <div className="lp-feat-card">
               <span className="lp-feat-text">ניהול חובות והלוואות</span>
               <div className="lp-feat-icon"><CreditCardIcon /></div>
@@ -714,7 +784,6 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
               <span className="lp-feat-text">תחזיות חכמות לחודשים הבאים</span>
               <div className="lp-feat-icon"><TrendingUpSmallIcon /></div>
             </div>
-            {/* שורה 3: תרחישים → צמיחה */}
             <div className="lp-feat-card">
               <span className="lp-feat-text">תכנון תרחישים עתידיים</span>
               <div className="lp-feat-icon"><GitBranchIcon /></div>

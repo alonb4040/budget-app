@@ -92,6 +92,14 @@ export interface ImportedTransaction {
   created_at?: string;
 }
 
+export interface CategoryEstimate {
+  id: string;
+  client_id: string;
+  category_name: string;
+  monthly_amount: number;
+  created_at?: string;
+}
+
 // הצהרה גלובלית עבור ספריות CDN
 declare global {
   interface Window {

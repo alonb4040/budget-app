@@ -60,11 +60,12 @@ interface BtnProps {
   variant?: BtnVariant;
   size?: BtnSize;
   style?: CSSProperties;
+  title?: string;
 }
 
-export const Btn = ({ children, onClick, disabled, variant = "primary", size = "md", style }: BtnProps) => {
+export const Btn = ({ children, onClick, disabled, variant = "primary", size = "md", style, title }: BtnProps) => {
   const sizes: Record<BtnSize, CSSProperties> = {
-    sm: { padding: "7px 16px", fontSize: 15 },
+    sm: { padding: "9px 16px", fontSize: 15 },
     md: { padding: "11px 24px", fontSize: 17 },
     lg: { padding: "14px 32px", fontSize: 18 },
   };
@@ -100,9 +101,10 @@ export const Btn = ({ children, onClick, disabled, variant = "primary", size = "
     <button
       onClick={onClick}
       disabled={disabled}
+      title={title}
       style={{
         fontFamily: "'Heebo', sans-serif",
-        borderRadius: 10,
+        borderRadius: 8,
         cursor: disabled ? "not-allowed" : "pointer",
         display: "inline-flex",
         alignItems: "center",

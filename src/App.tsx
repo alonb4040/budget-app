@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import LoginScreen from "./LoginScreen";
 import AdminPanel from "./AdminPanel";
@@ -25,6 +25,8 @@ function loadXLSX(): Promise<void> {
 function ForcePasswordReset({ session, onDone, onLogout }: { session: Session; onDone: () => void; onLogout: () => void }) {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [showPass, setShowPass] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
   const [status, setStatus] = useState<"idle"|"saving"|"error">("idle");
   const [errMsg, setErrMsg] = useState("");
 
@@ -39,39 +41,95 @@ function ForcePasswordReset({ session, onDone, onLogout }: { session: Session; o
     onDone();
   };
 
+  const inputStyle: React.CSSProperties = {
+    width: "100%", padding: "11px 14px", paddingLeft: 40,
+    borderRadius: 10, border: `1.5px solid ${errMsg ? "var(--red)" : "var(--border)"}`,
+    background: "var(--surface2)", color: "var(--text)", fontSize: 17,
+    boxSizing: "border-box", fontFamily: "'Heebo', sans-serif",
+    direction: "rtl", outline: "none",
+  };
+
+  const eyeBtn: React.CSSProperties = {
+    position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)",
+    background: "none", border: "none", cursor: "pointer",
+    color: "var(--text-dim)", display: "flex", alignItems: "center", padding: 4,
+  };
+
   return (
-    <div style={{ minHeight: "100vh", background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Plus Jakarta Sans', sans-serif", padding: 16 }}>
+    <div style={{ minHeight: "100vh", background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Heebo', sans-serif", padding: 16 }}>
       <div style={{ background: "var(--surface)", borderRadius: 16, padding: "36px 32px", maxWidth: 400, width: "100%", boxShadow: "0 4px 24px rgba(0,0,0,0.15)" }}>
-        <div style={{ fontSize: 36, textAlign: "center", marginBottom: 12 }}>🔐</div>
+
+        {/* Icon */}
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 14, color: "var(--green-mid)" }}>
+          <svg width={38} height={38} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+        </div>
+
         <div style={{ fontWeight: 700, fontSize: 22, textAlign: "center", marginBottom: 8, color: "var(--text)" }}>הגדר סיסמה אישית</div>
-        <div style={{ fontSize: 16, color: "var(--text-dim)", textAlign: "center", marginBottom: 28, lineHeight: 1.6 }}>
-          זו הכניסה הראשונה שלך — אנא הגדר סיסמה חדשה כדי להמשיך
+        <div style={{ fontSize: 15, color: "var(--text-dim)", textAlign: "center", marginBottom: 28, lineHeight: 1.6 }}>
+          זו הכניסה הראשונה שלך — הגדר סיסמה חדשה כדי להמשיך
         </div>
+
+        {/* Password field */}
         <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 15, color: "var(--text-mid)", marginBottom: 6 }}>סיסמה חדשה</div>
-          <input
-            type="password" value={password} onChange={e => setPassword(e.target.value)}
-            placeholder="לפחות 6 תווים"
-            style={{ width: "100%", padding: "10px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: 17, boxSizing: "border-box", fontFamily: "inherit" }}
-          />
+          <div style={{ fontSize: 15, color: "var(--text-mid)", marginBottom: 6, fontWeight: 600 }}>סיסמה חדשה</div>
+          <div style={{ position: "relative" }}>
+            <input
+              type={showPass ? "text" : "password"}
+              value={password}
+              onChange={e => { setPassword(e.target.value); if (errMsg) setErrMsg(""); }}
+              onKeyDown={e => e.key === "Enter" && handleSubmit()}
+              placeholder="לפחות 6 תווים"
+              style={inputStyle}
+            />
+            <button type="button" tabIndex={-1} onClick={() => setShowPass(p => !p)} style={eyeBtn}>
+              {showPass
+                ? <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                : <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              }
+            </button>
+          </div>
         </div>
+
+        {/* Confirm field */}
         <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 15, color: "var(--text-mid)", marginBottom: 6 }}>אימות סיסמה</div>
-          <input
-            type="password" value={confirm} onChange={e => setConfirm(e.target.value)}
-            placeholder="הזן שוב"
-            style={{ width: "100%", padding: "10px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: 17, boxSizing: "border-box", fontFamily: "inherit" }}
-            onKeyDown={e => e.key === "Enter" && handleSubmit()}
-          />
+          <div style={{ fontSize: 15, color: "var(--text-mid)", marginBottom: 6, fontWeight: 600 }}>אימות סיסמה</div>
+          <div style={{ position: "relative" }}>
+            <input
+              type={showConfirm ? "text" : "password"}
+              value={confirm}
+              onChange={e => { setConfirm(e.target.value); if (errMsg) setErrMsg(""); }}
+              onKeyDown={e => e.key === "Enter" && handleSubmit()}
+              placeholder="הזן שוב"
+              style={inputStyle}
+            />
+            <button type="button" tabIndex={-1} onClick={() => setShowConfirm(p => !p)} style={eyeBtn}>
+              {showConfirm
+                ? <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                : <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              }
+            </button>
+          </div>
         </div>
-        {errMsg && <div style={{ fontSize: 15, color: "var(--red)", marginBottom: 12, textAlign: "center" }}>{errMsg}</div>}
+
+        {/* Error message */}
+        {errMsg && (
+          <div style={{ fontSize: 14, color: "var(--red)", marginBottom: 14, textAlign: "center", background: "rgba(192,57,43,0.07)", borderRadius: 8, padding: "8px 12px" }}>
+            {errMsg}
+          </div>
+        )}
+
         <button
-          onClick={handleSubmit} disabled={status === "saving"}
-          style={{ width: "100%", padding: "12px", borderRadius: 10, background: "var(--green-mid)", color: "white", border: "none", fontSize: 17, fontWeight: 700, cursor: status === "saving" ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
-          {status === "saving" ? "שומר..." : "אפס סיסמה והמשך"}
+          onClick={handleSubmit}
+          disabled={status === "saving"}
+          style={{ width: "100%", padding: "12px", borderRadius: 10, background: "var(--green-mid)", color: "white", border: "none", fontSize: 17, fontWeight: 700, cursor: status === "saving" ? "not-allowed" : "pointer", fontFamily: "'Heebo', sans-serif", opacity: status === "saving" ? 0.7 : 1 }}>
+          {status === "saving" ? "שומר..." : "הגדר סיסמה והמשך"}
         </button>
+
         <div style={{ textAlign: "center", marginTop: 16 }}>
-          <button onClick={onLogout} style={{ background: "none", border: "none", color: "var(--text-dim)", fontSize: 15, cursor: "pointer", textDecoration: "underline", fontFamily: "inherit" }}>
+          <button onClick={onLogout} style={{ background: "none", border: "none", color: "var(--text-dim)", fontSize: 15, cursor: "pointer", textDecoration: "underline", fontFamily: "'Heebo', sans-serif" }}>
             התנתק
           </button>
         </div>
@@ -80,9 +138,40 @@ function ForcePasswordReset({ session, onDone, onLogout }: { session: Session; o
   );
 }
 
+// קורא את הסשן מהcache סינכרונית לפני הרנדר הראשון.
+// מאפשר לאפליקציה להתחיל ישירות עם המצב הנכון — ללא "טוען..." וללא פלאש של מסך ההתחברות.
+//
+// שלושה מקרים:
+// 1. אין auth token בכלל → session=null, ready=true → מסך התחברות מיידי
+// 2. יש auth token + app cache → session=cached, ready=true → האפליקציה עולה מיידית
+// 3. יש auth token אבל אין cache (כניסה ראשונה) → session=null, ready=false → "טוען..." עד ש-buildSession יסיים
+function getInitialState(): { session: Session | null; ready: boolean } {
+  try {
+    const AUTH_KEY = 'sb-fygffuihotnkjmxmveyt-auth-token';
+    const rawAuth = sessionStorage.getItem(AUTH_KEY);
+    if (!rawAuth || rawAuth === 'null') return { session: null, ready: true };
+
+    const authData = JSON.parse(rawAuth);
+    const userId: string | undefined = authData?.user?.id;
+    if (!userId) return { session: null, ready: false };
+
+    const rawCache = sessionStorage.getItem('mazan-session-cache');
+    if (!rawCache) return { session: null, ready: false };
+    const cached = JSON.parse(rawCache);
+    if (cached.userId !== userId) return { session: null, ready: false };
+
+    return { session: cached.session as Session, ready: true };
+  } catch {
+    return { session: null, ready: false };
+  }
+}
+
 export default function App() {
-  const [session, setSession] = useState<Session | null>(null);
-  const [ready, setReady] = useState(false);
+  const [session, setSession] = useState<Session | null>(() => getInitialState().session);
+  const [ready, setReady] = useState(() => getInitialState().ready);
+  // מונע פלאש של מסך ההתחברות בזמן login פעיל:
+  // כש-LoginScreen מתחיל login הוא מעלה את הדגל — ה-SIGNED_OUT האמצעי של Supabase לא יאפס את הסשן
+  const loginInProgress = React.useRef(false);
 
   useEffect(() => {
     loadXLSX().catch(() => {});
@@ -144,7 +233,19 @@ export default function App() {
       }
 
       if (event === "SIGNED_OUT" || !authSession) {
-        setSession(null);
+        console.log('[Auth] SIGNED_OUT loginInProgress:', loginInProgress.current);
+        // דלג על setSession(null) אם login פעיל, או אם הסשן הנוכחי מצריך איפוס סיסמה
+        // (stray SIGNED_OUTs מגיעים מSupabase בזמן מעבר בין sessions)
+        if (!loginInProgress.current) {
+          setSession(prev => {
+            // אל תמחק סשן של must_reset_password — המשתמש צריך לאפס סיסמה, לא להתנתק
+            if (prev?.must_reset_password) {
+              console.log('[Auth] SIGNED_OUT — protecting must_reset_password session');
+              return prev;
+            }
+            return null;
+          });
+        }
         if (!awaitingRefresh) {
           console.log('[Auth] SIGNED_OUT — show login');
           clearTimeout(fallback);
@@ -161,7 +262,7 @@ export default function App() {
         // stay on the loading screen forever.
         clearTimeout(fallback);
         fallback = setTimeout(markReady, 15000);
-        console.log(`[Auth] ${event} — calling buildSession`);
+        console.log(`[Auth] ${event} — calling buildSession loginInProgress=${loginInProgress.current}`);
         try {
           const appSession = await Promise.race([
             buildSession(authSession),
@@ -171,8 +272,15 @@ export default function App() {
           if (cancelled) return;
           if (appSession) {
             setSession(appSession);
-          } else {
-            // buildSession returned null — auth_id not linked. Sign out to clear stale session.
+            // הגן 3 שניות על SIGNED_OUT אחרי כל SIGNED_IN מוצלח —
+            // Supabase לפעמים מעיף SIGNED_OUT cleanup מיד אחרי SIGNED_IN (גם ב-restore, לא רק login)
+            if (!loginInProgress.current) {
+              loginInProgress.current = true;
+              setTimeout(() => { loginInProgress.current = false; }, 3000);
+            }
+          } else if (!loginInProgress.current) {
+            // buildSession returned null — auth_id not linked. Sign out only when NOT in active login flow
+            // (if login is in progress, the session was already set by onLogin() — don't destroy the auth session)
             await supabase.auth.signOut({ scope: 'local' });
           }
         } catch (e: any) {
@@ -192,11 +300,18 @@ export default function App() {
     };
   }, []);
 
+  const handleLoginStart = (): void => { loginInProgress.current = true; };
+  const handleLoginFail  = (): void => { loginInProgress.current = false; };
   const handleLogin = (sess: Session): void => {
     setSession(sess);
+    // Keep loginInProgress=true for 2.5s to absorb Supabase's post-login cleanup
+    // SIGNED_OUT events (e.g. old-session teardown) that fire after the SIGNED_IN.
+    // Without this delay, those stray SIGNED_OUTs clear the session immediately.
+    setTimeout(() => { loginInProgress.current = false; }, 2500);
   };
 
   const handleLogout = async (): Promise<void> => {
+    loginInProgress.current = false;
     clearSessionCache();
     try { localStorage.removeItem("mazan_client_id"); } catch {}
     await supabase.auth.signOut();
@@ -218,7 +333,7 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <ErrorBoundary>
-        {!session && <LoginScreen onLogin={handleLogin} />}
+        {!session && <LoginScreen onLogin={handleLogin} onLoginStart={handleLoginStart} onLoginFail={handleLoginFail} />}
         {session?.role === "admin" && <AdminPanel onLogout={handleLogout} />}
         {session?.role === "client" && session.must_reset_password && (
           <ForcePasswordReset session={session} onDone={handlePasswordReset} onLogout={handleLogout} />
@@ -267,8 +382,14 @@ async function buildSession(authSession: { user: { id: string; app_metadata?: Re
   // Return cached session immediately — avoids a slow DB round-trip on every reload.
   const cached = readSessionCache(userId);
   if (cached) {
-    console.log('[buildSession] cache hit → instant restore');
-    return cached;
+    // אם השדה must_reset_password לא קיים ב-cache (cache ישן מלפני הוספת השדה), מחק ושאל DB מחדש
+    if (cached.role === 'client' && cached.must_reset_password === undefined) {
+      console.log('[buildSession] cache missing must_reset_password — clearing and re-fetching');
+      clearSessionCache();
+    } else {
+      console.log('[buildSession] cache hit → instant restore');
+      return cached;
+    }
   }
 
   // No cache — look up the client row that has this auth user linked
