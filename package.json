@@ -8,6 +8,7 @@
     "@types/canvas-confetti": "^1.9.0",
     "canvas-confetti": "^1.9.4",
     "gsap": "^3.15.0",
+    "israeli-bank-scrapers": "^6.7.3",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-scripts": "5.0.1",
@@ -23,10 +24,11 @@
     "adm-zip": "^0.5.16",
     "concurrently": "^9.2.1",
     "cross-env": "^7.0.3",
+    "patch-package": "^8.0.1",
     "puppeteer": "^24.40.0"
   },
   "scripts": {
-    "start": "concurrently \"react-scripts start\" \"node extension/dev-watch.js\" \"node dev-server.js\"",
+    "start": "concurrently \"react-scripts start\" \"node extension/dev-watch.js\"",
     "build": "react-scripts build",
     "backup": "node tests/backup.js",
     "test": "npx playwright test --config=tests/playwright.config.js",
@@ -34,7 +36,8 @@
     "test:health": "node tests/supabase-health.js",
     "test:extension": "npx playwright test tests/specs/extension-mock.spec.js --config=tests/playwright.config.js",
     "generate-fixtures": "node tests/fixtures/generate-excel.js",
-    "ext:watch": "node extension/dev-watch.js"
+    "ext:watch": "node extension/dev-watch.js",
+    "postinstall": "patch-package"
   },
   "browserslist": {
     "production": [

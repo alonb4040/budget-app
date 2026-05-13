@@ -158,6 +158,8 @@ export default function AnalyticsTrends({ clientId, portfolioSubs, importedTxs, 
 
   return (
     <div style={{ direction: "rtl" }}>
+      <h1 style={{ fontFamily:"'Frank Ruhl Libre', serif", fontSize:32, fontWeight:700, color:"var(--text)", textAlign:"center", marginBottom:16, marginTop:0 }}>מגמות</h1>
+      <div style={{ height:1, background:"var(--border)", marginBottom:20 }} />
 
       {/* ── KPI row ── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 20 }}>
@@ -297,7 +299,7 @@ export default function AnalyticsTrends({ clientId, portfolioSubs, importedTxs, 
                 label: "vs תסריט",
                 value: `${vsScenario >= 0 ? "+" : ""}${fmt(vsScenario)}`,
                 color: vsScenario <= 0 ? "var(--green-soft)" : "var(--red)",
-                sub: vsScenario > 0 ? "⚠️ חריגה" : "✅ בתוך תקציב",
+                sub: vsScenario > 0 ? "חריגה" : "בתוך תקציב",
               } : null,
             ].filter(Boolean).map((k: any) => (
               <div key={k.label} style={{ background: "var(--surface2)", borderRadius: 10, padding: "10px 12px" }}>
@@ -313,7 +315,7 @@ export default function AnalyticsTrends({ clientId, portfolioSubs, importedTxs, 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               {catDetails.over.length > 0 && (
                 <div>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: "var(--red)", marginBottom: 8 }}>🔴 חרגו מהממוצע</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "var(--red)", marginBottom: 8 }}>חרגו מהממוצע</div>
                   {catDetails.over.map(c => (
                     <div key={c.cat} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, fontSize: 14 }}>
                       <span style={{ color: "var(--text)" }}>{c.cat}</span>
@@ -330,7 +332,7 @@ export default function AnalyticsTrends({ clientId, portfolioSubs, importedTxs, 
               )}
               {catDetails.under.length > 0 && (
                 <div>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: "var(--green-soft)", marginBottom: 8 }}>🟢 השתפרו</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "var(--green-soft)", marginBottom: 8 }}>השתפרו</div>
                   {catDetails.under.map(c => (
                     <div key={c.cat} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, fontSize: 14 }}>
                       <span style={{ color: "var(--text)" }}>{c.cat}</span>

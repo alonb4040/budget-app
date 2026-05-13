@@ -12,6 +12,10 @@ function formatBillingMonth(key) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+  const { version } = chrome.runtime.getManifest();
+  const vEl = document.getElementById('ext-version');
+  if (vEl) vEl.textContent = `v${version}`;
+
   const stored = await chrome.storage.local.get(['user']);
   if (stored.user) {
     currentUser = stored.user;
@@ -151,6 +155,9 @@ document.getElementById('login-btn').addEventListener('click', async () => {
   }
 });
 
+// state זמני לתצוגה המקדימה
+let _pendingTxs = null;
+
 // כפתור מקס
 document.getElementById('btn-max').addEventListener('click', async () => {
   const btn    = document.getElementById('btn-max');
@@ -160,7 +167,6 @@ document.getElementById('btn-max').addEventListener('click', async () => {
   const pageCheck = await chrome.runtime.sendMessage({ action: 'checkMaxPage' });
 
   if (!pageCheck.onMaxPage) {
-    // אין tab של מקס — פתח tab חדש
     await chrome.runtime.sendMessage({ action: 'openMax' });
     instructions.style.display = 'block';
     instructions.innerHTML = '✅ מקס נפתחה בכרטיסייה חדשה.<br>1. היכנס לחשבון שלך<br>2. נווט: <b>כרטיסים → פירוט חיובים → בחר חודש</b><br>3. חזור לכאן ולחץ "חלץ תנועות"';
@@ -171,7 +177,6 @@ document.getElementById('btn-max').addEventListener('click', async () => {
   }
 
   if (!pageCheck.onBillingPage) {
-    // באתר מקס אבל לא בעמוד הנכון — פתח עמוד פירוט חיובים בטאב חדש
     chrome.tabs.create({ url: 'https://www.max.co.il/charges/charges' });
     status.className = 'provider-status syncing';
     status.textContent = 'נפתח עמוד פירוט חיובים...';
@@ -180,9 +185,15 @@ document.getElementById('btn-max').addEventListener('click', async () => {
     return;
   }
 
-  // נמצאים בעמוד הנכון — חלץ
+  // נמצאים בעמוד הנכון — חלץ (תצוגה מקדימה בלבד)
   btn.disabled = true;
   instructions.style.display = 'none';
+  // נקה תוצאות מריצה קודמת
+  document.getElementById('result-box').style.display = 'none';
+  document.getElementById('result-added').textContent = '0';
+  document.getElementById('result-dups').textContent = '';
+  document.getElementById('result-month').textContent = '';
+  document.getElementById('preview-box').style.display = 'none';
   status.className = 'provider-status syncing';
   status.innerHTML = 'מחלץ תנועות... <span class="spinner"></span>';
 
@@ -193,22 +204,17 @@ document.getElementById('btn-max').addEventListener('click', async () => {
       accessToken: currentUser.accessToken,
     });
 
-    if (result && result.success) {
-      status.className = 'provider-status done';
-      status.textContent = result.added + ' תנועות נוספו ✓';
-      if (result.duplicates > 0) {
-        status.textContent += ' · ' + result.duplicates + ' כפילויות דולגו';
-      }
+    if (result && result.success && result.preview) {
+      // הצג תצוגה מקדימה לפני שמירה
+      _pendingTxs = result;
+      status.className = 'provider-status';
+      status.textContent = 'נמצאו ' + result.count + ' תנועות — ממתין לאישור';
 
-      const box = document.getElementById('result-box');
-      box.style.display = 'block';
-      document.getElementById('result-added').textContent = result.added;
-      if (result.duplicates > 0) {
-        document.getElementById('result-dups').textContent = result.duplicates + ' כפילויות דולגו';
-      }
-      if (result.billingMonthKey) {
-        document.getElementById('result-month').textContent = 'חודש חיוב: ' + result.billingMonthKey;
-      }
+      const previewBox = document.getElementById('preview-box');
+      document.getElementById('preview-count').textContent = result.count;
+      const monthLabel = formatBillingMonth(result.billingMonthKey);
+      document.getElementById('preview-month').textContent = monthLabel ? 'חודש חיוב: ' + monthLabel : '';
+      previewBox.style.display = 'block';
     } else {
       status.className = 'provider-status error';
       status.textContent = (result && result.error) ? result.error : 'שגיאה — נסה שוב';
@@ -219,6 +225,59 @@ document.getElementById('btn-max').addEventListener('click', async () => {
   }
 
   btn.disabled = false;
+});
+
+// אישור שמירה
+document.getElementById('btn-confirm-save').addEventListener('click', async () => {
+  if (!_pendingTxs) return;
+  const { transactions, billingMonthKey, maxBillingTotal } = _pendingTxs;
+  _pendingTxs = null;
+
+  document.getElementById('preview-box').style.display = 'none';
+  document.getElementById('btn-confirm-save').disabled = true;
+
+  const status = document.getElementById('status-max');
+  status.className = 'provider-status syncing';
+  status.innerHTML = 'שומר תנועות... <span class="spinner"></span>';
+
+  try {
+    const result = await chrome.runtime.sendMessage({
+      action: 'confirmSave',
+      transactions, billingMonthKey, maxBillingTotal,
+      userId: currentUser.id,
+      accessToken: currentUser.accessToken,
+    });
+
+    if (result && result.success) {
+      status.className = 'provider-status done';
+      status.textContent = result.added + ' תנועות נוספו ✓';
+      if (result.duplicates > 0) status.textContent += ' · ' + result.duplicates + ' כפילויות דולגו';
+
+      const box = document.getElementById('result-box');
+      box.style.display = 'block';
+      document.getElementById('result-added').textContent = result.added;
+      document.getElementById('result-dups').textContent = result.duplicates > 0 ? result.duplicates + ' כפילויות דולגו' : '';
+      const monthLabel = formatBillingMonth(result.billingMonthKey);
+      document.getElementById('result-month').textContent = monthLabel ? 'חודש חיוב: ' + monthLabel : '';
+    } else {
+      status.className = 'provider-status error';
+      status.textContent = (result && result.error) ? result.error : 'שגיאה — נסה שוב';
+    }
+  } catch(e) {
+    status.className = 'provider-status error';
+    status.textContent = 'שגיאה: ' + e.message;
+  }
+
+  document.getElementById('btn-confirm-save').disabled = false;
+});
+
+// ביטול תצוגה מקדימה
+document.getElementById('btn-cancel-save').addEventListener('click', () => {
+  _pendingTxs = null;
+  document.getElementById('preview-box').style.display = 'none';
+  document.getElementById('status-max').className = 'provider-status';
+  document.getElementById('status-max').textContent = 'בוטל';
+  checkMaxPageStatus();
 });
 
 // כפתור התנתקות

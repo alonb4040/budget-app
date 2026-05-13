@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../supabase";
-import { Spinner } from "../ui";
+import { Spinner, Btn } from "../ui";
 import { CATEGORIES, IGNORED_CATEGORIES, classifyTx, HEBREW_MONTHS, assignBillingMonth } from "../data";
 import type { CategoryRule } from "../data";
 
@@ -153,25 +153,25 @@ export default function InsightsPanel({ clientId, clientPlan, portfolioSubs, imp
   return (
     <>
       <button onClick={() => setOpen(p => !p)} title="תובנות חכמות" style={{
-        position:"fixed", left:16, bottom:160, zIndex:1000,
+        position:"fixed", left:16, bottom:160, zIndex:"var(--z-back)",
         background:"var(--green-mid)", color:"white", border:"none",
-        borderRadius:"50%", width:50, height:50, fontSize: 24,
+        borderRadius:"50%", width:50, height:50,
         cursor:"pointer", boxShadow:"0 4px 20px rgba(0,0,0,0.35)",
         display:"flex", alignItems:"center", justifyContent:"center",
-      }}>✨</button>
+      }}><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z"/></svg></button>
 
-      {open && <div onClick={() => setOpen(false)} style={{ position:"fixed", inset:0, zIndex:998, background:"rgba(0,0,0,0.25)" }} />}
+      {open && <div onClick={() => setOpen(false)} style={{ position:"fixed", inset:0, zIndex:"calc(var(--z-drop) - 1)", background:"rgba(0,0,0,0.25)" }} />}
 
       <div style={{
         position:"fixed", left:0, top:0, bottom:0, width:"min(340px,88vw)",
         background:"var(--surface)", borderRight:"1px solid var(--border)",
-        zIndex:999, overflowY:"auto", boxShadow:"4px 0 28px rgba(0,0,0,0.22)",
+        zIndex:"var(--z-drop)", overflowY:"auto", boxShadow:"4px 0 28px rgba(0,0,0,0.22)",
         display:"flex", flexDirection:"column",
         transform: open ? "translateX(0)" : "translateX(-105%)",
         transition:"transform 0.25s cubic-bezier(0.4,0,0.2,1)",
       }}>
         <div style={{ padding:"14px 18px", borderBottom:"1px solid var(--border)", display:"flex", justifyContent:"space-between", alignItems:"center", position:"sticky", top:0, background:"var(--surface)", zIndex:1 }}>
-          <div style={{ fontWeight:700, fontSize: 17 }}>✨ תובנות חכמות</div>
+          <div style={{ fontWeight:700, fontSize: 17, display:"flex", alignItems:"center", gap:7 }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--green-mid)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z"/></svg>תובנות חכמות</div>
           <button onClick={() => setOpen(false)} style={{ background:"none", border:"none", fontSize: 22, cursor:"pointer", color:"var(--text-dim)", lineHeight:1 }}>×</button>
         </div>
 
@@ -196,15 +196,17 @@ export default function InsightsPanel({ clientId, clientPlan, portfolioSubs, imp
               const isGood = ins.type === "under" || ins.type === "total_under";
               return (
                 <div key={i} style={{
-                  background: isGood ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
-                  border: `1px solid ${isGood ? "rgba(34,197,94,0.22)" : "rgba(239,68,68,0.22)"}`,
+                  background: isGood ? "var(--green-pale)" : "var(--red-light)",
+                  border: `1px solid ${isGood ? "var(--green-mint)" : "var(--red)"}`,
                   borderRadius:8, padding:"10px 12px", marginBottom:8, fontSize: 15
                 }}>
-                  <div style={{ fontWeight:600, marginBottom:3 }}>
-                    {ins.type==="total_over"  && `📈 הוצאות כוללות גבוהות ב-${ins.pct}% מהממוצע`}
-                    {ins.type==="total_under" && `📉 הוצאות כוללות נמוכות ב-${Math.abs(ins.pct)}% מהממוצע`}
-                    {ins.type==="over"        && `📈 ${ins.cat} — גבוה ב-${ins.pct}%`}
-                    {ins.type==="under"       && `✅ ${ins.cat} — נמוך ב-${Math.abs(ins.pct)}%`}
+                  <div style={{ fontWeight:600, marginBottom:3, display:"flex", alignItems:"center", gap:6 }}>
+                    {(ins.type==="total_over"||ins.type==="over") && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--red)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>}
+                    {(ins.type==="total_under"||ins.type==="under") && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--green-mid)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></svg>}
+                    {ins.type==="total_over"  && `הוצאות כוללות גבוהות ב-${ins.pct}% מהממוצע`}
+                    {ins.type==="total_under" && `הוצאות כוללות נמוכות ב-${Math.abs(ins.pct)}% מהממוצע`}
+                    {ins.type==="over"        && `${ins.cat} — גבוה ב-${ins.pct}%`}
+                    {ins.type==="under"       && `${ins.cat} — נמוך ב-${Math.abs(ins.pct)}%`}
                   </div>
                   <div style={{ color:"var(--text-dim)", fontSize: 14 }}>
                     החודש: ₪{fmt(ins.current)} | ממוצע: ₪{fmt(ins.avg)}
@@ -221,11 +223,11 @@ export default function InsightsPanel({ clientId, clientPlan, portfolioSubs, imp
 
             {!isPro ? (
               <div style={{ background:"var(--surface2)", borderRadius:12, padding:"22px 18px", textAlign:"center", border:"1px solid var(--border)" }}>
-                <div style={{ fontSize:32, marginBottom:8 }}>🔒</div>
+                <div style={{ marginBottom:8, display:"flex", justifyContent:"center" }}><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
                 <div style={{ fontWeight:700, fontSize: 16, marginBottom:6 }}>זמין בחבילת Pro</div>
                 <div style={{ color:"var(--text-dim)", fontSize: 14, marginBottom:18, lineHeight:1.7 }}>ניתוח AI מעמיק עם המלצות<br/>אישיות ומותאמות לך</div>
-                <button onClick={() => setShowUpgradeModal(true)} style={{ ...inputBase, background:"var(--green-mid)", color:"white", fontWeight:700, marginBottom:8 }}>הירשם למנוי חודשי</button>
-                <button onClick={() => setOpen(false)} style={{ ...inputBase, color:"var(--text-dim)", border:"1px solid var(--border)" }}>← חזור</button>
+                <Btn onClick={() => setShowUpgradeModal(true)} style={{ width:"100%", marginBottom:8 }}>הירשם למנוי חודשי</Btn>
+                <Btn variant="ghost" onClick={() => setOpen(false)} style={{ width:"100%" }}>← חזור</Btn>
               </div>
             ) : aiLoading ? (
               <div style={{ textAlign:"center", padding:"24px 0" }}>
@@ -233,19 +235,19 @@ export default function InsightsPanel({ clientId, clientPlan, portfolioSubs, imp
               </div>
             ) : aiError ? (
               <div style={{ textAlign:"center", padding:"16px 0" }}>
-                <div style={{ color:"var(--red,#ef4444)", fontSize: 15, marginBottom:10 }}>שגיאה בטעינת תובנות</div>
+                <div style={{ color:"var(--red)", fontSize: 15, marginBottom:10 }}>שגיאה בטעינת תובנות</div>
                 <button onClick={() => { setAiStatus(s=>{ const n={...s}; delete n[selectedMk!]; return n; }); }} style={{ fontSize: 14, color:"var(--text-dim)", background:"none", border:"none", cursor:"pointer", textDecoration:"underline" }}>נסה שוב</button>
               </div>
             ) : aiContent ? (
               <div>
                 <div style={{ fontSize: 15, lineHeight:1.9, color:"var(--text)", whiteSpace:"pre-wrap" }}>{aiContent}</div>
                 <button onClick={() => { setAiCache(c=>{ const n={...c}; delete n[selectedMk!]; return n; }); }}
-                  style={{ marginTop:14, fontSize: 13, color:"var(--text-dim)", background:"none", border:"none", cursor:"pointer", textDecoration:"underline" }}>🔄 רענן תובנות</button>
+                  style={{ marginTop:14, fontSize: 13, color:"var(--text-dim)", background:"none", border:"none", cursor:"pointer", textDecoration:"underline", display:"inline-flex", alignItems:"center", gap:5 }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>רענן תובנות</button>
               </div>
             ) : (
               <div style={{ textAlign:"center", padding:"18px 0" }}>
                 <div style={{ color:"var(--text-dim)", fontSize: 15, marginBottom:14 }}>לא נוצרו תובנות AI לחודש זה</div>
-                <button onClick={generateAiInsights} style={{ ...inputBase, background:"var(--green-mid)", color:"white", fontWeight:700, width:"auto", padding:"10px 20px" }}>✨ צור תובנות AI</button>
+                <Btn onClick={generateAiInsights}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z"/></svg>צור תובנות AI</Btn>
               </div>
             )}
           </div>
@@ -254,26 +256,26 @@ export default function InsightsPanel({ clientId, clientPlan, portfolioSubs, imp
 
       {showUpgradeModal && (
         <>
-          <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.65)", zIndex:2000 }} onClick={() => { setShowUpgradeModal(false); setShowBuilding(false); }} />
-          <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", borderRadius:20, padding:"36px 28px", zIndex:2001, width:"min(360px,90vw)", textAlign:"center", boxShadow:"0 24px 64px rgba(0,0,0,0.5)" }}>
+          <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.65)", zIndex:"var(--z-top-back)" }} onClick={() => { setShowUpgradeModal(false); setShowBuilding(false); }} />
+          <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", borderRadius:20, padding:"36px 28px", zIndex:"var(--z-top)", width:"min(360px,90vw)", textAlign:"center", boxShadow:"0 24px 64px rgba(0,0,0,0.5)" }}>
             {!showBuilding ? (
               <>
-                <div style={{ fontSize:48, marginBottom:14 }}>🚀</div>
+                <div style={{ marginBottom:14, display:"flex", justifyContent:"center" }}><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--green-mid)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg></div>
                 <div style={{ fontWeight:800, fontSize: 22, marginBottom:10 }}>שדרוג לחבילת Pro</div>
                 <div style={{ color:"var(--text-dim)", fontSize: 15, lineHeight:1.8, marginBottom:24 }}>
                   קבל תובנות AI אישיות כל חודש,<br/>ניתוח מעמיק של ההרגלים הפיננסיים שלך,<br/>והמלצות מותאמות לך בלבד.
                 </div>
-                <button onClick={() => setShowBuilding(true)} style={{ ...inputBase, background:"var(--green-mid)", color:"white", fontWeight:700, fontSize: 17, padding:"14px 28px", marginBottom:10, borderRadius:10 }}>הירשם למנוי חודשי</button>
-                <button onClick={() => { setShowUpgradeModal(false); setShowBuilding(false); }} style={{ ...inputBase, color:"var(--text-dim)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 28px" }}>← חזור</button>
+                <Btn onClick={() => setShowBuilding(true)} style={{ width:"100%", marginBottom:10 }}>הירשם למנוי חודשי</Btn>
+                <Btn variant="ghost" onClick={() => { setShowUpgradeModal(false); setShowBuilding(false); }} style={{ width:"100%" }}>← חזור</Btn>
               </>
             ) : (
               <>
-                <div style={{ fontSize:48, marginBottom:14 }}>🔧</div>
+                <div style={{ marginBottom:14, display:"flex", justifyContent:"center" }}><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--gold)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></div>
                 <div style={{ fontWeight:800, fontSize: 22, marginBottom:10 }}>התהליך בבנייה</div>
                 <div style={{ color:"var(--text-dim)", fontSize: 15, lineHeight:1.8, marginBottom:24 }}>
                   אנחנו עובדים על זה!<br/>בקרוב תוכל להירשם ולקבל גישה מלאה<br/>לתובנות AI.
                 </div>
-                <button onClick={() => { setShowUpgradeModal(false); setShowBuilding(false); }} style={{ ...inputBase, background:"var(--green-mid)", color:"white", fontWeight:700, fontSize: 16, padding:"14px 28px", borderRadius:10 }}>← חזור</button>
+                <Btn onClick={() => { setShowUpgradeModal(false); setShowBuilding(false); }} style={{ width:"100%" }}>← חזור</Btn>
               </>
             )}
           </div>

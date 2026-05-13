@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../supabase";
-import { Card } from "../ui";
+import { Card, Btn, CustomSelect } from "../ui";
 
 // ── Helper functions ──────────────────────────────────────────────────────────
 
@@ -76,7 +76,7 @@ export default function ClientScenarioView({ clientId }: Props) {
   const addPeriod = async () => {
     if (!newScId || !newFrom) { setOverlapWarn("יש לבחור תסריט ותאריך התחלה"); return; }
     if (periodsOverlap(periods, newFrom, newUntil || null)) {
-      setOverlapWarn("⚠️ קיימת חפיפה עם תקופה אחרת — ערוך את התאריכים");
+      setOverlapWarn("קיימת חפיפה עם תקופה אחרת — ערוך את התאריכים");
       return;
     }
     setSaving(true);
@@ -88,7 +88,7 @@ export default function ClientScenarioView({ clientId }: Props) {
       activated_at: new Date().toISOString(),
     }]);
     setSaving(false);
-    if (error) { setOverlapWarn("❌ שגיאה בשמירה — " + error.message); return; }
+    if (error) { setOverlapWarn("שגיאה בשמירה — " + error.message); return; }
     setShowAddForm(false);
     setNewScId(""); setNewFrom(""); setNewUntil(""); setOverlapWarn("");
     await load();
@@ -118,7 +118,7 @@ export default function ClientScenarioView({ clientId }: Props) {
 
   if (scenarios.length === 0) return (
     <Card style={{ textAlign: "center", padding: "48px 32px" }}>
-      <div style={{ fontSize: 40, marginBottom: 12 }}>📊</div>
+      <div style={{ marginBottom: 12, display:"flex", justifyContent:"center" }}><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--border)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></div>
       <div style={{ fontWeight: 600, fontSize: 18, marginBottom: 8 }}>התסריט התקציבי שלך עוד לא הוכן</div>
       <div style={{ color: "var(--text-dim)", fontSize: 16 }}>אלון יעלה עבורך את התסריט בקרוב</div>
     </Card>
@@ -126,14 +126,15 @@ export default function ClientScenarioView({ clientId }: Props) {
 
   return (
     <div>
+      <h1 style={{ fontFamily:"'Frank Ruhl Libre', serif", fontSize:32, fontWeight:700, color:"var(--text)", textAlign:"center", marginBottom:16, marginTop:0 }}>מאזן מתוכנן</h1>
+      <div style={{ height:1, background:"var(--border)", marginBottom:20 }} />
       {/* ── תקופות פעילות ── */}
       <Card style={{ marginBottom: 16, padding: "16px 20px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
           <div style={{ fontWeight: 700, fontSize: 16 }}>תקופות תסריט פעיל</div>
-          <button onClick={() => { setShowAddForm(v => !v); setOverlapWarn(""); }}
-            style={{ padding: "6px 14px", borderRadius: 8, fontSize: 14, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, background: "var(--green-mid)", color: "#fff", border: "none" }}>
+          <Btn size="sm" onClick={() => { setShowAddForm(v => !v); setOverlapWarn(""); }}>
             {showAddForm ? "✕ ביטול" : "+ הוסף תקופה"}
-          </button>
+          </Btn>
         </div>
 
         {showAddForm && (
@@ -141,10 +142,15 @@ export default function ClientScenarioView({ clientId }: Props) {
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
               <div>
                 <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 4 }}>תסריט</div>
-                <select value={newScId} onChange={e => setNewScId(e.target.value)} style={{ ...inputSt, minWidth: 140 }}>
-                  <option value="">בחר תסריט...</option>
-                  {scenarios.map(sc => <option key={sc.id} value={sc.id}>{sc.name}</option>)}
-                </select>
+                <CustomSelect
+                  value={newScId}
+                  onChange={v => setNewScId(v as string)}
+                  options={[
+                    { value: "", label: "בחר תסריט..." },
+                    ...scenarios.map(sc => ({ value: sc.id, label: sc.name })),
+                  ]}
+                  style={{ minWidth: 140 }}
+                />
               </div>
               <div>
                 <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 4 }}>מתאריך</div>
@@ -156,13 +162,12 @@ export default function ClientScenarioView({ clientId }: Props) {
                 <input type="date" value={newUntil} onChange={e => { setNewUntil(e.target.value); setOverlapWarn(""); }}
                   style={inputSt} />
               </div>
-              <button onClick={addPeriod} disabled={saving}
-                style={{ padding: "8px 18px", borderRadius: 8, fontSize: 15, cursor: saving ? "default" : "pointer", fontFamily: "inherit", fontWeight: 700, background: "var(--green-soft)", color: "#fff", border: "none", opacity: saving ? 0.7 : 1 }}>
-                {saving ? "שומר..." : "✓ שמור"}
-              </button>
+              <Btn onClick={addPeriod} disabled={saving}>
+                {saving ? "שומר..." : "שמור"}
+              </Btn>
             </div>
             {overlapWarn && (
-              <div style={{ marginTop: 8, fontSize: 14, color: "var(--red)", fontWeight: 600 }}>{overlapWarn}</div>
+              <div style={{ marginTop: 8, fontSize: 14, color: "var(--red)", fontWeight: 600, display:"flex", alignItems:"center", gap:6 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>{overlapWarn}</div>
             )}
           </div>
         )}
@@ -192,10 +197,7 @@ export default function ClientScenarioView({ clientId }: Props) {
                       {p.active_from} — {p.active_until || "ללא תאריך סיום"}
                     </span>
                   </div>
-                  <button onClick={() => deletePeriod(p.id)}
-                    style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", fontSize: 18, padding: "2px 6px", lineHeight: 1 }}>
-                    ✕
-                  </button>
+                  <Btn variant="danger" size="sm" onClick={() => deletePeriod(p.id)}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></Btn>
                 </div>
               );
             })}
@@ -224,9 +226,9 @@ export default function ClientScenarioView({ clientId }: Props) {
       <Card style={{ padding: 0, overflow: "hidden" }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", borderBottom: "2px solid var(--border)" }}>
           {[
-            { label: 'סה"כ הכנסות', val: totalIn, color: "var(--green-deep)", bg: "#f0faf2" },
-            { label: 'סה"כ הוצאות', val: totalOut, color: "var(--red)", bg: "#fff5f5" },
-            { label: "יתרה חודשית", val: balance, color: balance >= 0 ? "var(--green-deep)" : "var(--red)", bg: balance >= 0 ? "#f0faf2" : "#fff5f5" },
+            { label: 'סה"כ הכנסות', val: totalIn, color: "var(--green-deep)", bg: "var(--green-pale)" },
+            { label: 'סה"כ הוצאות', val: totalOut, color: "var(--red)", bg: "var(--surface2)" },
+            { label: "יתרה חודשית", val: balance, color: balance >= 0 ? "var(--green-deep)" : "var(--red)", bg: balance >= 0 ? "var(--green-pale)" : "var(--surface2)" },
           ].map(k => (
             <div key={k.label} style={{ padding: "14px 20px", background: k.bg, textAlign: "center", borderLeft: "1px solid var(--border)" }}>
               <div style={{ fontFamily: "'Frank Ruhl Libre', serif", fontSize: 24, fontWeight: 700, color: k.color }}>
@@ -238,9 +240,9 @@ export default function ClientScenarioView({ clientId }: Props) {
         </div>
         <div style={{ overflowY: "auto", maxHeight: 480 }}>
           {[
-            { title: "הכנסות", items: income, bg: "#f6fff8", titleBg: "#e8f5ec", titleColor: "var(--green-deep)" },
-            { title: "הוצאות קבועות", items: fixed, bg: "var(--surface)", titleBg: "#eef2ff", titleColor: "#3730a3" },
-            { title: "הוצאות משתנות", items: variable, bg: "var(--surface)", titleBg: "#fdf4ff", titleColor: "#7e22ce" },
+            { title: "הכנסות", items: income, bg: "var(--green-pale)", titleBg: "var(--green-mint)", titleColor: "var(--green-deep)" },
+            { title: "הוצאות קבועות", items: fixed, bg: "var(--surface)", titleBg: "var(--surface2)", titleColor: "var(--text-mid)" },
+            { title: "הוצאות משתנות", items: variable, bg: "var(--surface)", titleBg: "var(--gold-light)", titleColor: "var(--gold)" },
           ].map(section => (
             <div key={section.title}>
               <div style={{ padding: "8px 20px", background: section.titleBg, borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between" }}>
@@ -250,7 +252,7 @@ export default function ClientScenarioView({ clientId }: Props) {
                 </div>
               </div>
               {section.items.filter(i => Number(i.amount) > 0).map((item: any, idx: number) => (
-                <div key={item.id} style={{ display: "flex", justifyContent: "space-between", padding: "9px 20px", background: idx % 2 === 0 ? section.bg : "var(--surface)", borderBottom: "1px solid var(--border)44", fontSize: 16 }}>
+                <div key={item.id} style={{ display: "flex", justifyContent: "space-between", padding: "9px 20px", background: idx % 2 === 0 ? section.bg : "var(--surface)", borderBottom: "1px solid var(--border)", fontSize: 16 }}>
                   <span style={{ color: "var(--text-mid)" }}>{item.category_name}</span>
                   <span style={{ fontWeight: 600, fontFamily: "'Frank Ruhl Libre', serif" }}>₪{Math.round(item.amount).toLocaleString()}</span>
                 </div>

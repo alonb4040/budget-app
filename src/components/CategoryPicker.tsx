@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { supabase } from "../supabase";
-import { CATEGORIES as FALLBACK } from "../data";
+import { CATEGORIES as FALLBACK, SECTION_ICONS } from "../data";
 import type { CategoryRow } from "../hooks/useCategories";
 
 type BudgetType = 'הכנסה' | 'קבוע' | 'משתנה';
@@ -172,7 +172,7 @@ export function CategoryPicker({
 
     const { error } = await supabase.from("categories").insert([{
       name,
-      section: "⭐ הקטגוריות שלי",
+      section: "הקטגוריות שלי",
       budget_type: selectedType || 'משתנה',
       client_id: Number(clientId),
       is_active: true,
@@ -203,27 +203,27 @@ export function CategoryPicker({
     cursor: "pointer" as const,
     fontFamily: "inherit",
     border: `1px solid ${current === cat ? (isClient ? "var(--gold)" : "var(--green-mid)") : isHiding ? "var(--red)" : "var(--border)"}`,
-    background: current === cat ? (isClient ? "rgba(251,191,36,0.15)" : "rgba(79,142,247,0.15)") : isHiding ? "rgba(247,92,92,0.08)" : "var(--surface2)",
+    background: current === cat ? (isClient ? "var(--gold-light)" : "var(--green-pale)") : isHiding ? "var(--red-light)" : "var(--surface2)",
     color: current === cat ? (isClient ? "var(--gold)" : "var(--green-mid)") : isHiding ? "var(--red)" : "var(--text)",
     fontWeight: current === cat ? 700 : 400,
     opacity: isHiding ? 0.7 : 1,
   });
 
   const typeLabels: { type: BudgetType; label: string; color: string }[] = [
-    { type: 'הכנסה',  label: '💰 הכנסות',         color: 'var(--green-mid)' },
-    { type: 'קבוע',   label: '🔒 הוצאות קבועות',  color: 'var(--gold)' },
-    { type: 'משתנה',  label: '🔀 הוצאות משתנות',  color: 'var(--red)' },
+    { type: 'הכנסה',  label: 'הכנסות',        color: 'var(--green-mid)' },
+    { type: 'קבוע',   label: 'הוצאות קבועות', color: 'var(--gold)' },
+    { type: 'משתנה',  label: 'הוצאות משתנות', color: 'var(--red)' },
   ];
 
   const canManage = !!onHiddenCatsChange;
 
   return (
-    <div style={{ marginTop: 8 }}>
+    <div style={{ marginTop: 8 }} onClick={e => e.stopPropagation()}>
       {/* ── מודל מחיקת קטגוריה אישית ── */}
       {deleteCheck && (
         <>
-          <div onClick={() => setDeleteCheck(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:9000 }} />
-          <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:16, padding:24, zIndex:9001, width:360, maxHeight:"70vh", overflow:"auto", direction:"rtl" }}>
+          <div onClick={() => setDeleteCheck(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:"var(--z-back)" }} />
+          <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:16, padding:24, zIndex:"var(--z-modal)", width:360, maxHeight:"70vh", overflow:"auto", direction:"rtl" }}>
             {deleteCheck.usages.length === 0 ? (
               <>
                 <div style={{ fontWeight:700, fontSize:17, marginBottom:10, color:"var(--red)" }}>מחיקת קטגוריה</div>
@@ -232,7 +232,7 @@ export function CategoryPicker({
                   הקטגוריה אינה בשימוש בשום תנועה.
                 </div>
                 <div style={{ display:"flex", gap:10 }}>
-                  <button onClick={() => confirmDeletePersonalCat(deleteCheck.cat)} style={{ flex:1, padding:"9px 0", borderRadius:8, border:"none", background:"var(--red)", color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>🗑 מחק</button>
+                  <button onClick={() => confirmDeletePersonalCat(deleteCheck.cat)} style={{ flex:1, padding:"9px 0", borderRadius:8, border:"none", background:"var(--red)", color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer", fontFamily:"inherit", display:"inline-flex", alignItems:"center", justifyContent:"center", gap:6 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>מחק</button>
                   <button onClick={() => setDeleteCheck(null)} style={{ padding:"9px 16px", borderRadius:8, border:"1px solid var(--border)", background:"transparent", color:"var(--text-dim)", fontSize:15, cursor:"pointer", fontFamily:"inherit" }}>ביטול</button>
                 </div>
               </>
@@ -255,7 +255,7 @@ export function CategoryPicker({
                             const isOpen = reclassOpenFor === uid;
                             const opts = allCategoryOptions.filter(c => c !== deleteCheck.cat && (!reclassSearch.trim() || c.toLowerCase().includes(reclassSearch.trim().toLowerCase())));
                             return (
-                              <div key={i} style={{ padding:"8px 12px", borderBottom:"1px solid var(--border)22" }}>
+                              <div key={i} style={{ padding:"8px 12px", borderBottom:"1px solid var(--border)" }}>
                                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
                                   <div>
                                     <div style={{ fontWeight:600, fontSize:13 }}>{u.name}</div>
@@ -266,9 +266,9 @@ export function CategoryPicker({
                                 <button
                                   type="button"
                                   onClick={() => { setReclassOpenFor(isOpen ? null : uid); setReclassSearch(""); }}
-                                  style={{ width:"100%", display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 10px", borderRadius:8, border:`1px solid ${isOpen ? "var(--green-mid)" : "var(--border)"}`, background: isOpen ? "rgba(79,142,247,0.08)" : "var(--surface2)", color:"var(--text)", fontSize:13, fontFamily:"inherit", cursor:"pointer" }}
+                                  style={{ width:"100%", display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 10px", borderRadius:8, border:`1px solid ${isOpen ? "var(--green-mid)" : "var(--border)"}`, background: isOpen ? "var(--green-pale)" : "var(--surface2)", color:"var(--text)", fontSize:13, fontFamily:"inherit", cursor:"pointer" }}
                                 >
-                                  <span>🔄 שנה סיווג מ<strong> {deleteCheck.cat}</strong></span>
+                                  <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>שנה סיווג מ<strong> {deleteCheck.cat}</strong></span>
                                   <span style={{ color:"var(--text-dim)" }}>{isOpen ? "▲" : "▼"}</span>
                                 </button>
                                 {isOpen && (
@@ -285,7 +285,7 @@ export function CategoryPicker({
                                       {opts.map(c => (
                                         <button key={c} type="button"
                                           onClick={() => { reclassifyUsage(u.submissionId, u.txIndex, c); setReclassOpenFor(null); setReclassSearch(""); }}
-                                          style={{ padding:"4px 11px", borderRadius:14, fontSize:13, cursor:"pointer", fontFamily:"inherit", border:`1px solid ${clientCats.includes(c) ? "var(--gold)" : "var(--border)"}`, background: clientCats.includes(c) ? "rgba(251,191,36,0.1)" : "var(--surface2)", color: clientCats.includes(c) ? "var(--gold)" : "var(--text)", fontWeight:400 }}
+                                          style={{ padding:"4px 11px", borderRadius:14, fontSize:13, cursor:"pointer", fontFamily:"inherit", border:`1px solid ${clientCats.includes(c) ? "var(--gold)" : "var(--border)"}`, background: clientCats.includes(c) ? "var(--gold-light)" : "var(--surface2)", color: clientCats.includes(c) ? "var(--gold)" : "var(--text)", fontWeight:400 }}
                                         >
                                           {c}
                                         </button>
@@ -314,14 +314,18 @@ export function CategoryPicker({
             type="button"
             onClick={() => { setManaging(m => !m); setShowHidden(false); setManageTab("builtin"); }}
             style={{
-              background: managing ? "rgba(247,92,92,0.1)" : "transparent",
+              background: managing ? "var(--red-light)" : "transparent",
               border: `1px solid ${managing ? "var(--red)" : "var(--border)"}`,
               borderRadius: 8, padding: "3px 10px", fontSize: 13,
               color: managing ? "var(--red)" : "var(--text-dim)",
               cursor: "pointer", fontFamily: "inherit", fontWeight: managing ? 700 : 400,
+              display: "inline-flex", alignItems: "center", gap: 5,
             }}
           >
-            {managing ? "✓ סיום ניהול" : "⚙ נהל קטגוריות"}
+            {managing
+            ? <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}><polyline points="20 6 9 17 4 12"/></svg> סיום ניהול</>
+            : <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> נהל קטגוריות</>
+          }
           </button>
         </div>
       )}
@@ -372,19 +376,21 @@ export function CategoryPicker({
           {!adding ? (
             <button
               type="button"
-              onClick={() => { setAdding(true); setAddError(""); setSelectedType(null); setNewName(""); }}
+              onClick={e => { e.stopPropagation(); setAdding(true); setAddError(""); setSelectedType(null); setNewName(""); }}
               style={{
-                background: "rgba(251,191,36,0.12)", border: "1px dashed var(--gold)", borderRadius: 8,
+                background: "var(--gold-light)", border: "1px dashed var(--gold)", borderRadius: 8,
                 padding: "7px 14px", fontSize: 14, color: "var(--gold)", cursor: "pointer",
                 fontFamily: "inherit", width: "100%", fontWeight: 600,
+                display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
               }}
             >
-              ⭐ הוסף קטגוריה אישית
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" style={{ flexShrink:0 }}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+              הוסף קטגוריה אישית
             </button>
           ) : (
-            <div style={{ background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.3)", borderRadius: 10, padding: "12px 12px 10px" }}>
+            <div style={{ background: "var(--gold-light)", border: "1px solid var(--gold)", borderRadius: 10, padding: "12px 12px 10px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                <span style={{ fontSize: 14, fontWeight: 700, color: "var(--gold)" }}>⭐ קטגוריה אישית חדשה</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: "var(--gold)", display:"inline-flex", alignItems:"center", gap:5 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" style={{ flexShrink:0 }}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>קטגוריה אישית חדשה</span>
                 <button type="button" onClick={() => { setAdding(false); setNewName(""); setAddError(""); setSelectedType(null); }}
                   style={{ background: "none", border: "none", color: "var(--text-dim)", fontSize: 20, cursor: "pointer", lineHeight: 1 }}>×</button>
               </div>
@@ -394,9 +400,9 @@ export function CategoryPicker({
                 <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 6, fontWeight: 600 }}>1. בחר סוג:</div>
                 <div style={{ display: "flex", gap: 6 }}>
                   {([
-                    { type: 'הכנסה' as BudgetType,  label: '💰 הכנסה',         color: 'var(--green-mid)' },
-                    { type: 'קבוע'  as BudgetType,  label: '🔒 הוצאה קבועה',  color: 'var(--gold)' },
-                    { type: 'משתנה' as BudgetType,  label: '🔀 הוצאה משתנה',  color: 'var(--red)' },
+                    { type: 'הכנסה' as BudgetType,  label: 'הכנסה',         color: 'var(--green-mid)' },
+                    { type: 'קבוע'  as BudgetType,  label: 'הוצאה קבועה',  color: 'var(--gold)' },
+                    { type: 'משתנה' as BudgetType,  label: 'הוצאה משתנה',  color: 'var(--red)' },
                   ]).map(({ type, label, color }) => (
                     <button type="button" key={type} onClick={() => setSelectedType(type)}
                       style={{ flex: 1, padding: "6px 4px", fontSize: 13, fontFamily: "inherit", cursor: "pointer",
@@ -457,7 +463,7 @@ export function CategoryPicker({
                     flex: 1, padding: "7px 0", borderRadius: 8, fontSize: 14, fontFamily: "inherit",
                     cursor: "pointer", fontWeight: active ? 700 : 400,
                     border: `1.5px solid ${active ? "var(--green-mid)" : "var(--border)"}`,
-                    background: active ? "rgba(79,142,247,0.12)" : "var(--surface2)",
+                    background: active ? "var(--green-pale)" : "var(--surface2)",
                     color: active ? "var(--green-mid)" : "var(--text-dim)",
                   }}>
                   {label}
@@ -465,7 +471,7 @@ export function CategoryPicker({
               );
             })}
           </div>
-          <div style={{ fontSize: 13, color: manageTab === "builtin" ? "var(--red)" : "var(--gold)", marginBottom: 2, padding: "6px 10px", background: manageTab === "builtin" ? "rgba(247,92,92,0.08)" : "rgba(251,191,36,0.08)", borderRadius: 8 }}>
+          <div style={{ fontSize: 13, color: manageTab === "builtin" ? "var(--red)" : "var(--gold)", marginBottom: 2, padding: "6px 10px", background: manageTab === "builtin" ? "var(--red-light)" : "var(--gold-light)", borderRadius: 8 }}>
             {manageTab === "builtin" ? "לחץ על קטגוריה להסתרה / הצגה שלה" : "לחץ על קטגוריה למחיקה שלה"}
           </div>
         </div>
@@ -479,10 +485,10 @@ export function CategoryPicker({
           )}
           {filtered.length > 0 && (() => {
             const groups: { label: string; color: string; cats: string[] }[] = [
-              { label: '💰 הכנסות',        color: 'var(--green-mid)', cats: filtered.filter(c => budgetTypeMap[c] === 'הכנסה') },
-              { label: '🔒 הוצאות קבועות', color: 'var(--gold)',      cats: filtered.filter(c => budgetTypeMap[c] === 'קבוע') },
-              { label: '🔀 הוצאות משתנות', color: 'var(--red)',       cats: filtered.filter(c => budgetTypeMap[c] === 'משתנה') },
-              { label: '⭐ הקטגוריות שלי', color: 'var(--gold)',      cats: filtered.filter(c => clientCats.includes(c)) },
+              { label: 'הכנסות',        color: 'var(--green-mid)', cats: filtered.filter(c => budgetTypeMap[c] === 'הכנסה') },
+              { label: 'הוצאות קבועות', color: 'var(--gold)',      cats: filtered.filter(c => budgetTypeMap[c] === 'קבוע') },
+              { label: 'הוצאות משתנות', color: 'var(--red)',       cats: filtered.filter(c => budgetTypeMap[c] === 'משתנה') },
+              { label: 'הקטגוריות שלי', color: 'var(--gold)',      cats: filtered.filter(c => clientCats.includes(c)) },
             ];
             return groups.filter(g => g.cats.length > 0).map(g => (
               <div key={g.label} style={{ marginBottom: 10 }}>
@@ -507,7 +513,7 @@ export function CategoryPicker({
           {(!managing || manageTab === "builtin") && Object.entries(visibleCats).map(([group, groupCats]) => (
             <div key={group} style={{ marginBottom: 10 }}>
               <div style={{ fontSize: 14, color: "var(--text-dim)", fontWeight: 700, marginBottom: 5, padding: "0 2px" }}>
-                {group}
+                {SECTION_ICONS[group] ? `${SECTION_ICONS[group]} ${group}` : group}
               </div>
               <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
                 {groupCats.map(cat => {
@@ -525,7 +531,7 @@ export function CategoryPicker({
                           textDecoration: isHidden ? "line-through" : "none",
                           opacity: isHidden ? 0.6 : 1,
                         }}>
-                        {isHidden ? `✕ ${cat}` : cat}
+                        {isHidden ? `× ${cat}` : cat}
                       </button>
                     );
                   }
@@ -544,8 +550,9 @@ export function CategoryPicker({
           {/* ── קטגוריות אישיות — תמיד כשלא מנהל, או כשמנהל + טאב אישיות ── */}
           {clientCats.length > 0 && (!managing || manageTab === "personal") && (
             <div style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 14, color: "var(--gold)", fontWeight: 700, marginBottom: 5, padding: "0 2px" }}>
-                ⭐ הקטגוריות שלי
+              <div style={{ fontSize: 14, color: "var(--gold)", fontWeight: 700, marginBottom: 5, padding: "0 2px", display:"flex", alignItems:"center", gap:5 }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" style={{ flexShrink:0 }}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                הקטגוריות שלי
               </div>
               <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
                 {clientCats.map(cat => {
@@ -556,10 +563,11 @@ export function CategoryPicker({
                         title="מחק קטגוריה"
                         style={{
                           padding: "4px 11px", borderRadius: 14, fontSize: 15, cursor: deleteChecking ? "wait" : "pointer",
-                          fontFamily: "inherit", border: "1px solid rgba(247,92,92,0.4)",
-                          background: "rgba(247,92,92,0.06)", color: "var(--red)",
+                          fontFamily: "inherit", border: "1px solid var(--red)",
+                          background: "var(--red-light)", color: "var(--red)",
+                          display: "inline-flex", alignItems: "center", gap: 5,
                         }}>
-                        🗑 {cat}
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>{cat}
                       </button>
                     );
                   }

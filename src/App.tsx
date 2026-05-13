@@ -314,6 +314,8 @@ export default function App() {
     loginInProgress.current = false;
     clearSessionCache();
     try { localStorage.removeItem("mazan_client_id"); } catch {}
+    window.history.replaceState(null, "", "/");
+    sessionStorage.clear();
     await supabase.auth.signOut();
     setSession(null);
   };

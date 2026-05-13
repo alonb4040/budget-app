@@ -119,11 +119,14 @@ export default function AnalyticsForecast({ clientId, portfolioSubs, importedTxs
 
   return (
     <div style={{ direction: "rtl" }}>
+      <h1 style={{ fontFamily:"'Frank Ruhl Libre', serif", fontSize:32, fontWeight:700, color:"var(--text)", textAlign:"center", marginBottom:16, marginTop:0 }}>תחזית</h1>
+      <div style={{ height:1, background:"var(--border)", marginBottom:20 }} />
 
       {/* ── Current month ── */}
       <Card style={{ marginBottom: 16, padding: "20px 22px" }}>
-        <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 14 }}>
-          📅 {f.label} — {f.daysElapsed} מתוך {f.daysTotal} ימים
+        <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          {f.label} — {f.daysElapsed} מתוך {f.daysTotal} ימים
         </div>
 
         {/* Progress bar */}
@@ -140,11 +143,12 @@ export default function AnalyticsForecast({ clientId, portfolioSubs, importedTxs
 
         {/* The one big number */}
         {!noScenario && f.daysRemaining > 0 && (
-          <div style={{ background: "var(--green-pale,rgba(52,211,153,0.08))", border: "1px solid var(--green-mint,rgba(52,211,153,0.25))", borderRadius: 12, padding: "14px 18px", marginBottom: 16 }}>
-            <div style={{ fontSize: 15, color: "var(--green-deep,#065f46)", marginBottom: 4 }}>
-              💡 נותרו לך להוצאות משתנות
+          <div style={{ background: "var(--green-pale)", border: "1px solid var(--green-mint)", borderRadius: 12, padding: "14px 18px", marginBottom: 16 }}>
+            <div style={{ fontSize: 15, color: "var(--green-deep)", marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              נותרו לך להוצאות משתנות
             </div>
-            <div style={{ fontWeight: 800, fontSize: 24, color: f.expenseVariableRemaining >= 0 ? "var(--green-deep,#065f46)" : "var(--red)" }}>
+            <div style={{ fontWeight: 800, fontSize: 24, color: f.expenseVariableRemaining >= 0 ? "var(--green-deep)" : "var(--red)" }}>
               {fmt(f.expenseVariableRemaining)}
             </div>
             <div style={{ fontSize: 14, color: "var(--text-dim)", marginTop: 4 }}>
@@ -172,7 +176,7 @@ export default function AnalyticsForecast({ clientId, portfolioSubs, importedTxs
                   <span style={{ fontSize: 13, color: "var(--text-dim)", marginRight: 6 }}>
                     מתוך {fmt(f.expenseFixedScenario)}
                     <span style={{ marginRight: 4, color: f.expenseFixedActual <= f.expenseFixedScenario ? "var(--green-soft)" : "var(--red)" }}>
-                      {f.expenseFixedActual <= f.expenseFixedScenario ? " ✅" : " ⚠️"}
+                      {f.expenseFixedActual <= f.expenseFixedScenario ? " ✓" : " !"}
                     </span>
                   </span>
                 )}
@@ -213,9 +217,12 @@ export default function AnalyticsForecast({ clientId, portfolioSubs, importedTxs
         {/* Category alerts */}
         {f.alerts.length > 0 && (
           <div style={{ marginTop: 14 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "var(--red)", marginBottom: 8 }}>⚠️ קטגוריות בסיכון לחריגה</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "var(--red)", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              קטגוריות בסיכון לחריגה
+            </div>
             {f.alerts.map(a => (
-              <div key={a.cat} style={{ display: "flex", justifyContent: "space-between", fontSize: 14, marginBottom: 5, background: "rgba(248,113,113,0.06)", borderRadius: 8, padding: "6px 10px" }}>
+              <div key={a.cat} style={{ display: "flex", justifyContent: "space-between", fontSize: 14, marginBottom: 5, background: "var(--red-light)", borderRadius: 8, padding: "6px 10px" }}>
                 <span style={{ fontWeight: 600 }}>{a.cat}</span>
                 <span>
                   <span style={{ color: "var(--text-dim)", marginLeft: 6 }}>עד היום: {fmt(a.actual)}</span>
@@ -231,7 +238,10 @@ export default function AnalyticsForecast({ clientId, portfolioSubs, importedTxs
       {/* ── Year forecast chart ── */}
       {yearForecast && (
         <Card style={{ padding: "20px 16px 12px" }}>
-          <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 16 }}>📈 מסלול חיסכון {currentYear}</div>
+          <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+            מסלול חיסכון {currentYear}
+          </div>
 
           <ResponsiveContainer width="100%" height={220}>
             <ComposedChart data={yearForecast.points} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
@@ -281,7 +291,7 @@ export default function AnalyticsForecast({ clientId, portfolioSubs, importedTxs
                 label: "פער מיעד",
                 value: `${yearForecast.gap >= 0 ? "+" : ""}${fmt(yearForecast.gap)}`,
                 color: yearForecast.gap >= 0 ? "var(--green-soft)" : "var(--red)",
-                sub: yearForecast.gap >= 0 ? "✅ על המסלול" : "⚠️ מתחת ליעד",
+                sub: yearForecast.gap >= 0 ? "על המסלול" : "מתחת ליעד",
               },
               {
                 label: "שיעור חיסכון צפוי",

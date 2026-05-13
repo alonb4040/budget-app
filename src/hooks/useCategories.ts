@@ -13,6 +13,7 @@ export interface CategoryRow {
   client_id: number | null;
   is_active: boolean;
   is_ignored: boolean;
+  is_machsan: boolean;
   sort_order: number;
 }
 
@@ -44,10 +45,18 @@ export function useCategories(clientId?: number | string | null): CategoriesData
   const [ready, setReady] = useState(false);
 
   const load = useCallback(async () => {
-    const { data, error } = await supabase
+    let q = supabase
       .from("categories")
       .select("*")
-      .eq("is_active", true)
+      .eq("is_active", true);
+
+    if (clientId) {
+      q = q.or(`client_id.is.null,client_id.eq.${Number(clientId)}`);
+    } else {
+      q = q.is("client_id", null);
+    }
+
+    const { data, error } = await q
       .order("sort_order", { ascending: true })
       .order("name", { ascending: true });
 
@@ -55,9 +64,13 @@ export function useCategories(clientId?: number | string | null): CategoriesData
       setRows(data as CategoryRow[]);
     }
     setReady(true);
-  }, []);
+  }, [clientId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    setReady(false);
+    setRows([]);
+    load();
+  }, [load]);
 
   // ── derived — useMemo כדי שה-Set לא יווצר מחדש בכל render ────────────────
   const derived = useMemo(() => {
@@ -92,7 +105,7 @@ export function useCategories(clientId?: number | string | null): CategoriesData
       allCats: Object.values(FALLBACK_CATEGORIES).flat(),
       clientCats: [],
       ignoredCats: new Set(["להתעלם"]),
-      incomeCats: new Set(FALLBACK_CATEGORIES["💰 הכנסות"] || []),
+      incomeCats: new Set(FALLBACK_CATEGORIES["הכנסות"] || []),
       fixedCats: new Set(),
       rules: [],
       rows: [],

@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Card } from "../ui";
+import { Card, Btn } from "../ui";
 
 // ── Compound Interest Calculator ──────────────────────────────────────────────
 
@@ -80,13 +80,11 @@ function CompoundInterestCalc() {
               <span style={{ fontSize: 15, color: "var(--text-dim)" }}>₪/חודש</span>
             </div>
             {periods.length > 1 && (
-              <button onClick={() => removePeriod(i)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--text-dim)", padding: "2px 6px" }}>🗑</button>
+              <Btn variant="ghost" size="sm" onClick={() => removePeriod(i)}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></Btn>
             )}
           </div>
         ))}
-        <button onClick={addPeriod} style={{ marginTop: 6, padding: "7px 14px", fontSize: 15, fontFamily: "inherit", background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer", color: "var(--text)" }}>
-          + הוסף תקופה
-        </button>
+        <Btn onClick={addPeriod} style={{ marginTop: 6 }}>+ הוסף תקופה</Btn>
       </Card>
 
       {rows.length > 0 ? (
@@ -102,7 +100,7 @@ function CompoundInterestCalc() {
               </thead>
               <tbody>
                 {rows.map((r, i) => (
-                  <tr key={r.year} style={{ background: i % 2 === 0 ? "transparent" : "rgba(0,0,0,0.025)", borderBottom: "1px solid var(--border)44" }}>
+                  <tr key={r.year} style={{ background: i % 2 === 0 ? "transparent" : "rgba(0,0,0,0.025)", borderBottom: "1px solid var(--border)" }}>
                     <td style={{ padding: "9px 14px", textAlign: "right", color: "var(--text-dim)" }}>{r.year}</td>
                     <td style={{ padding: "9px 14px", textAlign: "right" }}>{fmt(r.monthly)}</td>
                     <td style={{ padding: "9px 14px", textAlign: "right" }}>{fmt(r.totalDeposited)}</td>
@@ -254,7 +252,7 @@ function LoanCalc() {
           </div>
         </div>
 
-        <div style={{ borderTop: "1px solid var(--border)44", margin: "16px 0" }} />
+        <div style={{ borderTop: "1px solid var(--border)", margin: "16px 0" }} />
 
         {calcBy === "payment" && (
           <div style={rowStyle}>
@@ -308,7 +306,7 @@ function LoanCalc() {
           </div>
         </div>
 
-        <div style={{ borderTop: "1px solid var(--border)44", marginTop: 8, paddingTop: 16 }}>
+        <div style={{ borderTop: "1px solid var(--border)", marginTop: 8, paddingTop: 16 }}>
           {calcBy === "payment" ? (
             <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
               <span style={{ ...labelStyle, fontWeight: 700 }}>ההחזר החודשי</span>
@@ -336,7 +334,7 @@ function LoanCalc() {
               </thead>
               <tbody>
                 {rows.map((r, i) => (
-                  <tr key={r.month} style={{ background: i % 2 === 0 ? "transparent" : "rgba(0,0,0,0.025)", borderBottom: "1px solid var(--border)44" }}>
+                  <tr key={r.month} style={{ background: i % 2 === 0 ? "transparent" : "rgba(0,0,0,0.025)", borderBottom: "1px solid var(--border)" }}>
                     <td style={{ padding: "8px 14px", textAlign: "right", color: "var(--text-dim)" }}>{r.month}</td>
                     <td style={{ padding: "8px 14px", textAlign: "right" }}>₪ {fmtD(r.balance)}</td>
                     <td style={{ padding: "8px 14px", textAlign: "right" }}>₪ {fmtD(r.principal)}</td>
@@ -367,21 +365,16 @@ function LoanCalc() {
 export default function GrowthTools() {
   const [tool, setTool] = useState("calc");
   const tools = [
-    { id:"calc", label:"🧮 מחשבון ריבית דה ריבית" },
-    { id:"loan", label:"🏦 מחשבון הלוואות" },
+    { id:"calc", icon:<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>, label:"מחשבון ריבית דה ריבית" },
+    { id:"loan", icon:<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="5" x2="5" y2="19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/></svg>, label:"מחשבון הלוואות" },
   ];
-  const titles: Record<string, string> = {
-    calc: "🧮 מחשבון ריבית דה ריבית",
-    loan: "🏦 מחשבון הלוואות",
-  };
   return (
     <div>
-      <div style={{ fontWeight: 700, fontSize: 22, marginBottom: 16, textAlign: "center" }}>
-        {titles[tool]}
-      </div>
+      <h1 style={{ fontFamily:"'Frank Ruhl Libre', serif", fontSize:32, fontWeight:700, color:"var(--text)", textAlign:"center", marginBottom:16, marginTop:0 }}>כלים לצמיחה</h1>
+      <div style={{ height:1, background:"var(--border)", marginBottom:20 }} />
       <div style={{ display:"flex", gap:4, marginBottom:20, flexWrap:"wrap" }}>
         {tools.map(t => (
-          <button key={t.id} onClick={() => setTool(t.id)} style={{ padding:"8px 16px", fontSize: 14, fontFamily:"inherit", fontWeight:tool===t.id?700:400, color:tool===t.id?"var(--text)":"var(--text-dim)", background:tool===t.id?"var(--surface2)":"transparent", border:`1px solid ${tool===t.id?"var(--border)":"transparent"}`, borderRadius:8, cursor:"pointer" }}>{t.label}</button>
+          <button key={t.id} onClick={() => setTool(t.id)} style={{ padding:"8px 16px", fontSize: 14, fontFamily:"inherit", fontWeight:tool===t.id?700:400, color:tool===t.id?"var(--text)":"var(--text-dim)", background:tool===t.id?"var(--surface2)":"transparent", border:`1px solid ${tool===t.id?"var(--border)":"transparent"}`, borderRadius:8, cursor:"pointer", display:"inline-flex", alignItems:"center", gap:6 }}>{t.icon}{t.label}</button>
         ))}
       </div>
       {tool === "calc" && <CompoundInterestCalc />}

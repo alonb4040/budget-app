@@ -169,11 +169,12 @@ export default function LoginScreen({ onLogin, onLoginStart, onLoginFail }: Logi
         } else {
           const { data: client } = await supabase
             .from("clients")
-            .select("id, username, name, is_blocked, must_reset_password")
+            .select("id, username, name, is_blocked, must_reset_password, archived_at")
             .eq("auth_id", authData.user.id)
             .maybeSingle();
           if (!client) throw new Error("שם משתמש או סיסמה שגויים");
           if ((client as any).is_blocked) throw new Error("שם משתמש או סיסמה שגויים");
+          if ((client as any).archived_at) throw new Error("החשבון אינו פעיל. לפרטים פנה למנהל המערכת.");
           onLogin({
             role: "client",
             username: (client as any).username,
@@ -202,9 +203,12 @@ export default function LoginScreen({ onLogin, onLoginStart, onLoginFail }: Logi
       if (migrateData.role === "admin") {
         onLogin({ role: "admin", username: "admin" });
       } else {
+        const { data: migratedClient } = await supabase
+          .from("clients").select("archived_at").eq("id", migrateData.id).maybeSingle();
+        if (migratedClient?.archived_at) throw new Error("החשבון אינו פעיל. לפרטים פנה למנהל המערכת.");
         onLogin({ role: "client", username: migrateData.username, name: migrateData.name, id: String(migrateData.id) });
       }
-    } catch {
+    } catch (err: any) {
       // אם auth לא הצליח בכלל — מוריד דגל ומנקה session
       // אם auth הצליח אבל שאילתת הלקוח כישלה — לא נוגע ב-loginInProgress (הוא עדיין true)
       // כי SIGNED_IN עדיין יגיע ו-buildSession יבנה את הסשן
@@ -212,7 +216,8 @@ export default function LoginScreen({ onLogin, onLoginStart, onLoginFail }: Logi
         onLoginFail?.();
         supabase.auth.signOut({ scope: "local" }).catch(() => {});
       }
-      setError("שם משתמש או סיסמה שגויים");
+      const msg = err?.message || "";
+      setError(msg.startsWith("החשבון") ? msg : "שם משתמש או סיסמה שגויים");
     } finally {
       setLoading(false);
     }
@@ -272,7 +277,7 @@ export default function LoginScreen({ onLogin, onLoginStart, onLoginFail }: Logi
           flex-direction: column;
           justify-content: center;
           gap: 20px;
-          padding: 44px 52px 110px 40px;
+          padding: 32px 48px 60px 36px;
           position: relative;
           z-index: 1;
           direction: rtl;
@@ -288,7 +293,7 @@ export default function LoginScreen({ onLogin, onLoginStart, onLoginFail }: Logi
         .lp-h1 {
           font-family: 'Rubik', sans-serif;
           font-weight: 900;
-          font-size: clamp(4rem, 6vw, 5.5rem);
+          font-size: clamp(2.8rem, 4.5vw, 4rem);
           letter-spacing: 0.02em;
           line-height: 1;
           margin: 0 0 10px 0;
@@ -311,20 +316,20 @@ export default function LoginScreen({ onLogin, onLoginStart, onLoginFail }: Logi
         .lp-grid {
           display: grid;
           grid-template-columns: 1fr 1fr;
-          gap: 24px;
+          gap: 14px;
           margin: 0;
-          margin-top: 32px;
+          margin-top: 20px;
         }
 
         .lp-feat-card {
           border: 1px solid transparent;
           border-radius: 14px;
-          padding: 16px 18px;
+          padding: 12px 14px;
           display: flex;
           flex-direction: row;
           align-items: center;
           justify-content: flex-end;
-          gap: 14px;
+          gap: 12px;
           transition: box-shadow 0.35s ease;
           animation: fadeRight 0.5s ease both, ba-spin 7s linear infinite;
           background-image:
@@ -368,9 +373,9 @@ export default function LoginScreen({ onLogin, onLoginStart, onLoginFail }: Logi
         .lp-feat-card:nth-child(6) { animation-delay: 0.70s, -5.9s; }
 
         .lp-feat-icon {
-          width: 42px;
-          height: 42px;
-          border-radius: 11px;
+          width: 36px;
+          height: 36px;
+          border-radius: 9px;
           background: linear-gradient(145deg, rgba(82,183,136,0.35) 0%, rgba(30,77,53,0.50) 100%);
           border: 1px solid rgba(82,183,136,0.55);
           box-shadow: 0 2px 10px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.10);
@@ -383,7 +388,7 @@ export default function LoginScreen({ onLogin, onLoginStart, onLoginFail }: Logi
         .lp-feat-text {
           font-family: 'Rubik', sans-serif;
           font-weight: 600;
-          font-size: 1.2rem;
+          font-size: 1rem;
           color: rgba(255,255,255,0.92);
           line-height: 1.4;
           text-align: right;
@@ -398,8 +403,9 @@ export default function LoginScreen({ onLogin, onLoginStart, onLoginFail }: Logi
           gap: 0;
           width: 100%;
           direction: ltr;
-          margin-top: 50px;
-          padding-left: 130px;
+          margin-top: 24px;
+          padding-left: 0;
+          position: relative;
         }
 
         /* badge + copyright wrapper */
@@ -408,9 +414,12 @@ export default function LoginScreen({ onLogin, onLoginStart, onLoginFail }: Logi
           flex-direction: column;
           align-items: flex-end;
           gap: 8px;
-          width: calc(50% - 5px);
-          flex-shrink: 0;
-          order: 1;
+          position: absolute;
+          left: 50%;
+          transform: translateX(-50%);
+          bottom: 0;
+          width: calc(50% - 7px);
+          z-index: -1;
         }
 
         /* AI Badge */
@@ -444,7 +453,7 @@ export default function LoginScreen({ onLogin, onLoginStart, onLoginFail }: Logi
         }
 
         .lp-ai-badge-label {
-          font-size: 1.3rem;
+          font-size: 1.1rem;
           font-weight: 600;
           color: rgba(255,255,255,0.85);
           font-family: 'Rubik', sans-serif;
@@ -453,8 +462,8 @@ export default function LoginScreen({ onLogin, onLoginStart, onLoginFail }: Logi
         }
 
         .lp-copyright {
-          font-size: 0.72rem;
-          color: rgba(255,255,255,0.35);
+          font-size: 13px;
+          color: rgb(255,255,255);
           font-family: 'Rubik', sans-serif;
           text-align: center;
           width: 100%;
@@ -490,6 +499,7 @@ export default function LoginScreen({ onLogin, onLoginStart, onLoginFail }: Logi
           margin-bottom: -8px;
           align-self: flex-end;
           margin-top: -30px;
+          margin-left: 60px;
           order: 1;
         }
 
@@ -622,30 +632,62 @@ export default function LoginScreen({ onLogin, onLoginStart, onLoginFail }: Logi
         .lp-eye-btn:hover { color: var(--green-mid); }
 
         .login-btn {
-          background: linear-gradient(160deg, #2d7a5c 0%, var(--green-deep) 100%);
+          background: var(--green-deep);
           border: none;
-          border-radius: 10px;
-          padding: 13px;
+          border-radius: 12px;
+          padding: 15px 20px;
           width: 100%;
-          font-size: 0.95rem;
+          font-size: 1.05rem;
           font-weight: 600;
           font-family: 'Rubik', sans-serif;
-          letter-spacing: 0.03em;
+          letter-spacing: 0.02em;
           color: white;
           cursor: pointer;
           margin-bottom: 16px;
-          box-shadow: 0 4px 24px rgba(18,46,30,0.5), inset 0 1px 0 rgba(255,255,255,0.08);
-          transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 10px;
+          position: relative;
+          overflow: hidden;
+          box-shadow:
+            inset 0 1px 0 rgba(255,255,255,0.12),
+            inset 0 -1px 0 rgba(0,0,0,0.15),
+            0 2px 6px rgba(18,46,30,0.35),
+            0 10px 24px -8px rgba(18,46,30,0.55);
+          transition: box-shadow 0.22s cubic-bezier(0.4,0,0.2,1),
+                      background 0.22s ease;
+        }
+
+        .login-btn .lp-btn-arrow {
+          display: inline-flex;
+          align-items: center;
+          transition: transform 0.24s cubic-bezier(0.4,0,0.2,1);
         }
 
         .login-btn:hover:not([disabled]) {
-          transform: translateY(-1.5px);
-          box-shadow: 0 8px 32px rgba(18,46,30,0.6), inset 0 1px 0 rgba(255,255,255,0.08);
+          background: #225a3e;
+          box-shadow:
+            inset 0 1px 0 rgba(255,255,255,0.14),
+            inset 0 -1px 0 rgba(0,0,0,0.15),
+            0 4px 10px rgba(18,46,30,0.4),
+            0 16px 32px -8px rgba(18,46,30,0.6);
+        }
+
+        .login-btn:hover:not([disabled]) .lp-btn-arrow {
+          transform: translateX(-4px);
         }
 
         .login-btn:active:not([disabled]) {
-          transform: translateY(0.5px);
-          box-shadow: 0 2px 12px rgba(18,46,30,0.4), inset 0 1px 0 rgba(255,255,255,0.08);
+          background: #1a4430;
+          box-shadow:
+            inset 0 2px 4px rgba(0,0,0,0.25),
+            inset 0 1px 0 rgba(255,255,255,0.05),
+            0 1px 3px rgba(18,46,30,0.3);
+        }
+
+        .login-btn:active:not([disabled]) .lp-btn-arrow {
+          transform: translateX(-2px);
         }
 
         .lp-field-error {
@@ -891,7 +933,17 @@ export default function LoginScreen({ onLogin, onLoginStart, onLoginFail }: Logi
                   <span style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
                     <BtnSpinner /> מתחבר...
                   </span>
-                ) : "כניסה →"}
+                ) : (
+                  <>
+                    <span style={{ fontWeight: 600, letterSpacing: "0.02em" }}>כניסה</span>
+                    <span className="lp-btn-arrow" aria-hidden="true">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="19" y1="12" x2="5" y2="12"/>
+                        <polyline points="12 19 5 12 12 5"/>
+                      </svg>
+                    </span>
+                  </>
+                )}
               </button>
 
               <div className="lp-security">

@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "../supabase";
 import { CategoryRow } from "../hooks/useCategories";
+import { SECTION_ICONS } from "../data";
+import { CustomSelect } from "../ui";
 
 // ════════════════════════════════════════════════════════════════
 // CategoryManager — ניהול קטגוריות גלובליות ע"י האדמין
@@ -14,7 +16,7 @@ const SEGMENTS = [
 
 const inputS: React.CSSProperties = {
   border: "1px solid var(--border)", borderRadius: 6, padding: "11px 14px",
-  background: "#fff", color: "var(--text)", fontSize: 15, fontFamily: "inherit",
+  background: "var(--surface2)", color: "var(--text)", fontSize: 15, fontFamily: "inherit",
   minHeight: 44, boxSizing: "border-box" as const,
 };
 
@@ -88,7 +90,7 @@ function SectionPickerDropdown({
         top: rect.bottom + 4,
         left: rect.left,
         width: rect.width,
-        zIndex: 9999,
+        zIndex: "var(--z-drop)",
       });
     }
     setOpen(true);
@@ -158,7 +160,8 @@ function SectionPickerDropdown({
     setSearch("");
   };
 
-  const displayValue = value === "__custom__" ? "+ קבוצה חדשה" : value;
+  const displayValue = value === "__custom__" ? "+ קבוצה חדשה"
+    : (SECTION_ICONS[value] ? `${SECTION_ICONS[value]} ${value}` : value);
 
   return (
     <div style={{ position: "relative", width: "100%" }}>
@@ -177,7 +180,7 @@ function SectionPickerDropdown({
           border: hasError ? "1.5px solid var(--red)" : "1px solid var(--border)",
           outline: open ? "2px solid var(--green-mid)" : undefined,
           outlineOffset: open ? 1 : undefined,
-          background: "#fff",
+          background: "var(--surface2)",
           color: displayValue ? "var(--text)" : "var(--text-dim)",
         }}
       >
@@ -199,7 +202,7 @@ function SectionPickerDropdown({
           role="listbox"
           style={{
             ...panelStyle,
-            background: "#fff", border: "1px solid var(--border)",
+            background: "var(--surface)", border: "1px solid var(--border)",
             borderRadius: 10, boxShadow: "0 8px 28px rgba(0,0,0,0.13)",
             display: "flex", flexDirection: "column",
             maxHeight: 300, overflow: "hidden",
@@ -241,7 +244,7 @@ function SectionPickerDropdown({
                     {g.label}
                   </div>
                   {g.secs.map(s => (
-                    <DropdownOption key={s} label={s} selected={s === value} onSelect={() => handleSelect(s)} />
+                    <DropdownOption key={s} label={SECTION_ICONS[s] ? `${SECTION_ICONS[s]} ${s}` : s} selected={s === value} onSelect={() => handleSelect(s)} />
                   ))}
                 </div>
               ))
@@ -278,7 +281,7 @@ function DropdownOption({ label, selected, onSelect, accent }: {
       onMouseLeave={() => setHovered(false)}
       style={{
         padding: "9px 16px", fontSize: 14, cursor: "pointer", direction: "rtl",
-        background: selected ? "var(--green-pale)" : hovered ? "var(--surface2)" : "#fff",
+        background: selected ? "var(--green-pale)" : hovered ? "var(--surface2)" : "var(--surface)",
         color: selected ? "var(--green-deep)" : accent ? "var(--green-mid)" : "var(--text)",
         fontWeight: selected ? 600 : accent ? 500 : 400,
         transition: "background 0.1s",
@@ -403,6 +406,7 @@ export default function CategoryManager() {
   const [editSection, setEditSection] = useState("");
   const [editBudgetType, setEditBudgetType] = useState<"הכנסה" | "קבוע" | "משתנה">("משתנה");
   const [editIgnored, setEditIgnored] = useState(false);
+  const [editMachsan, setEditMachsan] = useState(false);
   const [editKeywords] = useState("");
   const [editMaxHints] = useState("");
   const [editSaving, setEditSaving] = useState(false);
@@ -426,9 +430,6 @@ export default function CategoryManager() {
       return next;
     });
   };
-
-  // One-time DB cleanup — strip emoji prefix from section names
-  const cleanupDone = useRef(false);
 
   // Focus return — אחרי סגירת edit, מחזיר focus לכפתור "ערוך" של אותה שורה
   const editBtnRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
@@ -473,22 +474,6 @@ export default function CategoryManager() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
-
-  // Strip emoji from section names in DB — runs once after first load
-  useEffect(() => {
-    if (rows.length === 0 || cleanupDone.current) return;
-    const needsCleanup = rows.some(r => /^\P{L}/u.test(r.section));
-    if (!needsCleanup) { cleanupDone.current = true; return; }
-    cleanupDone.current = true;
-    const unique = [...new Set(rows.map(r => r.section))].filter(s => /^\P{L}/u.test(s));
-    Promise.all(unique.map(old =>
-      supabase.from("categories")
-        .update({ section: old.replace(/^\P{L}+/u, "").trim() })
-        .eq("section", old).is("client_id", null)
-    )).then(() => {
-      setRows(prev => prev.map(r => ({ ...r, section: r.section.replace(/^\P{L}+/u, "").trim() })));
-    }).catch(err => console.error("Section cleanup error:", err));
-  }, [rows.length]);
 
   // Escape — סוגר modal או טופס עריכה (dropdown has its own ESC handler in capture phase)
   useEffect(() => {
@@ -543,7 +528,7 @@ export default function CategoryManager() {
       setAddMsg(error.message.includes("unique") ? "קטגוריה בשם זה כבר קיימת" : "שגיאה: " + error.message);
       return;
     }
-    setAddMsg("✅ נוסף בהצלחה");
+    setAddMsg("ok:נוסף בהצלחה");
     setNewName(""); setNewSection(""); setNewIgnored(false); setNewBudgetType("משתנה");
     setTimeout(() => setAddMsg(""), 2000);
     if (inserted) setRows(prev => [...prev, inserted as CategoryRow]);
@@ -581,6 +566,7 @@ export default function CategoryManager() {
     setEditSection(row.section);
     setEditBudgetType((row.budget_type || "משתנה") as any);
     setEditIgnored(row.is_ignored);
+    setEditMachsan(row.is_machsan || false);
   };
 
   const saveEdit = () => {
@@ -613,6 +599,7 @@ export default function CategoryManager() {
       const { error: catErr } = await supabase.from("categories").update({
         name, section, budget_type: editBudgetType,
         is_ignored: editIgnored,
+        is_machsan: editMachsan,
         keywords: strToTags(editKeywords),
         max_hints: strToTags(editMaxHints),
       }).eq("id", editId!);
@@ -646,11 +633,12 @@ export default function CategoryManager() {
         ...r, name, section,
         budget_type: editBudgetType as CategoryRow["budget_type"],
         is_ignored: editIgnored,
+        is_machsan: editMachsan,
         keywords: strToTags(editKeywords),
         max_hints: strToTags(editMaxHints),
       } : r));
       setEditId(null);
-      showToast("✅ הקטגוריה עודכנה בהצלחה");
+      showToast("הקטגוריה עודכנה בהצלחה");
     } catch(err: any) {
       setEditErr("שגיאה בשמירה — " + (err?.message || "נסה שוב"));
     } finally {
@@ -753,16 +741,14 @@ export default function CategoryManager() {
               {/* סוג תקציבי */}
               <div style={{ minWidth: 120 }}>
                 <div style={fieldLabel}>סוג תקציבי</div>
-                <select
-                  className="cat-select"
+                <CustomSelect
                   value={editBudgetType}
-                  onChange={e => setEditBudgetType(e.target.value as any)}
-                  style={{ ...inputS, width: "100%" }}
-                >
-                  {BUDGET_TYPES.map(t => <option key={t} value={t}>{BUDGET_TYPE_LABELS[t]}</option>)}
-                </select>
+                  onChange={v => setEditBudgetType(v as any)}
+                  options={BUDGET_TYPES.map(t => ({ value: t, label: BUDGET_TYPE_LABELS[t] }))}
+                  style={{ width: "100%" }}
+                />
               </div>
-              {/* הסתר מסיכומים */}
+              {/* הגדרות */}
               <div style={{ display: "flex", flexDirection: "column", justifyContent: "flex-end", paddingBottom: 2 }}>
                 <div style={fieldLabel}>הגדרות</div>
                 <label
@@ -773,6 +759,16 @@ export default function CategoryManager() {
                   הסתר מסיכומים
                 </label>
               </div>
+            </div>
+            {/* Row 1b: machsan toggle — שורה נפרדת כדי שלא תיחתך */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, paddingRight: 2 }}>
+              <label
+                title="קטגוריה שהלקוח חוסך עבורה חודש-חודש — גם חודש ללא הוצאה נחשב כ'הכנס לקופה'"
+                style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: "var(--text-dim)", cursor: "pointer", userSelect: "none" }}
+              >
+                <input type="checkbox" checked={editMachsan} onChange={e => setEditMachsan(e.target.checked)} />
+                מחסנית — קטגוריה חיסכון מתגלגל
+              </label>
             </div>
             {/* Row 2: buttons + error */}
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -793,7 +789,12 @@ export default function CategoryManager() {
             <div className="cat-row-name" style={{ flex: 2, minWidth: 140 }}>
               <span style={{ fontSize: 15, color: !row.is_active ? "var(--text-dim)" : "var(--text)", textDecoration: !row.is_active ? "line-through" : "none" }}>
                 {row.name}
-                {row.is_ignored && <span style={{ fontSize: 12, color: "var(--text-dim)", marginRight: 6, marginLeft: 6, fontWeight: 400 }}> · מוסתר</span>}
+                {row.is_ignored && <span style={{ fontSize: 12, color: "var(--text-dim)", marginRight: 6, fontWeight: 400 }}> · מוסתר</span>}
+                {row.is_machsan && (
+                  <span style={{ fontSize: 11, color: "var(--green-mid)", background: "var(--green-pale)", borderRadius: 4, padding: "1px 6px", marginRight: 6, fontWeight: 600 }}>
+                    מחסנית
+                  </span>
+                )}
               </span>
             </div>
 
@@ -859,7 +860,7 @@ export default function CategoryManager() {
           placeholder="חיפוש שם / קבוצה..."
           style={{
             width: "100%", padding: "10px 14px", borderRadius: 8,
-            border: "1px solid var(--border)", background: "#fff",
+            border: "1px solid var(--border)", background: "var(--surface2)",
             color: "var(--text)", fontSize: 15, fontFamily: "inherit",
             boxSizing: "border-box", marginBottom: 16, direction: "rtl",
           }}
@@ -940,7 +941,7 @@ export default function CategoryManager() {
                     className="cat-input"
                     value={customSection}
                     onChange={e => setCustomSection(e.target.value)}
-                    placeholder='לדוגמה: "🏋️ ספורט"'
+                    placeholder='לדוגמה: ספורט'
                     style={{ ...inputS, width: "100%" }}
                   />
                 </div>
@@ -948,14 +949,12 @@ export default function CategoryManager() {
               {/* סוג תקציבי */}
               <div style={{ minWidth: 130 }}>
                 <div style={fieldLabel}>סוג תקציבי</div>
-                <select
-                  className="cat-select"
+                <CustomSelect
                   value={newBudgetType}
-                  onChange={e => setNewBudgetType(e.target.value as any)}
-                  style={{ ...inputS, width: "100%" }}
-                >
-                  {BUDGET_TYPES.map(t => <option key={t} value={t}>{BUDGET_TYPE_LABELS[t]}</option>)}
-                </select>
+                  onChange={v => setNewBudgetType(v as any)}
+                  options={BUDGET_TYPES.map(t => ({ value: t, label: BUDGET_TYPE_LABELS[t] }))}
+                  style={{ width: "100%" }}
+                />
               </div>
               {/* הסתר מסיכומים */}
               <div style={{ display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
@@ -987,8 +986,8 @@ export default function CategoryManager() {
                 {addSaving ? "..." : "הוסף"}
               </button>
               {addMsg && (
-                <span style={{ fontSize: 14, color: addMsg.startsWith("✅") ? "var(--green-mid)" : "var(--red)" }}>
-                  {addMsg}
+                <span style={{ fontSize: 14, color: addMsg.startsWith("ok:") ? "var(--green-mid)" : "var(--red)" }}>
+                  {addMsg.startsWith("ok:") ? addMsg.slice(3) : addMsg}
                 </span>
               )}
             </div>
@@ -1053,7 +1052,7 @@ export default function CategoryManager() {
                     {!singleSection && (
                       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, marginTop: 4 }}>
                         <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-mid)", whiteSpace: "nowrap" }}>
-                          {section}
+                          {SECTION_ICONS[section] ? `${SECTION_ICONS[section]} ${section}` : section}
                         </span>
                         <span style={{ fontSize: 12, color: "var(--text-dim)" }}>· {sectionRows.length}</span>
                         <div style={{ flex: 1, height: 1, background: "var(--border)" }} />
@@ -1076,7 +1075,7 @@ export default function CategoryManager() {
           role="status"
           aria-live="polite"
           style={{
-            position: "fixed", bottom: 24, left: 24, zIndex: 1200,
+            position: "fixed", bottom: 24, left: 24, zIndex: "var(--z-toast)",
             padding: "12px 20px", borderRadius: 8,
             background: toast.ok ? "var(--green-deep)" : "var(--red)",
             color: "#fff", fontSize: 14, fontWeight: 600,
@@ -1094,7 +1093,7 @@ export default function CategoryManager() {
           onClick={e => e.target === e.currentTarget && setConfirmModal(null)}
           style={{
             position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)",
-            zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center",
+            zIndex: "var(--z-back)", display: "flex", alignItems: "center", justifyContent: "center",
             padding: 16,
           }}>
           <div style={{

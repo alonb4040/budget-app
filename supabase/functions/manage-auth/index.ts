@@ -291,6 +291,27 @@ serve(async (req) => {
       return json({ ok: true });
     }
 
+    // ── update_username — renames username in DB + Supabase Auth email ──
+    if (action === "update_username") {
+      const { clientId, newUsername } = body as { clientId: number; newUsername: string };
+
+      const { data: taken } = await supabaseAdmin
+        .from("clients").select("id").eq("username", newUsername).maybeSingle();
+      if (taken && taken.id !== clientId) return json({ error: "שם משתמש תפוס" }, 400);
+
+      const { data: client } = await supabaseAdmin
+        .from("clients").select("auth_id").eq("id", clientId).single();
+      if (client?.auth_id) {
+        const { error } = await supabaseAdmin.auth.admin.updateUserById(client.auth_id, {
+          email: `${newUsername}@mazan.local`,
+        });
+        if (error) return json({ error: error.message }, 400);
+      }
+
+      await supabaseAdmin.from("clients").update({ username: newUsername }).eq("id", clientId);
+      return json({ ok: true });
+    }
+
     // ── delete — removes the Supabase Auth user before deleting the client ──
     if (action === "delete") {
       const { clientId } = body as { clientId: number };
@@ -323,19 +344,19 @@ serve(async (req) => {
       <table width="560" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
         <tr>
           <td style="background:#2d6a4f;padding:32px 40px;text-align:center;">
-            <div style="color:#ffffff;font-size:22px;font-weight:700;">ממתינים לכם 📂</div>
-            <div style="color:rgba(255,255,255,0.8);font-size:14px;margin-top:4px;">תזכורת ידידותית מאלון בן בסת</div>
+            <div style="color:#ffffff;font-size:22px;font-weight:700;">ממתינים לכם</div>
+            <div style="color:rgba(255,255,255,0.8);font-size:14px;margin-top:4px;">מאלון בן בסת</div>
           </td>
         </tr>
         <tr>
           <td style="padding:36px 40px;">
             <p style="font-size:17px;color:#1a3328;font-weight:600;margin:0 0 16px;">היי ${family} 👋</p>
-            <p style="font-size:15px;color:#4a5568;line-height:1.7;margin:0 0 16px;">רציתי לבדוק שהכל בסדר — שמתי לב שעוד לא הועלו המסמכים הנדרשים.</p>
-            <p style="font-size:15px;color:#4a5568;line-height:1.7;margin:0 0 28px;">ברגע שנקבל את המסמכים נוכל להתקדם יחד לשלב הבא 🙂</p>
+            <p style="font-size:15px;color:#4a5568;line-height:1.7;margin:0 0 16px;">אנחנו ממש קרובים להתחיל —<br>המסמכים שביקשתי עוד לא הגיעו אליי.</p>
+            <p style="font-size:15px;color:#4a5568;line-height:1.7;margin:0 0 28px;">ברגע שיהיו לי, נוכל לשבת יחד ולבנות תמונה ברורה של המצב הכלכלי שלכם.</p>
             <table cellpadding="0" cellspacing="0" style="margin:0 auto 28px;">
               <tr>
                 <td style="background:#2d6a4f;border-radius:10px;padding:14px 32px;text-align:center;">
-                  <a href="https://www.alonb.com" style="color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;">כניסה לאתר ←</a>
+                  <a href="https://sheket-calcali.com" style="color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;">כניסה לאתר ←</a>
                 </td>
               </tr>
             </table>

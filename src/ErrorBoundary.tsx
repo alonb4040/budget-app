@@ -1,4 +1,5 @@
 import { Component, ErrorInfo, ReactNode } from "react";
+import { Btn } from "./ui";
 
 interface Props {
   children: ReactNode;
@@ -26,7 +27,7 @@ export default class ErrorBoundary extends Component<Props, State> {
     return (
       <div style={{
         minHeight: "100vh",
-        background: "var(--bg, #f8f9fa)",
+        background: "var(--bg)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -37,25 +38,27 @@ export default class ErrorBoundary extends Component<Props, State> {
         <div style={{
           maxWidth: 480,
           width: "100%",
-          background: "var(--surface, #fff)",
+          background: "var(--surface)",
           border: "1px solid rgba(192,57,43,0.2)",
           borderRadius: 16,
           padding: "32px 28px",
           textAlign: "center",
           boxShadow: "0 4px 24px rgba(192,57,43,0.08)",
         }}>
-          <div style={{ fontSize: 48, marginBottom: 16 }}>⚠️</div>
-          <h2 style={{ fontSize: 22, fontWeight: 700, color: "var(--red, #c0392b)", marginBottom: 8 }}>
+          <div style={{ marginBottom: 16, display: "flex", justifyContent: "center" }}>
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--red)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          </div>
+          <h2 style={{ fontSize: 22, fontWeight: 700, color: "var(--red)", marginBottom: 8 }}>
             אירעה שגיאה בלתי צפויה
           </h2>
-          <p style={{ fontSize: 16, color: "var(--text-dim, #888)", marginBottom: 24 }}>
+          <p style={{ fontSize: 16, color: "var(--text-dim)", marginBottom: 24 }}>
             משהו השתבש. ניתן לנסות לרענן את הדף.
           </p>
           {this.state.error && (
             <pre style={{
               fontSize: 14,
-              color: "var(--text-dim, #888)",
-              background: "var(--surface2, #f4f4f4)",
+              color: "var(--text-dim)",
+              background: "var(--surface2)",
               borderRadius: 8,
               padding: "10px 14px",
               textAlign: "left",
@@ -66,22 +69,9 @@ export default class ErrorBoundary extends Component<Props, State> {
               {this.state.error.message}
             </pre>
           )}
-          <button
-            onClick={() => window.location.reload()}
-            style={{
-              background: "var(--green-mid, #2d6a4f)",
-              color: "#fff",
-              border: "none",
-              borderRadius: 10,
-              padding: "12px 28px",
-              fontSize: 17,
-              fontWeight: 700,
-              cursor: "pointer",
-              fontFamily: "'Plus Jakarta Sans', sans-serif",
-            }}
-          >
+          <Btn onClick={() => window.location.reload()} size="lg">
             רענן דף
-          </button>
+          </Btn>
         </div>
       </div>
     );

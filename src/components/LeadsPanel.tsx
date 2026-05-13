@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../supabase";
+import { Btn } from "../ui";
 import type { CSSProperties } from "react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -11,6 +12,8 @@ interface Lead {
   id: string; name: string; phone: string; date: string;
   source: LeadSource; status: LeadStatus; notes: string;
   client_id: number | null; created_at: string;
+  was_client?: boolean;
+  is_archived?: boolean;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -31,7 +34,7 @@ const STATUS_CONFIG: Record<LeadStatus, { label: string; color: string; bg: stri
 };
 
 const EMPTY_FORM = {
-  name: "", phone: "",
+  firstName: "", lastName: "", phone: "",
   date: new Date().toISOString().split("T")[0],
   source: "referral" as LeadSource,
   notes: "", status: "pending" as LeadStatus,
@@ -136,7 +139,7 @@ function SourcePicker({ source, onChange }: { source: LeadSource; onChange: (s: 
           position: "absolute", top: "calc(100% + 5px)", right: 0, left: 0,
           background: "var(--surface)", border: "1px solid var(--border)",
           borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
-          zIndex: 1100, overflow: "hidden",
+          zIndex: "var(--z-toast)", overflow: "hidden",
           animation: "fadeUp 0.15s ease",
         }}>
           {(Object.entries(SOURCE_CONFIG) as [LeadSource, typeof cfg][]).map(([val, c]) => (
@@ -152,7 +155,7 @@ function SourcePicker({ source, onChange }: { source: LeadSource; onChange: (s: 
               onMouseLeave={e => { if (val !== source) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
             >
               {val === source
-                ? <span style={{ fontSize: 11, color: "var(--green-mid)" }}>✓</span>
+                ? <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--green-mid)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
                 : <span />}
               <span>{c.label}</span>
             </button>
@@ -200,7 +203,7 @@ function StatusPicker({ status, onChange }: { status: LeadStatus; onChange: (s: 
           position: "absolute", top: "calc(100% + 5px)", right: 0,
           background: "var(--surface)", border: "1px solid var(--border)",
           borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
-          zIndex: 1100, minWidth: 148, overflow: "hidden",
+          zIndex: "var(--z-modal)", minWidth: 148, overflow: "hidden",
           animation: "fadeUp 0.15s ease",
         }}>
           {(Object.entries(STATUS_CONFIG) as [LeadStatus, typeof cfg][]).map(([val, c]) => (
@@ -217,7 +220,7 @@ function StatusPicker({ status, onChange }: { status: LeadStatus; onChange: (s: 
             >
               <span style={{ width: 6, height: 6, borderRadius: "50%", background: c.dot, flexShrink: 0 }} />
               {c.label}
-              {val === status && <span style={{ marginRight: "auto", opacity: 0.5, fontSize: 11 }}>✓</span>}
+              {val === status && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: "auto", opacity: 0.5, flexShrink: 0 }}><polyline points="20 6 9 17 4 12"/></svg>}
             </button>
           ))}
         </div>
@@ -266,6 +269,16 @@ function KanbanCard({ lead, index, onEdit, onDelete, onStatusChange, onCreateCli
         <span style={{ fontSize: 11, fontWeight: 600, color: src.color, background: src.bg, padding: "2px 7px", borderRadius: 4 }}>
           {src.label}
         </span>
+        {lead.was_client && (
+          <span style={{ fontSize: 11, fontWeight: 600, color: "#92400e", background: "#fef3c7", padding: "2px 7px", borderRadius: 4 }}>
+            הומר מלקוח
+          </span>
+        )}
+        {lead.is_archived && (
+          <span style={{ fontSize: 11, fontWeight: 600, color: "#b45309", background: "#fef3c7", padding: "2px 7px", borderRadius: 4, border: "1px solid #fcd34d" }}>
+            בארכיון
+          </span>
+        )}
         {lead.phone && (
           <a href={`tel:${lead.phone}`}
             style={{ display: "inline-flex", alignItems: "center", gap: 3, color: "var(--text-dim)", fontSize: 12, textDecoration: "none", direction: "ltr" }}
@@ -327,7 +340,7 @@ function KanbanColumn({ status, leads, onEdit, onDelete, onStatusChange, onCreat
   return (
     <div style={{
       flex: 1, minWidth: 0,
-      background: status === "converted" ? "#f0faf2" : "#f5f5f4",
+      background: status === "converted" ? "var(--green-pale)" : "var(--surface2)",
       borderRadius: 14, padding: "16px 14px",
     }}>
       {/* Column header */}
@@ -374,7 +387,7 @@ function KanbanColumn({ status, leads, onEdit, onDelete, onStatusChange, onCreat
 function Toast({ message }: { message: string }) {
   return (
     <div style={{
-      position: "fixed", bottom: 28, left: 28, zIndex: 2000,
+      position: "fixed", bottom: 28, left: 28, zIndex: "var(--z-toast)",
       background: "var(--green-deep)", color: "#fff",
       padding: "12px 20px", borderRadius: 10,
       fontSize: 14, fontWeight: 600, fontFamily: "inherit",
@@ -382,7 +395,7 @@ function Toast({ message }: { message: string }) {
       animation: "toastIn 0.25s cubic-bezier(0.16,1,0.3,1)",
       display: "flex", alignItems: "center", gap: 8,
     }}>
-      <span style={{ fontSize: 16 }}>✓</span>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="20 6 9 17 4 12"/></svg>
       {message}
     </div>
   );
@@ -395,18 +408,20 @@ function DeleteConfirmModal({ name, onConfirm, onCancel }: {
 }) {
   return (
     <>
-      <div onClick={onCancel} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 1200, backdropFilter: "blur(6px)" }} />
+      <div onClick={onCancel} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: "var(--z-top-back)", backdropFilter: "blur(6px)" }} />
       <div style={{
         position: "fixed", top: "50%", left: "50%",
         transform: "translate(-50%, -50%)",
         width: 360,
         background: "var(--surface)", borderRadius: 16,
         boxShadow: "0 24px 60px rgba(0,0,0,0.2)",
-        zIndex: 1201, padding: "28px 28px 22px",
+        zIndex: "var(--z-top)", padding: "28px 28px 22px",
         animation: "modalIn 200ms cubic-bezier(0.16,1,0.3,1)",
         textAlign: "center",
       }}>
-        <div style={{ fontSize: 32, marginBottom: 12 }}>🗑️</div>
+        <div style={{ marginBottom: 12, display: "flex", justifyContent: "center" }}>
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--red)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+        </div>
         <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text)", marginBottom: 8 }}>
           מחיקת ליד
         </div>
@@ -415,23 +430,8 @@ function DeleteConfirmModal({ name, onConfirm, onCancel }: {
           <span style={{ fontSize: 12, color: "var(--text-dim)" }}>פעולה זו בלתי הפיכה</span>
         </div>
         <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
-          <button onClick={onCancel} style={{
-            padding: "9px 20px", borderRadius: 9,
-            border: "1px solid var(--border)", background: "none",
-            fontFamily: "inherit", fontSize: 14, cursor: "pointer", color: "var(--text-mid)",
-          }}>
-            ביטול
-          </button>
-          <button onClick={onConfirm} style={{
-            padding: "9px 20px", borderRadius: 9, border: "none",
-            background: "var(--red)", color: "#fff",
-            fontFamily: "inherit", fontSize: 14, fontWeight: 600, cursor: "pointer",
-          }}
-            onMouseEnter={e => (e.currentTarget as HTMLElement).style.opacity = "0.85"}
-            onMouseLeave={e => (e.currentTarget as HTMLElement).style.opacity = "1"}
-          >
-            מחק
-          </button>
+          <Btn variant="ghost" onClick={onCancel}>ביטול</Btn>
+          <Btn variant="danger" onClick={onConfirm}>מחק</Btn>
         </div>
       </div>
     </>
@@ -441,7 +441,7 @@ function DeleteConfirmModal({ name, onConfirm, onCancel }: {
 // ── Main component ────────────────────────────────────────────────────────────
 
 interface LeadsPanelProps {
-  onCreateClient: (lead: { name: string; phone: string; leadId: string }) => void;
+  onCreateClient: (lead: { name: string; firstName: string; lastName: string; phone: string; leadId: string }) => void;
 }
 
 export default function LeadsPanel({ onCreateClient }: LeadsPanelProps) {
@@ -457,8 +457,16 @@ export default function LeadsPanel({ onCreateClient }: LeadsPanelProps) {
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
 
   const load = async () => {
-    const { data } = await supabase.from("leads").select("*").order("created_at", { ascending: false });
-    setLeads(data || []);
+    const { data } = await supabase
+      .from("leads")
+      .select("*, clients(archived_at)")
+      .order("created_at", { ascending: false });
+    const mapped = (data || []).map((l: any) => ({
+      ...l,
+      is_archived: !!(l.clients?.archived_at),
+      clients: undefined,
+    }));
+    setLeads(mapped);
     setLoading(false);
   };
 
@@ -483,19 +491,23 @@ export default function LeadsPanel({ onCreateClient }: LeadsPanelProps) {
   const openAdd  = () => { setEditingLead(null); setForm(EMPTY_FORM); setPanelOpen(true); setNameError(false); setShowExtra(false); };
   const openEdit = (lead: Lead) => {
     setEditingLead(lead);
-    setForm({ name: lead.name, phone: lead.phone || "", date: lead.date || EMPTY_FORM.date, source: (lead.source as LeadSource) || "referral", notes: lead.notes || "", status: lead.status });
+    const spaceIdx = (lead.name || "").indexOf(" ");
+    const firstName = spaceIdx === -1 ? (lead.name || "") : lead.name.slice(0, spaceIdx);
+    const lastName  = spaceIdx === -1 ? "" : lead.name.slice(spaceIdx + 1);
+    setForm({ firstName, lastName, phone: lead.phone || "", date: lead.date || EMPTY_FORM.date, source: (lead.source as LeadSource) || "referral", notes: lead.notes || "", status: lead.status });
     setPanelOpen(true); setNameError(false); setShowExtra(true);
   };
   const closePanel = () => { setPanelOpen(false); setEditingLead(null); };
 
   const save = async () => {
-    if (!form.name.trim()) { setNameError(true); return; }
+    if (!form.firstName.trim()) { setNameError(true); return; }
+    const fullName = [form.firstName.trim(), form.lastName.trim()].filter(Boolean).join(" ");
     setSaving(true);
     const wasEditing = !!editingLead;
     if (editingLead) {
-      await supabase.from("leads").update({ name: form.name, phone: form.phone, date: form.date, source: form.source, notes: form.notes, status: form.status }).eq("id", editingLead.id);
+      await supabase.from("leads").update({ name: fullName, phone: form.phone, date: form.date, source: form.source, notes: form.notes, status: form.status }).eq("id", editingLead.id);
     } else {
-      await supabase.from("leads").insert([{ name: form.name, phone: form.phone, date: form.date, source: form.source, notes: form.notes, status: form.status }]);
+      await supabase.from("leads").insert([{ name: fullName, phone: form.phone, date: form.date, source: form.source, notes: form.notes, status: form.status }]);
     }
     setSaving(false);
     closePanel();
@@ -541,21 +553,10 @@ export default function LeadsPanel({ onCreateClient }: LeadsPanelProps) {
         }}>
           לידים
         </h1>
-        <button
-          onClick={openAdd}
-          style={{
-            display: "flex", alignItems: "center", gap: 7,
-            padding: "9px 20px", borderRadius: 8, border: "none",
-            background: "var(--green-mid)", color: "#fff",
-            fontFamily: "inherit", fontSize: 15, fontWeight: 600,
-            cursor: "pointer", transition: "background 0.15s",
-          }}
-          onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = "#255c3d"}
-          onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = "var(--green-mid)"}
-        >
+        <Btn onClick={openAdd}>
           <PlusIcon />
           הוסף ליד
-        </button>
+        </Btn>
       </div>
 
       {/* ── Stats row ── */}
@@ -605,7 +606,12 @@ export default function LeadsPanel({ onCreateClient }: LeadsPanelProps) {
               onEdit={openEdit}
               onDelete={deleteLead}
               onStatusChange={updateStatus}
-              onCreateClient={lead => onCreateClient({ name: lead.name, phone: lead.phone || "", leadId: lead.id })}
+              onCreateClient={lead => {
+                const spaceIdx = (lead.name || "").indexOf(" ");
+                const firstName = spaceIdx === -1 ? (lead.name || "") : lead.name.slice(0, spaceIdx);
+                const lastName  = spaceIdx === -1 ? "" : lead.name.slice(spaceIdx + 1);
+                onCreateClient({ name: lead.name, firstName, lastName, phone: lead.phone || "", leadId: lead.id });
+              }}
             />
           ))}
         </div>
@@ -614,7 +620,7 @@ export default function LeadsPanel({ onCreateClient }: LeadsPanelProps) {
       {/* ── Modal (centered) ── */}
       {panelOpen && (
         <>
-          <div onClick={closePanel} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 1000, backdropFilter: "blur(10px)" }} />
+          <div onClick={closePanel} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: "var(--z-back)", backdropFilter: "blur(10px)" }} />
           <div style={{
             position: "fixed",
             top: "50%", left: "50%",
@@ -623,13 +629,13 @@ export default function LeadsPanel({ onCreateClient }: LeadsPanelProps) {
             background: "var(--surface)",
             borderRadius: 18,
             boxShadow: "0 32px 80px rgba(0,0,0,0.22)",
-            zIndex: 1001, display: "flex", flexDirection: "column",
+            zIndex: "var(--z-modal)", display: "flex", flexDirection: "column",
             animation: "modalIn 240ms cubic-bezier(0.16,1,0.3,1)",
           }}>
             {/* Header */}
             <div style={{ padding: "22px 28px 18px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", position: "relative" }}>
               <button onClick={closePanel} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", fontSize: 16, padding: 4, lineHeight: 1, borderRadius: 6, display: "flex", alignItems: "center" }}>
-                ✕
+                ×
               </button>
               <div style={{
                 position: "absolute", left: "50%", transform: "translateX(-50%)",
@@ -643,17 +649,28 @@ export default function LeadsPanel({ onCreateClient }: LeadsPanelProps) {
             {/* Body */}
             <div style={{ flex: 1, overflow: "auto", padding: "22px 28px", display: "flex", flexDirection: "column", gap: 14 }}>
 
-              {/* שם מלא */}
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-mid)", marginBottom: 6 }}>שם מלא</div>
-                <input
-                  value={form.name}
-                  onChange={e => { setForm(p => ({ ...p, name: e.target.value })); setNameError(false); }}
-                  placeholder="ישראל ישראלי"
-                  style={{ ...inputSt, borderColor: nameError ? "var(--red)" : undefined }}
-                  autoFocus
-                />
-                {nameError && <div style={{ fontSize: 12, color: "var(--red)", marginTop: 5 }}>שדה חובה</div>}
+              {/* שם פרטי + שם משפחה */}
+              <div style={{ display: "flex", gap: 10 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-mid)", marginBottom: 6 }}>שם פרטי</div>
+                  <input
+                    value={form.firstName}
+                    onChange={e => { setForm(p => ({ ...p, firstName: e.target.value })); setNameError(false); }}
+                    placeholder="ישראל"
+                    style={{ ...inputSt, borderColor: nameError ? "var(--red)" : undefined }}
+                    autoFocus
+                  />
+                  {nameError && <div style={{ fontSize: 12, color: "var(--red)", marginTop: 5 }}>שדה חובה</div>}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-mid)", marginBottom: 6 }}>שם משפחה</div>
+                  <input
+                    value={form.lastName}
+                    onChange={e => setForm(p => ({ ...p, lastName: e.target.value }))}
+                    placeholder="ישראלי"
+                    style={inputSt}
+                  />
+                </div>
               </div>
 
               {/* טלפון */}
@@ -694,22 +711,10 @@ export default function LeadsPanel({ onCreateClient }: LeadsPanelProps) {
 
             {/* Footer */}
             <div style={{ padding: "16px 28px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-start", gap: 10 }}>
-              <button onClick={closePanel} style={{
-                padding: "10px 18px", borderRadius: 10,
-                border: "1px solid var(--border)", background: "none",
-                fontFamily: "inherit", fontSize: 14, cursor: "pointer", color: "var(--text-mid)",
-              }}>
-                ביטול
-              </button>
-              <button onClick={save} disabled={saving} style={{
-                padding: "10px 22px", borderRadius: 10, border: "none",
-                background: "var(--green-deep)", color: "#fff",
-                fontFamily: "inherit", fontSize: 14, fontWeight: 600,
-                cursor: saving ? "not-allowed" : "pointer",
-                opacity: saving ? 0.7 : 1,
-              }}>
+              <Btn variant="ghost" onClick={closePanel}>ביטול</Btn>
+              <Btn onClick={save} disabled={saving}>
                 {saving ? "שומר..." : editingLead ? "שמור שינויים" : "הוסף ליד"}
-              </button>
+              </Btn>
             </div>
           </div>
         </>

@@ -28,11 +28,12 @@ export default function ConnectCardScreen({ session, onBack }: ConnectCardScreen
   const [step, setStep] = useState<"choose" | "instructions" | "result">("choose");
   const [provider, setProvider] = useState<Provider | null>(null);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [showMaxSyncInstructions, setShowMaxSyncInstructions] = useState(false);
 
   const supabaseUrl = process.env.REACT_APP_SUPABASE_URL || "";
   const supabaseKey = process.env.REACT_APP_SUPABASE_ANON_KEY || "";
   const PROVIDERS: Provider[] = [
-    { id: "max", name: "מקס", color: "#00c8aa", bookmarklet: makeBookmarkletMax(supabaseUrl, supabaseKey) },
+    { id: "max", name: "מקס", color: "var(--green-mid)", bookmarklet: makeBookmarkletMax(supabaseUrl, supabaseKey) },
   ];
 
   // בדיקה אם הגיע import מהבוקמרקלט (דרך URL params)
@@ -82,8 +83,81 @@ export default function ConnectCardScreen({ session, onBack }: ConnectCardScreen
             </Card>
           ))}
 
-          <div style={{ marginTop: 20, padding: "14px 18px", background: "var(--surface2)", borderRadius: 12, fontSize: 15, color: "var(--text-dim)", lineHeight: 1.7 }}>
-            💡 ספקים נוספים (ישראכרט, כאל) — בקרוב
+          <div style={{ marginTop: 20, padding: "14px 18px", background: "var(--surface2)", borderRadius: 12, fontSize: 15, color: "var(--text-dim)", lineHeight: 1.7, display:"flex", alignItems:"center", gap:8 }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            ספקים נוספים (ישראכרט, כאל) — בקרוב
+          </div>
+
+          {/* Tampermonkey Sync — recommended */}
+          <div style={{ marginTop: 28 }}>
+            <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 12, color: 'var(--text-dim)', display:"flex", alignItems:"center", gap:6 }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+              סנכרון אוטומטי — מומלץ
+            </div>
+            <Card style={{ border: (session as any).max_last_sync ? '2px solid var(--green-soft)' : '2px solid var(--green-mid)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                <div style={{ width: 48, height: 48, borderRadius: 12, background: (session as any).max_last_sync ? 'var(--green-mint)' : 'var(--green-pale)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--green-mid)' }}>
+                  {(session as any).max_last_sync
+                    ? <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    : <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                  }
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700, fontSize: 17 }}>מאזן MAX Sync</div>
+                  <div style={{ fontSize: 14, color: 'var(--text-dim)', marginTop: 2 }}>
+                    {(session as any).max_last_sync
+                      ? `סנכרון MAX אחרון: ${new Date((session as any).max_last_sync).toLocaleDateString('he-IL')}`
+                      : 'התקנה חד-פעמית · עדכון אוטומטי · ללא תשלום'}
+                  </div>
+                </div>
+                {!(session as any).max_last_sync && (
+                  <Btn size="sm" onClick={() => setShowMaxSyncInstructions(v => !v)}>הגדר ←</Btn>
+                )}
+              </div>
+
+              {showMaxSyncInstructions && (
+                <div style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 14, fontSize: 15 }}>התקנה חד-פעמית — 2 שלבים:</div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                      <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'var(--green-mid)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, flexShrink: 0, fontSize: 13 }}>1</div>
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: 14 }}>התקן Tampermonkey</div>
+                        <div style={{ fontSize: 13, color: 'var(--text-dim)', marginTop: 2 }}>תוסף חינמי מה-Chrome Web Store</div>
+                        <a href="https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo"
+                          target="_blank" rel="noopener noreferrer"
+                          style={{ display: 'inline-block', marginTop: 6, padding: '5px 12px', background: 'var(--green-mid)', color: '#fff', borderRadius: 7, fontSize: 13, fontWeight: 600, textDecoration: 'none' }}>
+                          פתח בחנות Chrome ←
+                        </a>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                      <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'var(--green-mid)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, flexShrink: 0, fontSize: 13 }}>2</div>
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: 14 }}>התקן את סקריפט מאזן MAX</div>
+                        <div style={{ fontSize: 13, color: 'var(--text-dim)', marginTop: 2 }}>Tampermonkey יזהה אוטומטית ויציע התקנה</div>
+                        <a href="/mazan-max.user.js"
+                          target="_blank" rel="noopener noreferrer"
+                          style={{ display: 'inline-block', marginTop: 6, padding: '5px 12px', background: 'var(--green-mid)', color: '#fff', borderRadius: 7, fontSize: 13, fontWeight: 600, textDecoration: 'none' }}>
+                          התקן סקריפט מאזן MAX ←
+                        </a>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: 14, padding: '10px 14px', background: 'var(--surface2)', borderRadius: 8, fontSize: 13, color: 'var(--text-dim)', lineHeight: 1.6, display:"flex", alignItems:"flex-start", gap:6 }}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--green-soft)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0, marginTop:2 }}><polyline points="20 6 9 17 4 12"/></svg>
+                    <span>אחרי ההתקנה — כנס לאתר MAX, עבור לפירוט חיובים, ולחץ על כפתור <strong>מאזן MAX</strong> שמופיע בתחתית הדף</span>
+                  </div>
+                  <div style={{ marginTop: 8, padding: '8px 14px', background: 'var(--surface2)', borderRadius: 8, fontSize: 12, color: 'var(--text-dim)', display:"flex", alignItems:"center", gap:6 }}>
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    הסיסמה שלך לא מועברת למאזן — רק נתוני העסקאות
+                  </div>
+                </div>
+              )}
+            </Card>
           </div>
         </div>
       )}
@@ -103,10 +177,11 @@ export default function ConnectCardScreen({ session, onBack }: ConnectCardScreen
             <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "16px", background: "var(--surface2)", borderRadius: 12 }}>
               <a
                 href={provider.bookmarklet}
-                style={{ padding: "12px 24px", background: "var(--green-mid)", color: "#fff", borderRadius: 10, fontWeight: 700, fontSize: 17, textDecoration: "none", cursor: "grab", border: "none", display: "inline-block" }}
+                style={{ padding: "12px 24px", background: "var(--green-mid)", color: "#fff", borderRadius: 10, fontWeight: 700, fontSize: 17, textDecoration: "none", cursor: "grab", border: "none", display: "inline-flex", alignItems: "center", gap: 8 }}
                 onClick={e => { e.preventDefault(); alert("גרור אותי לסרגל הסימניות — אל תלחץ!"); }}
               >
-                📤 שלח למאזן
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+                שלח למאזן
               </a>
               <div style={{ fontSize: 15, color: "var(--text-dim)", flex: 1 }}>
                 ← גרור את הכפתור הזה לסרגל הסימניות
@@ -124,13 +199,14 @@ export default function ConnectCardScreen({ session, onBack }: ConnectCardScreen
               1. היכנס לאתר מקס<br/>
               2. לך לעמוד פירוט תנועות של הכרטיס<br/>
               3. לחץ על <strong>"שלח למאזן"</strong> בסרגל הסימניות<br/>
-              4. התנועות יגיעו אוטומטית לאפליקציה ✅
+              4. התנועות יגיעו אוטומטית לאפליקציה
             </div>
           </Card>
 
           {/* שלב 3 — מה שלא עובד */}
-          <div style={{ fontSize: 14, color: "var(--text-dim)", marginBottom: 20, lineHeight: 1.7 }}>
-            ⚠️ אם הסימניה לא עובדת — תמיד אפשר להמשיך להעלות קבצים ידנית כרגיל.
+          <div style={{ fontSize: 14, color: "var(--text-dim)", marginBottom: 20, lineHeight: 1.7, display:"flex", alignItems:"center", gap:6 }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            אם הסימניה לא עובדת — תמיד אפשר להמשיך להעלות קבצים ידנית כרגיל.
           </div>
 
           <div style={{ display: "flex", gap: 10 }}>
@@ -142,7 +218,7 @@ export default function ConnectCardScreen({ session, onBack }: ConnectCardScreen
 
       {step === "result" && importResult && (
         <Card style={{ textAlign: "center", padding: "40px 32px" }}>
-          <div style={{ fontSize: 48, marginBottom: 16 }}>✅</div>
+          <div style={{ marginBottom: 16, display:"flex", justifyContent:"center" }}><svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="var(--green-soft)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
           <div style={{ fontFamily: "'Frank Ruhl Libre', serif", fontSize: 26, fontWeight: 600, color: "var(--green-deep)", marginBottom: 8 }}>
             {importResult.added} תנועות נוספו
           </div>

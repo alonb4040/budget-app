@@ -107,7 +107,7 @@ const BigAmount = ({ value, color }: { value: number; color: string }) => (
 // ─── Styles ────────────────────────────────────────────────────────────────────
 const S = {
   overlay: {
-    position: "fixed" as const, inset: 0, zIndex: 1200,
+    position: "fixed" as const, inset: 0, zIndex: "var(--z-top)",
     background: "#f8fafb",
     display: "flex", flexDirection: "column" as const,
     alignItems: "center", justifyContent: "center",
@@ -122,7 +122,7 @@ const S = {
   dots: { display: "flex", gap: 8 },
   dot: (active: boolean) => ({
     width: 8, height: 8, borderRadius: "50%",
-    background: active ? "#2d6a4f" : "#D1D5DB",
+    background: active ? "var(--green-mid)" : "#D1D5DB",
     transition: "background 0.3s",
   }),
   closeBtn: {
@@ -152,7 +152,7 @@ const S = {
   primaryBtn: {
     display: "block", width: "100%", maxWidth: 340,
     padding: "16px 32px",
-    background: "#2d6a4f", color: "#fff",
+    background: "var(--green-mid)", color: "#fff",
     border: "none", borderRadius: 14, cursor: "pointer",
     fontSize: 17, fontWeight: 700, letterSpacing: 0.2,
     boxShadow: "0 4px 20px rgba(45,106,79,0.35)",
@@ -195,7 +195,7 @@ const GLOBAL_CSS = `
   50%       { box-shadow: 0 0 0 8px rgba(245,158,11,0.30); }
 }
 .tut-btn:focus-visible {
-  outline: 2px solid #2d6a4f;
+  outline: 2px solid var(--green-mid);
   outline-offset: 3px;
 }
 .tut-btn-green:focus-visible {
@@ -397,8 +397,9 @@ export default function BankTutorial({ onDone }: { onDone: () => void }) {
           <div ref={bigNumRef} style={{ opacity: 0 }}>
             <BigAmount value={doubleCount} color="#DC2626" />
           </div>
-          <div style={{ fontSize: 14, color: "#DC2626", fontWeight: 700, marginTop: 8 }}>
-            ⚠️ כפל ספירה! הסכום מוכפל לשווא
+          <div style={{ fontSize: 14, color: "#DC2626", fontWeight: 700, marginTop: 8, display: "flex", alignItems: "center", gap: 6, justifyContent: "center" }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            כפל ספירה! הסכום מוכפל לשווא
           </div>
         </div>
 
@@ -456,8 +457,9 @@ export default function BankTutorial({ onDone }: { onDone: () => void }) {
           <div ref={doneRef} style={{ opacity: 0, display: "flex", flexDirection: "column" as const, alignItems: "center" }}>
             {/* Strikethrough bank row */}
             <div style={{ ...S.card, display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 28, opacity: 0.4, background: "#F9FAFB", border: "1.5px solid #E5E7EB" }}>
-              <div style={{ padding: "8px 18px", background: "#DCFCE7", borderRadius: 10, fontSize: 14, fontWeight: 700, color: "#166534", flexShrink: 0 }}>
-                ✓ להתעלם
+              <div style={{ padding: "8px 18px", background: "#DCFCE7", borderRadius: 10, fontSize: 14, fontWeight: 700, color: "#166534", flexShrink: 0, display: "flex", alignItems: "center", gap: 5 }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#166534" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                להתעלם
               </div>
               <div style={{ textAlign: "right" as const }}>
                 <div style={{ fontSize: 13, color: "#9CA3AF", fontWeight: 600, marginBottom: 2, textDecoration: "line-through" }}>ישראכרט</div>

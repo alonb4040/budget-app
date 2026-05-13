@@ -4,7 +4,7 @@ import { CATEGORIES, IGNORED_CATEGORIES, parseExcelData, parseBankPDF, classifyT
 import ConnectCardScreen from "./ConnectCardScreen";
 import { CategoryPicker } from "./components/CategoryPicker";
 import { useCategories } from "./hooks/useCategories";
-import { Card, Btn, Badge, Spinner, KpiCard, Input, C } from "./ui";
+import { Card, Btn, Badge, Spinner, KpiCard, Input, C, CustomSelect } from "./ui";
 import DebtManager from "./components/DebtManager";
 import GrowthTools from "./components/GrowthTools";
 import InsightsPanel from "./components/InsightsPanel";
@@ -37,6 +37,8 @@ export default function ClientApp({ session, onLogout }) {
 
   const [screen, setScreen]               = useState("dashboard"); // dashboard | month | upload | review | summary
   const [showConnectCard, setShowConnectCard] = useState(false);
+  const [maxSessionActive, setMaxSessionActive] = useState(false);
+  const [maxLastSync, setMaxLastSync] = useState<string|null>(null);
   const [monthEntries, setMonthEntries]   = useState([]);   // month_entries rows
   const [submissions, setSubmissions]     = useState([]);   // submissions rows
   const [payslips, setPayslips]           = useState([]);
@@ -106,6 +108,9 @@ export default function ClientApp({ session, onLogout }) {
   const [spouseNames, setSpouseNames]     = useState<{s1: string|null, s2: string|null}>({ s1: null, s2: null });
   // סוג עיסוק לפי טופס פגישה ראשונה
   const [employmentTypes, setEmploymentTypes] = useState<{s1: string|null, s2: string|null}>({ s1: null, s2: null });
+  // חשבוניות חשמל — הזנת נתונים מובנית
+  const [electricityBills, setElectricityBills] = useState<{amount:string;months:number}[]>([]);
+  const elecSaveRef = useRef<ReturnType<typeof setTimeout>|null>(null);
   // סיבות "אין תלושים" לכל בן/בת זוג
   const [noPayslipReasons, setNoPayslipReasons] = useState<{s1: string|null, s2: string|null}>({ s1: null, s2: null });
   // מי מהספאוסים נמצא במסך תלושי השכר
@@ -118,9 +123,16 @@ export default function ClientApp({ session, onLogout }) {
   // upload flow
   const [uploadedFiles, setUploadedFiles] = useState([]);
   const [sourceLabel, setSourceLabel]     = useState("");
+  const [cardNickname, setCardNickname]   = useState("");
   const [transactions, setTransactions]   = useState([]);
-  const [filter, setFilter]               = useState("all");
   const [search, setSearch]               = useState("");
+  const [filterCatTx, setFilterCatTx]     = useState("all");
+  const [catDropdownOpenTx, setCatDropdownOpenTx] = useState(false);
+  const [advFilterOpenTx, setAdvFilterOpenTx] = useState(false);
+  const [filterSourceTx, setFilterSourceTx] = useState("all");
+  const [filterMonthTx, setFilterMonthTx]  = useState(-1);  // -1 = all
+  const [filterYearTx,  setFilterYearTx]   = useState(0);   // 0 = all
+  const [econInfoOpen,  setEconInfoOpen]   = useState(false);
   const [catPanelOpen, setCatPanelOpen]   = useState(false);
   const [activeTxId, setActiveTxId]       = useState(null);
   const [prevCatMap, setPrevCatMap]       = useState<Record<string,string>>({});
@@ -156,7 +168,10 @@ export default function ClientApp({ session, onLogout }) {
       .channel(`intake_names_${session.id}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "client_intake", filter: `client_id=eq.${session.id}` }, (payload) => {
         const data = (payload.new as any)?.data;
-        if (data) setSpouseNames({ s1: data.spouse1_name || null, s2: data.spouse2_name || null });
+        if (data) {
+      setSpouseNames({ s1: data.spouse1_name || null, s2: data.spouse2_name || null });
+      setElectricityBills(data.electricity_bills || []);
+    }
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
@@ -256,7 +271,7 @@ export default function ClientApp({ session, onLogout }) {
       supabase.from("month_entries").select("*").eq("client_id", session.id).order("month_key", { ascending: false }),
       supabase.from("submissions").select("*").eq("client_id", session.id).order("created_at", { ascending: true }),
       supabase.from("remembered_mappings").select("*").eq("client_id", session.id),
-      supabase.from("clients").select("portfolio_open,portfolio_opened_at,email,phone,cycle_start_day,plan,submitted_at,required_docs,questionnaire_spouses,doc_notes,custom_docs,hidden_cats,no_payslip_reason_s1,no_payslip_reason_s2").eq("id", session.id).maybeSingle(),
+      supabase.from("clients").select("portfolio_open,portfolio_opened_at,email,phone,cycle_start_day,plan,submitted_at,required_docs,questionnaire_spouses,doc_notes,custom_docs,hidden_cats,no_payslip_reason_s1,no_payslip_reason_s2,max_session_active,max_last_sync,max_session_expires_at").eq("id", session.id).maybeSingle(),
       supabase.from("payslips").select("*").eq("client_id", session.id).order("created_at", { ascending: false }),
       supabase.from("portfolio_months").select("*").eq("client_id", session.id).order("month_key", { ascending: false }),
       supabase.from("portfolio_submissions").select("*").eq("client_id", session.id).order("created_at", { ascending: true }),
@@ -292,11 +307,14 @@ export default function ClientApp({ session, onLogout }) {
     setCustomDocs(clientData?.custom_docs ?? []);
     setHiddenCats(clientData?.hidden_cats ?? []);
     setNoPayslipReasons({ s1: clientData?.no_payslip_reason_s1 ?? null, s2: clientData?.no_payslip_reason_s2 ?? null });
+    setMaxSessionActive(clientData?.max_session_active ?? false);
+    setMaxLastSync(clientData?.max_last_sync ?? null);
     // טעינת שמות בני הזוג מטופס פגישה ראשונה
     const { data: intakeData } = await supabase.from("client_intake").select("data").eq("client_id", session.id).maybeSingle();
     if (intakeData?.data) {
       setSpouseNames({ s1: intakeData.data.spouse1_name || null, s2: intakeData.data.spouse2_name || null });
       setEmploymentTypes({ s1: intakeData.data.spouse1_employment_type || null, s2: intakeData.data.spouse2_employment_type || null });
+      setElectricityBills(intakeData.data.electricity_bills || []);
     }
     await reloadScenarioCats(!!clientData?.portfolio_open).catch(() => {});
     setClientDocs(cDocs || []);
@@ -308,6 +326,16 @@ export default function ClientApp({ session, onLogout }) {
     setImportedTxs(iTxs);
     setManualTxs(mTxs || []);
     setImportedLoaded(true);
+  };
+
+  const updateElectricityBills = (bills: {amount:string;months:number}[]) => {
+    setElectricityBills(bills);
+    if (elecSaveRef.current) clearTimeout(elecSaveRef.current);
+    elecSaveRef.current = setTimeout(async () => {
+      const { data: existing } = await supabase.from("client_intake").select("data").eq("client_id", session.id).maybeSingle();
+      const merged = { ...(existing?.data || {}), electricity_bills: bills };
+      await supabase.from("client_intake").upsert({ client_id: session.id, data: merged }, { onConflict: "client_id" });
+    }, 2000);
   };
 
   const loadUserData = async () => {
@@ -498,7 +526,7 @@ export default function ClientApp({ session, onLogout }) {
         prev.map(e => e.month_key === activeMonth.month_key ? { ...e, is_finalized: true } : e)
       );
       reloadSilent();
-      showToast("✅ החודש סומן כהושלם!");
+      showToast("החודש סומן כהושלם!");
       setScreen("dashboard");
     } finally {
       setPendingFinalize(false);
@@ -547,14 +575,19 @@ export default function ClientApp({ session, onLogout }) {
   };
 
   const filteredTx = transactions.filter(t => {
-    if (filter === "low" && t.conf !== "low") return false;
-    if (filter === "edited" && !t.edited) return false;
     if (search) { const s = search.toLowerCase(); if (!t.name.toLowerCase().includes(s) && !t.cat.toLowerCase().includes(s)) return false; }
+    if (filterCatTx !== "all" && t.cat !== filterCatTx) return false;
+    if (filterSourceTx !== "all" && (t.source || "") !== filterSourceTx) return false;
+    if (filterYearTx > 0 || filterMonthTx >= 0) {
+      if (!t.date) return false;
+      if (filterYearTx > 0 && !t.date.includes(String(filterYearTx))) return false;
+      if (filterMonthTx >= 0) { const mm = String(filterMonthTx + 1).padStart(2, "0"); if (!t.date.includes(`-${mm}-`) && !t.date.includes(`/${mm}/`)) return false; }
+    }
     return true;
   });
 
   if (showConnectCard) return (
-    <ConnectCardScreen session={session} onBack={() => setShowConnectCard(false)} />
+    <ConnectCardScreen session={{ ...session, max_session_active: maxSessionActive, max_last_sync: maxLastSync }} onBack={() => setShowConnectCard(false)} />
   );
 
   const chartData = [...finalizedMonths].reverse().slice(0,6).map(entry => {
@@ -585,99 +618,14 @@ export default function ClientApp({ session, onLogout }) {
   );
 
   return (
-    <div style={{ background:"var(--bg)", minHeight:"100vh", color:"var(--text)" }}>
-      {/* Navbar */}
-      <div style={{ position:"sticky", top:0, zIndex:100, background:"#fdfcf9", borderBottom:"1px solid var(--border)", padding:"0 28px", display:"flex", alignItems:"stretch", justifyContent:"space-between", height:62, boxShadow:"0 1px 0 var(--border), 0 4px 20px rgba(30,77,53,0.05)" }}>
-        {/* Right: Logo */}
-        <div style={{ display:"flex", alignItems:"center", gap:10, flexShrink:0, paddingLeft:20, borderLeft:"1.5px solid var(--border)" }}>
-          <div style={{ display:"flex", alignItems:"center", justifyContent:"center", width:34, height:34, background:"var(--green-mid)", borderRadius:9, flexShrink:0, boxShadow:"0 2px 8px rgba(45,106,79,0.25)" }}>
-            <svg width="18" height="18" viewBox="0 0 32 32" fill="none">
-              <path d="M6 24 L12 16 L18 20 L26 10" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M22 10 H26 V14" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-          </div>
-          <span style={{ fontFamily:"'Frank Ruhl Libre', serif", fontWeight:700, fontSize: 24, color:"var(--green-deep)", lineHeight:1, letterSpacing:"-0.3px" }}>מאזן</span>
-        </div>
-
-        {/* Center: Main tabs (only on dashboard) */}
-        {screen === "dashboard" && (
-          <div style={{ display:"flex", alignItems:"stretch" }}>
-            {[
-              ...(portfolioOpen ? [{ id:"portfolio", label:"תיק כלכלי" }] : []),
-              ...(!portfolioOpen ? [{ id:"data", label:"חומרי בסיס" }] : []),
-              ...(completedOnboarding ? [{ id:"personal", label:"פרטים אישיים" }] : []),
-              ...(portfolioOpen ? [{ id:"analytics-trends", label:"מגמות" }] : []),
-              ...(portfolioOpen ? [{ id:"analytics-forecast", label:"תחזית" }] : []),
-            ].map(t => (
-              <button key={t.id} onClick={() => switchTab(t.id)}
-                onMouseEnter={e => { if (activeTab !== t.id) (e.currentTarget as HTMLElement).style.color = "var(--text)"; }}
-                onMouseLeave={e => { if (activeTab !== t.id) (e.currentTarget as HTMLElement).style.color = "var(--text-dim)"; }}
-                style={{
-                  padding: "0 20px",
-                  fontSize: 17,
-                  fontFamily: "inherit",
-                  fontWeight: activeTab===t.id ? 700 : 400,
-                  letterSpacing: "0.01em",
-                  color: activeTab===t.id ? "var(--green-mid)" : "var(--text-dim)",
-                  background: "none",
-                  border: "none",
-                  borderBottom: `3px solid ${activeTab===t.id ? "var(--green-mid)" : "transparent"}`,
-                  borderTop: "3px solid transparent",
-                  cursor: "pointer",
-                  transition: "color 0.15s, border-color 0.15s",
-                  whiteSpace: "nowrap",
-                }}>
-                {t.label}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Left: Avatar chip + dropdown */}
-        <div style={{ display:"flex", alignItems:"center", gap:8, flexShrink:0 }}>
-          {screen !== "dashboard" && <Btn variant="ghost" size="sm" onClick={() => setScreen("dashboard")}>ראשי</Btn>}
-          <div style={{ position:"relative" }}>
-            {/* Chip */}
-            <button onClick={() => setShowUserMenu(v => !v)}
-              style={{ display:"flex", alignItems:"center", gap:8, borderRadius:20, padding:"4px 10px 4px 4px", border:`1px solid ${showUserMenu ? "var(--green-soft)" : "var(--border)"}`, background: showUserMenu ? "var(--green-pale)" : "var(--surface)", cursor:"pointer", transition:"all 0.15s", fontFamily:"inherit" }}>
-              <div style={{ width:28, height:28, borderRadius:"50%", background:"linear-gradient(135deg, var(--green-mid), var(--green-deep))", display:"flex", alignItems:"center", justifyContent:"center", fontSize: 14, fontWeight:700, color:"#fff", flexShrink:0, letterSpacing:"0.02em" }}>
-                {(session.name||"?").charAt(0).toUpperCase()}
-              </div>
-              <span style={{ fontSize: 15, fontWeight:500, color:"var(--text-mid)", letterSpacing:"0.01em" }}>{session.name}</span>
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ transition:"transform 0.2s", transform: showUserMenu ? "rotate(180deg)" : "rotate(0deg)", color:"var(--text-dim)" }}>
-                <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
-            </button>
-            {/* Dropdown */}
-            {showUserMenu && (
-              <>
-                <div onClick={() => setShowUserMenu(false)} style={{ position:"fixed", inset:0, zIndex:199 }} />
-                <div style={{ position:"absolute", left:0, top:"calc(100% + 8px)", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:12, boxShadow:"0 8px 32px rgba(30,77,53,0.12)", zIndex:200, minWidth:140, overflow:"hidden" }}>
-                  <button onClick={() => { setShowUserMenu(false); onLogout(); }}
-                    style={{ display:"flex", alignItems:"center", gap:8, width:"100%", padding:"11px 16px", background:"none", border:"none", cursor:"pointer", fontFamily:"inherit", fontSize: 16, color:"var(--text-mid)", textAlign:"right", transition:"background 0.12s" }}
-                    onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = "var(--surface2)"}
-                    onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = "none"}
-                  >
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-                      <polyline points="16 17 21 12 16 7"/>
-                      <line x1="21" y1="12" x2="9" y2="12"/>
-                    </svg>
-                    התנתק
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
+    <div style={{ background:"var(--bg)", color:"var(--text)", display:"flex", minHeight:"100vh" }}>
 
       {/* Welcome modal for new clients */}
       {showWelcome && (
         <>
           <style>{`@keyframes welcomeModalIn { from { transform: translate(-50%,-48%) scale(0.96); opacity:0; } to { transform: translate(-50%,-50%) scale(1); opacity:1; } }`}</style>
-          <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", zIndex:9000 }} onClick={dismissWelcome} />
-          <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:20, padding:"36px 32px", zIndex:9001, width:"min(480px,90vw)", textAlign:"center", boxShadow:"0 24px 60px rgba(0,0,0,0.25)", animation:"welcomeModalIn 250ms cubic-bezier(0.16,1,0.3,1)" }}>
+          <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", zIndex:"var(--z-back)" }} onClick={dismissWelcome} />
+          <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:20, padding:"36px 32px", zIndex:"var(--z-modal)", width:"min(480px,90vw)", textAlign:"center", boxShadow:"0 24px 60px rgba(0,0,0,0.25)", animation:"welcomeModalIn 250ms cubic-bezier(0.16,1,0.3,1)" }}>
             {/* Close button */}
             <button onClick={dismissWelcome} style={{ position:"absolute", top:14, left:16, background:"none", border:"none", cursor:"pointer", color:"var(--text-dim)", display:"flex", alignItems:"center", padding:6, borderRadius:8 }}>
               <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -696,7 +644,7 @@ export default function ClientApp({ session, onLogout }) {
               נצטרך מכם מספר מסמכים. הרשימה המלאה מחכה לכם בדף הבא.
             </div>
             <Btn onClick={dismissWelcome} style={{ width:"100%", justifyContent:"center" }}>
-              ← מובן, בואו נתחיל!
+              מובן, בואו נתחיל! ←
             </Btn>
           </div>
         </>
@@ -704,7 +652,7 @@ export default function ClientApp({ session, onLogout }) {
 
       {/* Toast */}
       {toast && (
-        <div style={{ position:"fixed", bottom:24, right:24, background:"var(--green-deep)", color:"#fff", borderRadius:12, padding:"12px 20px", fontSize: 15, zIndex:9999, boxShadow:"0 8px 32px rgba(30,77,53,0.3)" }}>
+        <div style={{ position:"fixed", bottom:24, right:24, background:"var(--green-deep)", color:"#fff", borderRadius:12, padding:"12px 20px", fontSize: 15, zIndex:"var(--z-toast)", boxShadow:"0 8px 32px rgba(30,77,53,0.3)" }}>
           {toast}
         </div>
       )}
@@ -747,9 +695,9 @@ export default function ClientApp({ session, onLogout }) {
 
       {/* ── מודל הערת הגשה (popup C) ─────────────────────────────────────────── */}
       {showSubmissionNoteModal && (
-        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.55)", zIndex:10000, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.55)", zIndex:"var(--z-top)", display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
           <div style={{ background:"var(--surface)", borderRadius:18, padding:"32px 28px", maxWidth:500, width:"100%", boxShadow:"0 24px 64px rgba(0,0,0,0.35)", direction:"rtl" }}>
-            <div style={{ fontSize:22, fontWeight:700, marginBottom:8 }}>רגע לפני ההגשה ✋</div>
+            <div style={{ fontSize:22, fontWeight:700, marginBottom:8 }}>רגע לפני ההגשה</div>
             <div style={{ fontSize:15, color:"var(--text-dim)", marginBottom:20, lineHeight:1.7 }}>
               לעיתים יש חודשים חריגים — נסיעה גדולה לחו"ל, קנייה חד-פעמית, הוצאה יוצאת דופן.
               אם יש משהו שאלון צריך לדעת כדי להבין את התמונה נכון — כתוב כאן.
@@ -774,7 +722,7 @@ export default function ClientApp({ session, onLogout }) {
                 setSubmittedAt(new Date().toISOString());
                 setShowSubmissionNoteModal(false);
                 setSubmittingNote(false);
-                showToast("🎉 הטופס הוגש! נשלחה הודעה לאלון.");
+                showToast("הטופס הוגש! נשלחה הודעה לאלון.");
               }} disabled={submittingNote}>הגש בלי הערה</Btn>
               <Btn onClick={async () => {
                 setSubmittingNote(true);
@@ -786,7 +734,7 @@ export default function ClientApp({ session, onLogout }) {
                 setSubmittedAt(new Date().toISOString());
                 setShowSubmissionNoteModal(false);
                 setSubmittingNote(false);
-                showToast("🎉 הטופס הוגש! נשלחה הודעה לאלון.");
+                showToast("הטופס הוגש! נשלחה הודעה לאלון.");
               }} disabled={submittingNote}>{submittingNote ? "מגיש..." : "הגש עם הערה"}</Btn>
             </div>
           </div>
@@ -802,63 +750,134 @@ export default function ClientApp({ session, onLogout }) {
         />
       )}
 
+
       {/* ── DASHBOARD ── */}
-      {screen === "dashboard" && (
-        <>
-          {/* Full-width sticky sub-tab strip */}
-          {(activeTab === "data" || activeTab === "portfolio") && (
-            <div style={{ background:"var(--surface2)", borderBottom:"1px solid var(--border)", position:"sticky", top:62, zIndex:90 }}>
-              <div style={{ maxWidth:960, margin:"0 auto", padding:"0 16px", display:"flex", alignItems:"center", height:46, gap:2 }}>
-                {activeTab === "data" && (
-                  [
-                    { id:"documents", label:"מסמכים" },
-                    { id:"questionnaire", label:"שאלון אישי" },
-                  ].map(t => (
-                    <button key={t.id} onClick={() => setDataSubTab(t.id)}
-                      onMouseEnter={e => { if (dataSubTab !== t.id) (e.currentTarget as HTMLElement).style.background = "rgba(216,243,220,0.5)"; }}
-                      onMouseLeave={e => { if (dataSubTab !== t.id) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-                      style={{
-                        padding:"5px 18px", fontSize: 15, fontFamily:"inherit",
-                        fontWeight: dataSubTab===t.id ? 700 : 400,
-                        color: dataSubTab===t.id ? "#fff" : "var(--text-dim)",
-                        background: dataSubTab===t.id ? "var(--green-mid)" : "transparent",
-                        border:"none", borderRadius:20,
-                        cursor:"pointer", transition:"all 0.15s", whiteSpace:"nowrap",
-                        letterSpacing:"0.01em",
-                        boxShadow: dataSubTab===t.id ? "0 2px 8px rgba(45,106,79,0.25)" : "none",
-                      }}>
-                      {t.label}
-                    </button>
-                  ))
-                )}
-                {activeTab === "portfolio" && (
-                  [
-                    { id:"txs",     label:"פירוט תנועות" },
-                    { id:"control", label:"בקרת תיק כלכלי" },
-                    { id:"savings", label:"פירוט חסכונות" },
-                    { id:"balance", label:"מאזן מתוכנן" },
-                    { id:"debts",   label:"מנהל חובות" },
-                    { id:"tools",   label:"כלים לצמיחה" },
-                  ].map(t => (
-                    <button key={t.id} onClick={() => switchPortfolioSubTab(t.id)}
-                      onMouseEnter={e => { if (portfolioSubTab !== t.id) (e.currentTarget as HTMLElement).style.background = "rgba(216,243,220,0.5)"; }}
-                      onMouseLeave={e => { if (portfolioSubTab !== t.id) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-                      style={{
-                        padding:"5px 16px", fontSize: 15, fontFamily:"inherit",
-                        fontWeight: portfolioSubTab===t.id ? 600 : 400,
-                        color: portfolioSubTab===t.id ? "var(--green-deep)" : "var(--text-dim)",
-                        background: portfolioSubTab===t.id ? "var(--green-mint)" : "transparent",
-                        border:"none", borderRadius:20,
-                        cursor:"pointer", transition:"all 0.15s", whiteSpace:"nowrap",
-                        letterSpacing:"0.01em",
-                      }}>
-                      {t.label}
-                    </button>
-                  ))
-                )}
-              </div>
+      {/* ── Sidebar ── */}
+      <aside style={{ width:240, flexShrink:0, background:"linear-gradient(rgb(13,34,24) 0%, rgb(30,77,53) 100%)", display:"flex", flexDirection:"column", position:"sticky", top:0, alignSelf:"flex-start", height:"100vh", overflowY:"auto" }}>
+            {/* Logo */}
+            <div style={{ padding:"28px 24px 20px" }}>
+              <div style={{ fontFamily:"'Frank Ruhl Libre', serif", fontWeight:700, fontSize:26, color:"#fff", lineHeight:1, letterSpacing:"-0.02em", marginBottom:4 }}>מאזן</div>
+              <div style={{ fontSize:12, color:"rgb(255,245,245)", letterSpacing:"0.02em" }}>אזור אישי</div>
             </div>
-          )}
+            {/* Divider */}
+            <div style={{ height:1, background:"rgba(255,255,255,0.08)", margin:"0 18px 10px" }} />
+            {/* Nav */}
+            <nav style={{ flex:1, padding:"4px 12px", overflowY:"auto" }}>
+              {!portfolioOpen && (
+                <>
+                  {([
+                    { subtab:"documents", label:"חומרי בסיס", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg> },
+                    { subtab:"questionnaire", label:"שאלון אישי", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> },
+                  ] as { subtab: string; label: string; icon: React.ReactNode }[]).map(item => {
+                    const isActive = activeTab === "data" && dataSubTab === item.subtab;
+                    return (
+                      <button key={item.subtab}
+                        onClick={() => { setScreen("dashboard"); switchTab("data"); setDataSubTab(item.subtab); }}
+                        onMouseEnter={e => { if (!isActive) { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.06)"; (e.currentTarget as HTMLElement).style.color = "#fff"; } }}
+                        onMouseLeave={e => { if (!isActive) { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.78)"; } }}
+                        style={{ width:"100%", display:"flex", alignItems:"center", gap:11, padding:"10px 14px", borderRadius:10, border:"none", borderRight:`3px solid ${isActive ? "var(--green-soft)" : "transparent"}`, cursor:"pointer", background: isActive ? "rgba(255,255,255,0.12)" : "transparent", color: isActive ? "#fff" : "rgba(255,255,255,0.78)", fontFamily:"inherit", fontSize:15, fontWeight: isActive ? 600 : 500, textAlign:"right", marginBottom:2, transition:"background 0.15s, color 0.15s" }}>
+                        {item.icon}{item.label}
+                      </button>
+                    );
+                  })}
+                </>
+              )}
+              {portfolioOpen && (
+                <>
+                  {(() => {
+                    const isActive = activeTab === "portfolio";
+                    return (
+                      <>
+                        <button
+                          onClick={() => { setScreen("dashboard"); switchTab("portfolio"); }}
+                          onMouseEnter={e => { if (!isActive) { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.06)"; (e.currentTarget as HTMLElement).style.color = "#fff"; } }}
+                          onMouseLeave={e => { if (!isActive) { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.78)"; } }}
+                          style={{ width:"100%", display:"flex", alignItems:"center", gap:11, padding:"10px 14px", borderRadius:10, border:"none", borderRight:`3px solid ${isActive ? "var(--green-soft)" : "transparent"}`, cursor:"pointer", background: isActive ? "rgba(255,255,255,0.12)" : "transparent", color: isActive ? "#fff" : "rgba(255,255,255,0.78)", fontFamily:"inherit", fontSize:15, fontWeight: isActive ? 600 : 500, textAlign:"right", marginBottom:2, transition:"background 0.15s, color 0.15s" }}>
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
+                          <span style={{ flex:1 }}>תיק כלכלי</span>
+                          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ transform: isActive ? "rotate(180deg)" : "rotate(0deg)", transition:"transform 0.2s", flexShrink:0 }}><path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                        </button>
+                        {isActive && (
+                          <div style={{ paddingRight:8, marginBottom:4 }}>
+                            {([
+                              { id:"txs",     label:"פירוט תנועות" },
+                              { id:"control", label:"בקרת תיק כלכלי" },
+                              { id:"savings", label:"פירוט חסכונות" },
+                              { id:"balance", label:"מאזן מתוכנן" },
+                              { id:"debts",   label:"מנהל חובות" },
+                              { id:"tools",   label:"כלים לצמיחה" },
+                            ] as { id: string; label: string }[]).map(t => {
+                              const subActive = portfolioSubTab === t.id;
+                              return (
+                                <button key={t.id}
+                                  onClick={() => switchPortfolioSubTab(t.id)}
+                                  onMouseEnter={e => { if (!subActive) { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.05)"; (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.85)"; } }}
+                                  onMouseLeave={e => { if (!subActive) { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.6)"; } }}
+                                  style={{ width:"100%", display:"flex", alignItems:"center", gap:8, padding:"7px 14px 7px 8px", borderRadius:8, border:"none", cursor:"pointer", background: subActive ? "rgba(255,255,255,0.10)" : "transparent", color: subActive ? "#fff" : "rgba(255,255,255,0.6)", fontFamily:"inherit", fontSize:13.5, fontWeight: subActive ? 600 : 400, textAlign:"right", marginBottom:1, transition:"background 0.12s, color 0.12s" }}>
+                                  <span style={{ width:5, height:5, borderRadius:"50%", background: subActive ? "var(--green-soft)" : "rgba(255,255,255,0.3)", flexShrink:0, display:"inline-block" }} />
+                                  {t.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                  {([
+                    { id:"analytics-trends",   label:"מגמות",  icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> },
+                    { id:"analytics-forecast", label:"תחזית",  icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg> },
+                  ] as { id: string; label: string; icon: React.ReactNode }[]).map(item => {
+                    const isActive = activeTab === item.id;
+                    return (
+                      <button key={item.id}
+                        onClick={() => { setScreen("dashboard"); switchTab(item.id); }}
+                        onMouseEnter={e => { if (!isActive) { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.06)"; (e.currentTarget as HTMLElement).style.color = "#fff"; } }}
+                        onMouseLeave={e => { if (!isActive) { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.78)"; } }}
+                        style={{ width:"100%", display:"flex", alignItems:"center", gap:11, padding:"10px 14px", borderRadius:10, border:"none", borderRight:`3px solid ${isActive ? "var(--green-soft)" : "transparent"}`, cursor:"pointer", background: isActive ? "rgba(255,255,255,0.12)" : "transparent", color: isActive ? "#fff" : "rgba(255,255,255,0.78)", fontFamily:"inherit", fontSize:15, fontWeight: isActive ? 600 : 500, textAlign:"right", marginBottom:2, transition:"background 0.15s, color 0.15s" }}>
+                        {item.icon}{item.label}
+                      </button>
+                    );
+                  })}
+                </>
+              )}
+              {completedOnboarding && (() => {
+                const isActive = activeTab === "personal";
+                return (
+                  <button
+                    onClick={() => { setScreen("dashboard"); switchTab("personal"); }}
+                    onMouseEnter={e => { if (!isActive) { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.06)"; (e.currentTarget as HTMLElement).style.color = "#fff"; } }}
+                    onMouseLeave={e => { if (!isActive) { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.78)"; } }}
+                    style={{ width:"100%", display:"flex", alignItems:"center", gap:11, padding:"10px 14px", borderRadius:10, border:"none", borderRight:`3px solid ${isActive ? "var(--green-soft)" : "transparent"}`, cursor:"pointer", background: isActive ? "rgba(255,255,255,0.12)" : "transparent", color: isActive ? "#fff" : "rgba(255,255,255,0.78)", fontFamily:"inherit", fontSize:15, fontWeight: isActive ? 600 : 500, textAlign:"right", marginBottom:2, transition:"background 0.15s, color 0.15s" }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                    פרטים אישיים
+                  </button>
+                );
+              })()}
+            </nav>
+            {/* Footer: user + logout */}
+            <div style={{ padding:"14px 14px 18px", borderTop:"1px solid rgba(255,255,255,0.08)" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 12px", borderRadius:10, border:"1px solid rgba(255,255,255,0.10)", background:"rgba(255,255,255,0.04)", marginBottom:4 }}>
+                <div style={{ width:32, height:32, borderRadius:"50%", background:"rgb(82,183,136)", color:"#fff", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, fontSize:14, flexShrink:0 }}>
+                  {(session.name||"?").charAt(0).toUpperCase()}
+                </div>
+                <div style={{ flex:1, minWidth:0, textAlign:"right" }}>
+                  <div style={{ fontSize:14, fontWeight:700, color:"#fff", lineHeight:1.2 }}>{session.name}</div>
+                </div>
+              </div>
+              <button
+                onClick={onLogout}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "#fff"; (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.06)"; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.65)"; (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                style={{ width:"100%", display:"flex", alignItems:"center", justifyContent:"flex-end", flexDirection:"row-reverse", gap:8, padding:"8px 12px", background:"transparent", border:"none", color:"rgba(255,255,255,0.65)", fontFamily:"inherit", fontSize:13.5, cursor:"pointer", borderRadius:8, transition:"all 0.15s" }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                יציאה
+              </button>
+            </div>
+      </aside>
+      {/* ── Main content ── */}
+      <main style={{ flex:1, minWidth:0, overflowY:"auto" }}>
+        {screen === "dashboard" && (
           <div style={{ maxWidth:960, margin:"0 auto", padding:"24px 20px" }}>
 
           {/* Questionnaire sub-tab */}
@@ -882,6 +901,8 @@ export default function ClientApp({ session, onLogout }) {
               spouseNames={spouseNames}
               employmentTypes={employmentTypes}
               noPayslipReasons={noPayslipReasons}
+              electricityBills={electricityBills}
+              onElectricityChange={updateElectricityBills}
               onNavigateTxs={openNewMonth}
               onOpenExistingMonth={openMonth}
               onNavigatePayslips={(spouseIdx: 1|2) => { setActivePayslipSpouse(spouseIdx); setScreen("payslips"); }}
@@ -968,7 +989,7 @@ export default function ClientApp({ session, onLogout }) {
                         <div style={{ fontWeight:800, fontSize: 22, color:"var(--red)" }}>₪{Math.round(total).toLocaleString()}</div>
                         <div style={{ display:"flex", gap:6 }}>
                           <Btn variant="ghost" size="sm" onClick={e => { e.stopPropagation(); exportMonthToExcel(entry); }}>Excel ↓</Btn>
-                          <button onClick={async e => { e.stopPropagation(); if (!window.confirm(`למחוק את ${entry.label}?`)) return; await supabase.from("submissions").delete().eq("client_id", session.id).eq("month_key", entry.month_key); await supabase.from("month_entries").delete().eq("client_id", session.id).eq("month_key", entry.month_key); await loadUserData(); }} style={{ background:"none", border:"1px solid rgba(247,92,92,0.4)", borderRadius:7, padding:"3px 8px", fontSize: 13, color:"var(--red)", cursor:"pointer", fontFamily:"inherit" }}>🗑</button>
+                          <button onClick={async e => { e.stopPropagation(); if (!window.confirm(`למחוק את ${entry.label}?`)) return; await supabase.from("submissions").delete().eq("client_id", session.id).eq("month_key", entry.month_key); await supabase.from("month_entries").delete().eq("client_id", session.id).eq("month_key", entry.month_key); await loadUserData(); }} style={{ background:"none", border:"1px solid rgba(247,92,92,0.4)", borderRadius:7, padding:"3px 8px", fontSize: 13, color:"var(--red)", cursor:"pointer", fontFamily:"inherit", display:"inline-flex", alignItems:"center" }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button>
                         </div>
                       </div>
                     </div>
@@ -1010,12 +1031,14 @@ export default function ClientApp({ session, onLogout }) {
               activeSubTab={portfolioSubTab}
               visitedSubTabs={visitedPortfolioSubTabs}
               onSubTabChange={switchPortfolioSubTab}
+              maxSessionActive={maxSessionActive}
+              maxLastSync={maxLastSync}
             />
           )}
 
           {/* PERSONAL TAB */}
           {completedOnboarding && activeTab === "personal" && (
-            <ClientPersonalTab session={session} />
+            <ClientPersonalTab session={session} onOpenConnectCard={() => setShowConnectCard(true)} maxLastSync={maxLastSync} />
           )}
 
           {/* ANALYTICS TRENDS TAB — מגמות (lazy mount) */}
@@ -1053,8 +1076,7 @@ export default function ClientApp({ session, onLogout }) {
             </div>
           )}
           </div>
-        </>
-      )}
+        )}
 
       {/* ── MONTH DETAIL ── */}
       {screen === "month" && activeMonth && (
@@ -1092,18 +1114,36 @@ export default function ClientApp({ session, onLogout }) {
       {screen === "upload" && (
         <div style={{ maxWidth:640, margin:"0 auto", padding:"28px 20px" }}>
           <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:24 }}>
-            <Btn variant="ghost" size="sm" onClick={() => { if (uploadSource === "month" && activeMonth) setScreen("month"); else setScreen("dashboard"); }}>← חזור</Btn>
+            <Btn variant="ghost" size="sm" onClick={() => { if (uploadSource === "month" && activeMonth) setScreen("month"); else setScreen("dashboard"); }}>חזור ←</Btn>
             <div style={{ fontWeight:700, fontSize: 20, color:"var(--green-deep)", letterSpacing:"-0.3px" }}>הוסף תנועות — {selectedMonthLabel}</div>
           </div>
 
           <Card style={{ marginBottom:16 }}>
             <div style={{ fontWeight:600, marginBottom:8, fontSize: 16, color:"var(--text-mid)" }}>שם המקור</div>
             <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:10 }}>
-              {["כלול בכרטיס","עו\"ש","אחר"].map(s => (
-                <button type="button" key={s} onClick={() => setSourceLabel(s)} style={{ padding:"12px 28px", borderRadius:12, fontSize: 18, fontWeight:700, cursor:"pointer", fontFamily:"inherit", border:`2px solid ${sourceLabel===s?"var(--green-mid)":"var(--border)"}`, background:sourceLabel===s?"var(--green-mint)":"var(--surface2)", color:sourceLabel===s?"var(--green-deep)":"var(--text-dim)", boxShadow: sourceLabel===s?"0 2px 8px rgba(45,106,79,0.2)":"none", transition:"all 0.15s" }}>{s}</button>
-              ))}
+              {["כרטיס אשראי","עו\"ש","אחר"].map(s => {
+                const isActive = s === "כרטיס אשראי"
+                  ? (sourceLabel === "כרטיס אשראי" || sourceLabel.startsWith("כרטיס אשראי — "))
+                  : sourceLabel === s;
+                return (
+                  <button type="button" key={s} onClick={() => { setSourceLabel(s); setCardNickname(""); }} style={{ padding:"9px 20px", borderRadius:10, fontSize: 15, fontWeight:600, cursor:"pointer", fontFamily:"inherit", border:`2px solid ${isActive?"var(--green-mid)":"var(--border)"}`, background:isActive?"var(--green-mint)":"var(--surface2)", color:isActive?"var(--green-deep)":"var(--text-dim)", boxShadow: isActive?"0 2px 8px rgba(45,106,79,0.2)":"none", transition:"all 0.15s" }}>{s}</button>
+                );
+              })}
             </div>
-            <Input label="או הכנס שם ידני" value={sourceLabel} onChange={e => setSourceLabel(e.target.value)} placeholder='למשל "מקס - אמא"' />
+            {(sourceLabel === "כרטיס אשראי" || sourceLabel.startsWith("כרטיס אשראי — ")) ? (
+              <div>
+                <div style={{ fontSize: 14, color:"var(--text-dim)", marginBottom:5 }}>כינוי הכרטיס (אופציונלי) — למשל: ויזה לאומי, מאסטרקארד עבודה</div>
+                <input
+                  value={cardNickname}
+                  onChange={e => { const n = e.target.value; setCardNickname(n); setSourceLabel("כרטיס אשראי" + (n.trim() ? " — " + n.trim() : "")); }}
+                  placeholder="משה אשראי עבודה"
+                  style={{ width:"100%", boxSizing:"border-box", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"9px 12px", color:"var(--text)", fontSize:15, fontFamily:"inherit", outline:"none" }}
+                />
+                {sourceLabel && <div style={{ fontSize:13, color:"var(--text-dim)", marginTop:5 }}>שם המקור: <strong style={{ color:"var(--green-deep)" }}>{sourceLabel}</strong></div>}
+              </div>
+            ) : (
+              <Input label="או הכנס שם ידני" value={sourceLabel} onChange={e => setSourceLabel(e.target.value)} placeholder='למשל "מקס - משה"' />
+            )}
           </Card>
 
           <div
@@ -1116,9 +1156,9 @@ export default function ClientApp({ session, onLogout }) {
             onDragLeave={() => setDragOver(false)}
             onDrop={e => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }}
           >
-            <div style={{ fontSize:32, marginBottom:10 }}>{dragOver ? "⬇️" : "📎"}</div>
+            <div style={{ marginBottom:10 }}>{dragOver ? <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--green-mid)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg> : <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--green-mid)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>}</div>
             <div style={{ fontWeight:700, marginBottom:6 }}>{dragOver ? "שחרר להוספה" : "גרור קבצים לכאן"}</div>
-            <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:16 }}>Excel, CSV, PDF, Word, תמונות וכל קובץ פיננסי רלוונטי</div>
+            <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:16 }}>Excel, CSV, PDF</div>
             <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv,.pdf,.png,.jpg,.jpeg,.doc,.docx,.txt,.ods" multiple style={{ display:"none" }} onChange={e => handleFiles(e.target.files)} />
             <Btn onClick={() => fileInputRef.current?.click()}>בחר קבצים</Btn>
           </div>
@@ -1129,11 +1169,11 @@ export default function ClientApp({ session, onLogout }) {
                 const res = analyzeResults.find(r => r.name === f.name);
                 return (
                   <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 0", borderBottom:i<uploadedFiles.length-1?`1px solid ${"var(--border)"}22`:"none" }}>
-                    <span style={{ fontSize: 15 }}>📄 {f.name}</span>
+                    <span style={{ fontSize: 15, display:"inline-flex", alignItems:"center", gap:5 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>{f.name}</span>
                     <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                       {res && (
                         <span style={{ fontSize: 13, color: res.error ? "var(--red)" : res.count === 0 ? "var(--gold)" : "var(--green-soft)" }}>
-                          {res.error ? `⚠️ ${res.error}` : res.count === 0 ? "⚠️ לא זוהו תנועות" : `✓ ${res.count} תנועות`}
+                          {res.error ? res.error : res.count === 0 ? "לא זוהו תנועות" : `✓ ${res.count} תנועות`}
                         </span>
                       )}
                       {analyzing && !res && <span style={{ fontSize: 13, color:"var(--text-dim)" }}>מנתח...</span>}
@@ -1147,7 +1187,7 @@ export default function ClientApp({ session, onLogout }) {
 
           {analyzeResults.length > 0 && !analyzing && analyzeResults.every(r => r.count === 0) && (
             <div style={{ background:"rgba(255,183,77,0.1)", border:"1px solid var(--gold)", borderRadius:8, padding:"10px 14px", marginBottom:14, fontSize: 15, color:"var(--gold)" }}>
-              ⚠️ לא זוהו תנועות באף קובץ. בדוק שהקבצים הם Excel/CSV עם עמודות תאריך, שם ועסק וסכום.
+              לא זוהו תנועות באף קובץ. בדוק שהקבצים הם Excel/CSV עם עמודות תאריך, שם ועסק וסכום.
             </div>
           )}
 
@@ -1158,25 +1198,142 @@ export default function ClientApp({ session, onLogout }) {
       )}
 
       {/* ── REVIEW ── */}
-      {screen === "review" && (
+      {screen === "review" && (() => {
+        const reviewTotalAll      = transactions.reduce((s,t) => s + Number(t.amount||0), 0);
+        const reviewTotalEconomic = transactions.filter(t => t.cat !== "להתעלם" && t.flow_type !== "credit_transfer").reduce((s,t) => s + Number(t.amount||0), 0);
+        const reviewIgnoredCount  = transactions.filter(t => t.cat === "להתעלם").length;
+        const reviewIncomeTotal   = transactions.filter(t => t.cat === "הכנסות").reduce((s,t) => s + Number(t.amount||0), 0);
+        const reviewExpenseTotal  = transactions.filter(t => t.cat !== "הכנסות").reduce((s,t) => s + Number(t.amount||0), 0);
+        const reviewIsNetNegative = reviewExpenseTotal > reviewIncomeTotal;
+        return (
         <div style={{ maxWidth:800, margin:"0 auto", padding:"28px 20px" }}>
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:20, flexWrap:"wrap", gap:10 }}>
             <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-              <Btn variant="ghost" size="sm" onClick={() => setScreen("upload")}>← חזור</Btn>
-              <div style={{ fontWeight:700, fontSize: 20, color:"var(--green-deep)", letterSpacing:"-0.3px" }}>סיווג תנועות</div>
+              <Btn variant="ghost" size="sm" onClick={() => setScreen("upload")}>חזור ←</Btn>
+              <div>
+                <div style={{ fontWeight:700, fontSize:20, color:"var(--green-deep)", letterSpacing:"-0.3px" }}>סיווג תנועות</div>
+                <div style={{ fontSize:13, color:"var(--text-dim)", marginTop:2 }}>{transactions.length} תנועות</div>
+              </div>
             </div>
-            <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-              <span style={{ fontSize: 15, color:"var(--text-dim)", alignSelf:"center" }}>{transactions.length} תנועות</span>
-              <Btn size="sm" onClick={saveSubmission}>שמור ←</Btn>
-            </div>
+            <Btn size="sm" onClick={saveSubmission}>שמור ←</Btn>
           </div>
-
           {/* Filter bar */}
-          <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
-            {[["all","הכל"],["low","ביטחון נמוך"],["edited","נערך"]].map(([v,l]) => (
-              <button key={v} onClick={() => setFilter(v)} style={{ padding:"6px 16px", borderRadius:20, fontSize: 16, cursor:"pointer", fontFamily:"inherit", border:`1px solid ${filter===v?"var(--green-mid)":"var(--border)"}`, background:filter===v?"var(--green-mint)":"transparent", color:filter===v?"var(--green-deep)":"var(--text-mid)" }}>{l}</button>
-            ))}
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="חיפוש..." style={{ flex:1, minWidth:120, background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:20, padding:"6px 16px", color:"var(--text)", fontSize: 16, fontFamily:"inherit", outline:"none" }} />
+          <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"12px 16px", boxShadow:"0 1px 4px rgba(30,77,53,0.05)", marginBottom:16 }}>
+            {/* Row 1: search */}
+            <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>
+              <div style={{ flex:1, minWidth:120, position:"relative" }}>
+                <svg style={{ position:"absolute", right:10, top:"50%", transform:"translateY(-50%)", width:14, height:14, opacity:0.45, pointerEvents:"none" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="חיפוש..." style={{ width:"100%", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:20, padding:"6px 14px 6px 14px", paddingRight:32, color:"var(--text)", fontSize:14, fontFamily:"inherit", outline:"none", boxSizing:"border-box" as any }} />
+              </div>
+            </div>
+            {/* Row 2: category + advanced toggle */}
+            <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap", marginTop:10 }}>
+              <span style={{ fontSize:13, color:"var(--text-dim)", fontWeight:500, whiteSpace:"nowrap" }}>קטגוריה:</span>
+              {(() => {
+                const cats = [...new Set(transactions.map((t:any) => t.cat).filter(Boolean))].sort();
+                const allOpts = ["all", ...cats];
+                return (
+                  <div style={{ position:"relative" }}>
+                    <button
+                      onClick={() => setCatDropdownOpenTx(p => !p)}
+                      style={{ display:"inline-flex", alignItems:"center", gap:8, minWidth:140,
+                        background: filterCatTx !== "all" ? "var(--green-mint)" : "var(--surface2)",
+                        border:`1px solid ${filterCatTx !== "all" ? "var(--green-soft)" : "var(--border)"}`,
+                        borderRadius:10, padding:"7px 12px", fontFamily:"inherit", fontSize:13,
+                        color: filterCatTx !== "all" ? "var(--green-deep)" : "var(--text)",
+                        cursor:"pointer", fontWeight: filterCatTx !== "all" ? 600 : 400 }}>
+                      <span style={{ flex:1, textAlign:"right", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                        {filterCatTx === "all" ? "הכל" : filterCatTx}
+                      </span>
+                      <svg style={{ width:11, height:11, flexShrink:0, transition:"transform 0.2s", transform: catDropdownOpenTx ? "rotate(180deg)" : "none" }} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 4l4 4 4-4"/></svg>
+                    </button>
+                    {catDropdownOpenTx && (
+                      <>
+                        <div onClick={() => setCatDropdownOpenTx(false)} style={{ position:"fixed", inset:0, zIndex:"calc(var(--z-drop) - 1)" }} />
+                        <div style={{ position:"absolute", top:"calc(100% + 4px)", right:0, zIndex:"var(--z-drop)",
+                          background:"var(--surface)", border:"1px solid var(--border)", borderRadius:12,
+                          boxShadow:"0 8px 24px rgba(0,0,0,0.12)", minWidth:180, maxHeight:260,
+                          overflowY:"auto", padding:4 }}>
+                          {allOpts.map(c => (
+                            <button key={c} onClick={() => { setFilterCatTx(c); setCatDropdownOpenTx(false); }}
+                              style={{ display:"block", width:"100%", textAlign:"right", padding:"8px 12px",
+                                borderRadius:8, border:"none", fontFamily:"inherit", fontSize:13, cursor:"pointer",
+                                background: filterCatTx === c ? "var(--green-mint)" : "transparent",
+                                color: filterCatTx === c ? "var(--green-deep)" : "var(--text)",
+                                fontWeight: filterCatTx === c ? 600 : 400 }}>
+                              {c === "all" ? "הכל" : c}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
+              <button onClick={() => setAdvFilterOpenTx(p => !p)}
+                style={{ marginRight:"auto", padding:"7px 14px", borderRadius:8, fontSize:13, fontWeight:600, cursor:"pointer", fontFamily:"inherit", border:"1px solid var(--border)", background:"transparent", color:"var(--text-mid)", display:"inline-flex", alignItems:"center", gap:6 }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/>
+                  <circle cx="8" cy="6" r="2" fill="currentColor"/><circle cx="15" cy="12" r="2" fill="currentColor"/><circle cx="10" cy="18" r="2" fill="currentColor"/>
+                </svg>
+                סינון מתקדם
+                <svg style={{ width:11, height:11, transition:"transform 0.2s", transform: advFilterOpenTx ? "rotate(180deg)" : "none" }} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 4l4 4 4-4"/></svg>
+              </button>
+              {(filterCatTx !== "all" || filterSourceTx !== "all" || filterMonthTx >= 0 || filterYearTx > 0) && (
+                <button onClick={() => { setFilterCatTx("all"); setFilterSourceTx("all"); setFilterMonthTx(-1); setFilterYearTx(0); }}
+                  style={{ padding:"6px 12px", borderRadius:8, fontSize:13, cursor:"pointer", fontFamily:"inherit", border:"1px solid var(--border)", background:"transparent", color:"var(--text-dim)" }}>
+                  נקה פילטרים
+                </button>
+              )}
+            </div>
+            {/* Advanced panel */}
+            {advFilterOpenTx && (() => {
+              const sourceLabels = [...new Set(transactions.map((t:any) => t.source).filter(Boolean))] as string[];
+              return (
+                <div style={{ marginTop:12, paddingTop:12, borderTop:"1px dashed var(--border)" }}>
+                  {sourceLabels.length > 1 && (
+                    <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap", marginBottom:10 }}>
+                      <span style={{ fontSize:13, color:"var(--text-dim)", fontWeight:500, whiteSpace:"nowrap" }}>מקור:</span>
+                      <div style={{ display:"inline-flex", background:"var(--surface2)", borderRadius:10, padding:3, gap:2 }}>
+                        {([["all","הכל"] as [string,string], ...sourceLabels.map(s => [s, s.split(/[/\\]/).pop() || s] as [string,string])]).map(([v,l]) => (
+                          <button key={v} onClick={() => setFilterSourceTx(v)}
+                            style={{ background: filterSourceTx===v ? "var(--surface)" : "transparent", border:0, padding:"5px 11px", borderRadius:8, fontFamily:"inherit", fontSize:12, fontWeight: filterSourceTx===v ? 600 : 500, color: filterSourceTx===v ? "var(--green-deep)" : "var(--text-mid)", cursor:"pointer", boxShadow: filterSourceTx===v ? "0 1px 2px rgba(0,0,0,0.04)" : "none" }}>
+                            {l}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+                    <span style={{ fontSize:13, color:"var(--text-dim)", fontWeight:500, whiteSpace:"nowrap" }}>תאריך:</span>
+                    <CustomSelect
+                      value={filterYearTx}
+                      onChange={v => setFilterYearTx(Number(v))}
+                      options={[
+                        { value: 0, label: "כל השנים" },
+                        ...[2023,2024,2025,2026,2027].map(y => ({ value: y, label: String(y) })),
+                      ]}
+                      size="sm"
+                      style={{ minWidth: 110 }}
+                    />
+                    <CustomSelect
+                      value={filterMonthTx}
+                      onChange={v => setFilterMonthTx(Number(v))}
+                      options={[
+                        { value: -1, label: "כל החודשים" },
+                        ...HEBREW_MONTHS.map((m, i) => ({ value: i, label: m })),
+                      ]}
+                      size="sm"
+                      style={{ minWidth: 120 }}
+                    />
+                    {(filterMonthTx >= 0 || filterYearTx > 0) && (
+                      <button onClick={() => { setFilterMonthTx(-1); setFilterYearTx(0); }}
+                        style={{ border:"none", background:"none", color:"var(--text-dim)", cursor:"pointer", fontSize:18, lineHeight:1, padding:0 }}>×</button>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
 
           <RememberModal
@@ -1234,11 +1391,6 @@ export default function ClientApp({ session, onLogout }) {
                     <div>
                     <div style={{ display:"flex", alignItems:"center", gap:6 }}>
                       <span style={{ fontWeight:600, fontSize: 17 }}>{tx.name}</span>
-                      <span style={{ fontSize: 12, padding:"2px 8px", borderRadius:20, fontWeight:600,
-                        background: isKnown ? "rgba(46,204,138,0.12)" : "rgba(255,183,77,0.12)",
-                        color: isKnown ? "var(--green-soft)" : "var(--gold)",
-                        border: `1px solid ${isKnown ? "rgba(46,204,138,0.3)" : "rgba(255,183,77,0.3)"}`,
-                      }}>{isKnown ? "מוכר" : "חדש"}</span>
                     </div>
                     <div style={{ fontSize: 15, color:"var(--text-dim)" }}>{tx.date}</div>
                     {tx.note && <div style={{ fontSize: 14, color:"var(--text-mid)", marginTop:3, fontStyle:"italic" }}>{tx.note}</div>}
@@ -1253,33 +1405,33 @@ export default function ClientApp({ session, onLogout }) {
                         <button type="button"
                           onClick={e => { e.stopPropagation(); setActiveTxId(tx.id === activeTxId ? null : tx.id); setCatSearch(""); setPendingRemember(null); }}
                           style={{ background: needsCat ? "rgba(192,57,43,0.08)" : "var(--green-mint)", border:`1px solid ${needsCat ? "var(--red)" : "var(--green-soft)"}`, borderRadius:20, padding:"5px 14px", fontSize: 15, color: needsCat ? "var(--red)" : "var(--green-deep)", cursor:"pointer", fontFamily:"inherit", fontWeight:600 }}
-                        >{needsCat ? '⚠️ דרוש סיווג' : tx.cat}</button>
+                        >{needsCat ? 'דרוש סיווג' : tx.cat}</button>
                         {tx.cat !== 'להתעלם' ? (
                           <button type="button"
                             onClick={e => { e.stopPropagation(); setPrevCatMap(p => ({...p, [tx.id]: tx.cat})); setTransactions(prev => prev.map(t => t.id === tx.id ? { ...t, cat:"להתעלם", edited:true, conf:"high" } : t)); setActiveTxId(null); }}
                             title="התעלם מתנועה זו — לא תיספר"
-                            style={{ background:"transparent", border:"1px solid var(--border)", borderRadius:8, padding:"5px 10px", fontSize: 15, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}
-                          >⊘</button>
+                            style={{ background:"transparent", border:"1px solid var(--border)", borderRadius:8, padding:"5px 8px", color:"var(--text-dim)", cursor:"pointer", display:"inline-flex", alignItems:"center" }}
+                          ><DocIcon name="ban" color="var(--text-dim)" size={15} /></button>
                         ) : prevCatMap[tx.id] ? (
                           <button type="button"
                             onClick={e => { e.stopPropagation(); const prev = prevCatMap[tx.id]; setTransactions(p => p.map(t => t.id === tx.id ? { ...t, cat:prev, edited:true, conf:"high" } : t)); setPrevCatMap(p => { const n={...p}; delete n[tx.id]; return n; }); }}
                             title="בטל התעלמות"
-                            style={{ background:"var(--green-mint)", border:"1px solid var(--green-soft)", borderRadius:8, padding:"5px 10px", fontSize:13, color:"var(--green-deep)", cursor:"pointer", fontFamily:"inherit", whiteSpace:"nowrap" }}
-                          >↩️ {prevCatMap[tx.id]}</button>
+                            style={{ background:"var(--green-mint)", border:"1px solid var(--green-soft)", borderRadius:8, padding:"5px 10px", fontSize:13, color:"var(--green-deep)", cursor:"pointer", fontFamily:"inherit", whiteSpace:"nowrap", display:"inline-flex", alignItems:"center", gap:5 }}
+                          ><DocIcon name="undo" color="var(--green-deep)" size={13} />{prevCatMap[tx.id]}</button>
                         ) : null}
                       </>
                     )}
                     <button
                       onClick={() => setActiveTxId(activeTxId === `note_${tx.id}` ? null : `note_${tx.id}`)}
-                      style={{ background:"transparent", border:"1px solid var(--border)", borderRadius:8, padding:"5px 10px", fontSize: 15, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}
+                      style={{ background:"transparent", border:"1px solid var(--border)", borderRadius:8, padding:"5px 8px", color:"var(--text-dim)", cursor:"pointer", display:"inline-flex", alignItems:"center" }}
                       title="הוסף הערה"
-                    >✎</button>
+                    ><DocIcon name="pencil" color="var(--text-dim)" size={14} /></button>
                     {isPdf(tx) && (
                       <button
                         onClick={() => toggleFlowType(tx.id)}
                         title={inTransferSection ? "הזז להוצאות רגילות" : "סמן כחיוב אשראי — לא ייספר בהוצאות"}
-                        style={{ background: inTransferSection ? "var(--green-mint)" : "transparent", border:`1px solid ${inTransferSection ? "var(--green-soft)" : "var(--border)"}`, borderRadius:8, padding:"5px 10px", fontSize: 14, color: inTransferSection ? "var(--green-deep)" : "var(--text-dim)", cursor:"pointer", fontFamily:"inherit", whiteSpace:"nowrap" }}
-                      >{inTransferSection ? "↩ הוצאה" : "כלול בכרטיס"}</button>
+                        style={{ background: inTransferSection ? "var(--green-mint)" : "transparent", border:`1px solid ${inTransferSection ? "var(--green-soft)" : "var(--border)"}`, borderRadius:8, padding:"5px 10px", fontSize:13, color: inTransferSection ? "var(--green-deep)" : "var(--text-dim)", cursor:"pointer", fontFamily:"inherit", whiteSpace:"nowrap", display:"inline-flex", alignItems:"center", gap:5, fontWeight:600 }}
+                      >{inTransferSection ? <><DocIcon name="undo" color="var(--green-deep)" size={13} />הוצאה</> : <><DocIcon name="credit-card" color="var(--text-dim)" size={13} />כלול בכרטיס</>}</button>
                     )}
                   </div>
                 </div>
@@ -1320,27 +1472,77 @@ export default function ClientApp({ session, onLogout }) {
 
             return (
               <>
+                {/* Summary card */}
+                <div style={{ display:"flex", gap:1, borderRadius:14, overflow:"hidden", border:"1px solid var(--border)", marginBottom:16, boxShadow:"0 1px 4px rgba(30,77,53,0.06)" }}>
+                  <div style={{ flex:1, background:"var(--surface)", padding:"14px 20px", textAlign:"center", borderLeft:"1px solid var(--border)" }}>
+                    <div style={{ fontSize:12, color:"var(--text-dim)", fontWeight:500, marginBottom:4 }}>סה"כ תנועות</div>
+                    <div style={{ fontFamily:"'Frank Ruhl Libre',serif", fontSize:22, fontWeight:700, letterSpacing:"-0.5px", color: reviewIsNetNegative ? "var(--red)" : "var(--green-mid)" }}>
+                      {reviewIsNetNegative ? "-" : ""}₪{Math.round(reviewTotalAll).toLocaleString()}
+                    </div>
+                  </div>
+                  <div style={{ flex:1, background:"var(--surface)", padding:"14px 20px", textAlign:"center" }}>
+                    <div style={{ fontSize:12, color:"var(--text-dim)", fontWeight:500, marginBottom:4, display:"flex", alignItems:"center", justifyContent:"center", gap:5 }}>
+                      {reviewIgnoredCount > 0 ? `סה"כ אחרי ניכויים (ללא ${reviewIgnoredCount})` : `סה"כ אחרי ניכויים`}
+                      <span style={{ position:"relative", display:"inline-flex" }}>
+                        <button type="button" onClick={() => setEconInfoOpen(p => !p)}
+                          style={{ background:"none", border:"none", cursor:"pointer", padding:0, color:"var(--text-dim)", display:"inline-flex", lineHeight:1 }}>
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                          </svg>
+                        </button>
+                        {econInfoOpen && (
+                          <>
+                            <div onClick={() => setEconInfoOpen(false)} style={{ position:"fixed", inset:0, zIndex:"calc(var(--z-drop) - 1)" }} />
+                            <div style={{ position:"absolute", bottom:"calc(100% + 6px)", left:"50%", transform:"translateX(-50%)", background:"var(--green-deep)", color:"#fff", borderRadius:10, padding:"10px 14px", fontSize:13, lineHeight:1.55, whiteSpace:"nowrap", zIndex:"var(--z-drop)", boxShadow:"0 4px 16px rgba(0,0,0,0.2)", textAlign:"right" }}>
+                              הסכום הכולל בניכוי תנועות שסומנו<br/>כ"התעלם" (למשל: העברות פנימיות,<br/>הוצאות שממומנות בידי גורם חיצוני).
+                              <div style={{ position:"absolute", bottom:-5, left:"50%", transform:"translateX(-50%)", width:10, height:10, background:"var(--green-deep)", clipPath:"polygon(50% 100%,0 0,100% 0)" }} />
+                            </div>
+                          </>
+                        )}
+                      </span>
+                    </div>
+                    <div style={{ fontFamily:"'Frank Ruhl Libre',serif", fontSize:22, fontWeight:700, color:"var(--red)", letterSpacing:"-0.5px" }}>₪{Math.round(reviewTotalEconomic).toLocaleString()}</div>
+                  </div>
+                </div>
+
+                {/* Help strip */}
+                <div style={{ fontSize:13, color:"var(--text-dim)", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:10, padding:"8px 14px", marginBottom:12, display:"flex", alignItems:"center", gap:14, flexWrap:"wrap" }}>
+                  <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}>
+                    <DocIcon name="pencil" color="var(--text-dim)" size={13} />
+                    <span>הוספת הערה ליועץ</span>
+                  </span>
+                  <span style={{ opacity:0.3 }}>|</span>
+                  <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}>
+                    <DocIcon name="ban" color="var(--text-dim)" size={13} />
+                    <span>התעלם — לא ייספר בסה"כ (למשל: הוצאה שאין להתייחס אליה, תשלום לימודים במימון ההורים)</span>
+                  </span>
+                </div>
+
                 {hasIncome && (
                   <>
-                    <div style={{ fontWeight:800, fontSize: 20, color:"var(--green-deep)", marginBottom:10, marginTop:8, padding:"10px 14px", background:"var(--green-mint)", borderRadius:10, display:"flex", alignItems:"center", gap:8, borderBottom:"2px solid var(--green-soft)" }}>
-                      הכנסות <span style={{ fontWeight:500, color:"var(--green-mid)", fontSize: 16 }}>({incomeTxs.length})</span>
+                    <div style={{ fontWeight:700, fontSize:16, color:"var(--green-deep)", marginBottom:10, marginTop:8, padding:"10px 16px", background:"var(--green-mint)", borderRadius:12, display:"flex", alignItems:"center", gap:8, border:"1px solid var(--green-soft)" }}>
+                      <DocIcon name="bar-chart" color="var(--green-deep)" size={15} />
+                      הכנסות <span style={{ fontWeight:500, color:"var(--green-mid)", fontSize:14 }}>({incomeTxs.length})</span>
                     </div>
                     {incomeTxs.map(tx => renderTxCard(tx, false))}
                   </>
                 )}
                 {expenseTxs.length > 0 && (
-                  <div style={{ fontWeight:800, fontSize: 20, color:"var(--red)", marginBottom:10, marginTop: hasIncome ? 16 : 8, padding:"10px 14px", background:"var(--red-light)", borderRadius:10, display:"flex", alignItems:"center", gap:8, borderBottom:"2px solid var(--red)" }}>
-                    הוצאות <span style={{ fontWeight:500, color:"var(--text-dim)", fontSize: 16 }}>({expenseTxs.length})</span>
+                  <div style={{ fontWeight:700, fontSize:16, color:"var(--red)", marginBottom:10, marginTop: hasIncome ? 16 : 8, padding:"10px 16px", background:"var(--red-light)", borderRadius:12, display:"flex", alignItems:"center", gap:8, border:"1px solid rgba(192,57,43,0.2)" }}>
+                    <DocIcon name="bar-chart" color="var(--red)" size={15} />
+                    פירוט תנועות <span style={{ fontWeight:500, color:"var(--text-dim)", fontSize:14 }}>({expenseTxs.length})</span>
                   </div>
                 )}
                 {expenseTxs.map(tx => renderTxCard(tx, false))}
                 {hasTransfers && (
                   <>
-                    <div style={{ fontWeight:800, fontSize: 20, color:"var(--text-dim)", marginBottom:6, marginTop:20, padding:"10px 14px", background:"var(--surface2)", borderRadius:10, display:"flex", alignItems:"center", gap:8, borderBottom:"2px solid var(--border)" }}>
-                      חיובי אשראי <span style={{ fontWeight:500, color:"var(--text-dim)", fontSize: 16 }}>({creditTransferTxs.length})</span>
+                    <div style={{ fontWeight:700, fontSize:16, color:"var(--text-mid)", marginBottom:6, marginTop:20, padding:"10px 16px", background:"var(--surface2)", borderRadius:12, display:"flex", alignItems:"center", gap:8, border:"1px solid var(--border)" }}>
+                      <DocIcon name="credit-card" color="var(--text-mid)" size={15} />
+                      חיובי אשראי <span style={{ fontWeight:500, color:"var(--text-dim)", fontSize:14 }}>({creditTransferTxs.length})</span>
                     </div>
-                    <div style={{ fontSize: 15, color:"var(--text-dim)", background:"rgba(255,183,77,0.08)", border:"1px solid rgba(255,183,77,0.25)", borderRadius:8, padding:"8px 14px", marginBottom:10 }}>
-                      תנועות אלו הן תשלומי כרטיס אשראי — <strong>לא נספרות כהוצאה</strong> כדי למנוע כפילות עם נתוני מקס/ישראכרט. לחץ על ↩ כדי להעביר להוצאות.
+                    <div style={{ fontSize:14, color:"var(--text-dim)", background:"var(--gold-light)", border:"1px solid rgba(255,183,77,0.35)", borderRadius:10, padding:"9px 14px", marginBottom:10, display:"flex", alignItems:"flex-start", gap:8 }}>
+                      <DocIcon name="alert" color="var(--gold)" size={15} />
+                      <span>תנועות אלו הן תשלומי כרטיס אשראי — <strong>לא נספרות כהוצאה</strong> כדי למנוע כפילות עם נתוני מקס/ישראכרט. לחץ על "הוצאה" כדי להעביר.</span>
                     </div>
                     {creditTransferTxs.map(tx => renderTxCard(tx, true))}
                   </>
@@ -1355,8 +1557,8 @@ export default function ClientApp({ session, onLogout }) {
               <div style={{ display:"flex", alignItems:"center", gap:10, background:"var(--green-deep)", color:"#fff", borderRadius:14, padding:"10px 20px", boxShadow:"0 4px 24px rgba(30,77,53,0.45)", fontSize: 16 }}>
                 <span style={{ fontWeight:700 }}>{selectedTxIds.size} נבחרו</span>
                 <button type="button" onClick={() => { setTransactions(prev => prev.map(t => selectedTxIds.has(t.id) ? { ...t, cat:"להתעלם", edited:true, conf:"high" } : t)); setSelectedTxIds(new Set()); }}
-                  style={{ background:"rgba(255,255,255,0.15)", border:"1px solid rgba(255,255,255,0.3)", borderRadius:8, padding:"5px 14px", fontSize: 15, color:"#fff", cursor:"pointer", fontFamily:"inherit", fontWeight:600 }}>
-                  ⊘ התעלם מנבחרים
+                  style={{ background:"rgba(255,255,255,0.15)", border:"1px solid rgba(255,255,255,0.3)", borderRadius:8, padding:"5px 14px", fontSize:15, color:"#fff", cursor:"pointer", fontFamily:"inherit", fontWeight:600, display:"inline-flex", alignItems:"center", gap:6 }}>
+                  <DocIcon name="ban" color="#fff" size={14} /> התעלם מנבחרים
                 </button>
                 <button type="button" onClick={() => { setTransactions(prev => prev.filter(t => !selectedTxIds.has(t.id))); setSelectedTxIds(new Set()); }}
                   style={{ background:"rgba(192,57,43,0.7)", border:"1px solid rgba(255,255,255,0.2)", borderRadius:8, padding:"5px 14px", fontSize: 15, color:"#fff", cursor:"pointer", fontFamily:"inherit", fontWeight:600 }}>
@@ -1373,7 +1575,8 @@ export default function ClientApp({ session, onLogout }) {
             <Btn onClick={saveSubmission} style={{ boxShadow:"0 4px 20px rgba(45,106,79,0.3)", padding:"12px 36px", fontSize: 17 }}>שמור את כל הסיווגים ←</Btn>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* ── PAYSLIPS ── */}
       {screen === "payslips" && (
@@ -1391,6 +1594,7 @@ export default function ClientApp({ session, onLogout }) {
           onBack={() => setScreen("dashboard")}
         />
       )}
+      </main>
 
       {/* ── פס צד יצירת קשר ── */}
       <a
@@ -1471,6 +1675,9 @@ function DocIcon({ name, color = "var(--green-mid)", size = 20 }: { name: string
   if (name==="pin")          return <svg {...s}><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>;
   if (name==="eye")          return <svg {...s}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>;
   if (name==="unlock")       return <svg {...s}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>;
+  if (name==="ban")          return <svg {...s}><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>;
+  if (name==="undo")         return <svg {...s}><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.96"/></svg>;
+  if (name==="credit-card")  return <svg {...s}><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>;
   return <svg {...s}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>;
 }
 
@@ -1485,22 +1692,30 @@ function MonthPickerModal({ usedMonths, onConfirm, onCancel }) {
   const alreadyUsed = usedMonths.includes(key);
   return (
     <>
-      <div onClick={onCancel} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", zIndex:9000 }} />
-      <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:`1px solid ${"var(--border)"}`, borderRadius:16, padding:28, zIndex:9001, width:320, boxShadow:"0 20px 60px rgba(0,0,0,0.6)" }}>
+      <div onClick={onCancel} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", zIndex:"var(--z-back)" }} />
+      <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:`1px solid ${"var(--border)"}`, borderRadius:16, padding:28, zIndex:"var(--z-modal)", width:320, boxShadow:"0 20px 60px rgba(0,0,0,0.6)" }}>
         <div style={{ fontWeight:700, fontSize: 18, marginBottom:20, color:"var(--green-deep)" }}>הוסף חודש</div>
         <div style={{ marginBottom:14 }}>
           <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:5, fontWeight:600 }}>חודש</div>
-          <select value={month} onChange={e => setMonth(Number(e.target.value))} style={{ width:"100%", background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:8, padding:"10px 12px", color:"var(--text)", fontFamily:"'Heebo',sans-serif", fontSize: 15, direction:"rtl" }}>
-            {HEBREW_MONTHS.map((m,i) => <option key={i} value={i}>{m}</option>)}
-          </select>
+          <CustomSelect
+            value={month}
+            onChange={v => setMonth(Number(v))}
+            options={HEBREW_MONTHS.map((m, i) => ({ value: i, label: m }))}
+            dropdownZIndex={9010}
+            style={{ width: "100%" }}
+          />
         </div>
         <div style={{ marginBottom:20 }}>
           <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:5, fontWeight:600 }}>שנה</div>
-          <select value={year} onChange={e => setYear(Number(e.target.value))} style={{ width:"100%", background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:8, padding:"10px 12px", color:"var(--text)", fontFamily:"'Heebo',sans-serif", fontSize: 15, direction:"rtl" }}>
-            {years.map(y => <option key={y} value={y}>{y}</option>)}
-          </select>
+          <CustomSelect
+            value={year}
+            onChange={v => setYear(Number(v))}
+            options={years.map(y => ({ value: y, label: String(y) }))}
+            dropdownZIndex={9010}
+            style={{ width: "100%" }}
+          />
         </div>
-        {alreadyUsed && <div style={{ background:"rgba(255,183,77,0.1)", border:"1px solid rgba(255,183,77,0.3)", borderRadius:8, padding:"8px 12px", fontSize: 14, color:"var(--gold)", marginBottom:14 }}>⚠️ חודש זה כבר קיים — לחץ עליו ברשימה</div>}
+        {alreadyUsed && <div style={{ background:"rgba(255,183,77,0.1)", border:"1px solid rgba(255,183,77,0.3)", borderRadius:8, padding:"8px 12px", fontSize: 14, color:"var(--gold)", marginBottom:14 }}>חודש זה כבר קיים — לחץ עליו ברשימה</div>}
         <div style={{ display:"flex", gap:10 }}>
           <Btn onClick={() => onConfirm(key, HEBREW_MONTHS[month], year)} disabled={alreadyUsed} style={{ flex:1, justifyContent:"center" }}>בחר ←</Btn>
           <Btn variant="ghost" onClick={onCancel}>ביטול</Btn>
@@ -1517,8 +1732,8 @@ function ConfirmModal({ title, body, confirmText = "אשר", danger = false, onC
 }) {
   return (
     <>
-      <div onClick={onCancel} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:9000 }} />
-      <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:16, padding:28, zIndex:9001, width:340, boxShadow:"0 20px 60px rgba(0,0,0,0.4)", direction:"rtl" }}>
+      <div onClick={onCancel} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:"var(--z-back)" }} />
+      <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:16, padding:28, zIndex:"var(--z-modal)", width:340, boxShadow:"0 20px 60px rgba(0,0,0,0.4)", direction:"rtl" }}>
         <div style={{ fontWeight:700, fontSize:18, marginBottom: body ? 12 : 20, color: danger ? "var(--red)" : "var(--green-deep)" }}>{title}</div>
         {body && <div style={{ fontSize:15, color:"var(--text-dim)", marginBottom:20, lineHeight:1.6 }}>{body}</div>}
         <div style={{ display:"flex", gap:10 }}>
@@ -1573,10 +1788,11 @@ const LOAN_TYPES = [
   { id:"loan_other",    label:"הלוואה אחרת",          icon:"file",       type:"both" },
 ];
 
-function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, payslips, docs, submittedAt, requiredDocs, questionnaireSpouses, docNotes, customDocs, spouseNames, employmentTypes, noPayslipReasons, onNavigateTxs, onOpenExistingMonth, onNavigatePayslips, onNoPayslipReasonSave, onNavigateQuestionnaire, onDocsChange, onMonthsChange, onSubmit }) {
+function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, payslips, docs, submittedAt, requiredDocs, questionnaireSpouses, docNotes, customDocs, spouseNames, employmentTypes, noPayslipReasons, electricityBills, onElectricityChange, onNavigateTxs, onOpenExistingMonth, onNavigatePayslips, onNoPayslipReasonSave, onNavigateQuestionnaire, onDocsChange, onMonthsChange, onSubmit }) {
   spouseNames = spouseNames || { s1: null, s2: null };
   employmentTypes = employmentTypes || { s1: null, s2: null };
   noPayslipReasons = noPayslipReasons || { s1: null, s2: null };
+  electricityBills = electricityBills || [];
   docNotes = docNotes || {};
   customDocs = customDocs || [];
   const [expanded, setExpanded]       = useState(null);
@@ -1666,16 +1882,21 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
   const bankStmtPartial = needsBankStmt && !bankStmtDone &&
     Array.from({ length: bankAccountCount }, (_, i) => i + 1).some(n => hasFiles(`bank_stmt_${n}`) || isDone(`bank_stmt_${n}`));
 
-  const requiredDone  = txsDone && payslipsDone && allOptDone && questDone && bankStmtDone;
+  const elecTotalMonths    = electricityBills.reduce((s, r) => s + (r.months || 0), 0);
+  const electricityDone    = elecTotalMonths >= 12;
+  const electricityPartial = electricityBills.length > 0 && !electricityDone;
+
+  const requiredDone  = txsDone && payslipsDone && allOptDone && questDone && bankStmtDone && electricityDone;
 
   const REQUIRED_MONTHS = 3;
   const payslipPersonCount = hasSpouse2 ? 2 : 1;
-  const totalItems     = REQUIRED_MONTHS + payslipPersonCount + visibleOptional.length + (needsQuestionnaire ? 1 : 0) + (needsBankStmt ? 1 : 0);
+  const totalItems     = REQUIRED_MONTHS + payslipPersonCount + visibleOptional.length + (needsQuestionnaire ? 1 : 0) + (needsBankStmt ? 1 : 0) + 1;
   const completedItems = Math.min(finalizedMonths.length, REQUIRED_MONTHS)
     + (s1PayslipsDone ? 1 : 0) + (hasSpouse2 && s2PayslipsDone ? 1 : 0)
     + visibleOptional.filter(s => optDoneMap[s]).length
     + (needsQuestionnaire && questDone ? 1 : 0)
-    + (needsBankStmt && bankStmtDone ? 1 : 0);
+    + (needsBankStmt && bankStmtDone ? 1 : 0)
+    + (electricityDone ? 1 : 0);
   const progressPct    = totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0;
 
   // load bankAccountCount from bank_stmt_meta extra_data
@@ -1698,7 +1919,13 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
   }, [docs]);
 
   const loansDone = isDone("loans_section");
-  const loansHasAny = activeLoanTypes.length > 0;
+  const loansHasAny = activeLoanTypes.length > 0 && activeLoanTypes.every(cat => {
+    const lt = LOAN_TYPES.find(l => l.id === cat);
+    if (!lt) return false;
+    if (lt.type === "fields") return Object.values(loanFields[cat] || {}).some(v => !!v);
+    if (lt.type === "both") return hasFiles(cat) || Object.values(loanFields[cat] || {}).some(v => !!v);
+    return hasFiles(cat);
+  });
 
   const toggle = id => {
     setExpanded(e => e === id ? null : id);
@@ -1760,6 +1987,16 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
     }
     setPendingFiles(prev => { const n={...prev}; delete n[cat]; return n; });
     setExpanded(null);
+    await onDocsChange();
+    setSaving(null);
+  };
+
+  const undoDone = async (cat: string) => {
+    setSaving(cat);
+    const existing = getDoc(cat);
+    if (existing) {
+      await supabase.from("client_documents").update({ marked_done: false }).eq("id", existing.id);
+    }
     await onDocsChange();
     setSaving(null);
   };
@@ -1888,36 +2125,47 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
   };
 
 
-  const SectionHeader = ({ id, icon, label, required = false, done, partial, onClick, onInfo = null }) => (
-    <div
-      role="button" tabIndex={0}
-      onClick={onClick}
-      onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }}
-      style={{ display:"flex", alignItems:"center", gap:12, padding:"14px 18px", background: done?"rgba(46,204,138,0.06)":"var(--surface2)", borderRadius: expanded===id?"10px 10px 0 0":10, border:`1px solid ${done?"rgba(46,204,138,0.3)":partial?"rgba(79,142,247,0.3)":"var(--border)"}`, cursor:"pointer", userSelect:"none" }}>
-      <span style={{ display:"flex", alignItems:"center", flexShrink:0 }}>{icon}</span>
-      <div style={{ flex:1 }}>
-        <div style={{ fontWeight:600, fontSize: 16 }}>{label}</div>
-        {required && <div style={{ fontSize: 11, fontWeight: 700, color: "#dc2626", background: "rgba(220,38,38,0.1)", borderRadius: 20, padding: "2px 8px", display: "inline-block" }}>חובה</div>}
+  const SectionHeader = ({ id, icon, label, required = false, progressText = null, done, partial, onClick, onInfo = null }) => {
+    const isExp = expanded === id;
+    const statusLabel = done ? "הושלם" : partial ? "בתהליך" : "להעלאה";
+    const statusSt = done
+      ? { color:"var(--green-deep)", background:"var(--green-mint)", border:"1px solid var(--green-mint)" }
+      : partial
+      ? { color:"var(--gold)", background:"var(--gold-light)", border:"1px solid var(--gold-light)" }
+      : { color:"var(--text-dim)", background:"var(--surface2)", border:"1px solid var(--border)" };
+    const sublabel = [required && "חובה", progressText].filter(Boolean).join(" • ");
+    return (
+      <div
+        role="button" tabIndex={0}
+        onClick={onClick}
+        onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }}
+        onMouseEnter={e => { if (!isExp) { const el=e.currentTarget as HTMLElement; el.style.boxShadow="0 4px 16px rgba(0,0,0,0.07)"; el.style.transform="translateY(-1px)"; el.style.borderColor="rgba(45,106,79,0.25)"; } }}
+        onMouseLeave={e => { if (!isExp) { const el=e.currentTarget as HTMLElement; el.style.boxShadow="none"; el.style.transform="none"; el.style.borderColor=done?"rgba(45,106,79,0.2)":partial?"rgba(183,146,76,0.2)":"var(--border)"; } }}
+        style={{ display:"flex", alignItems:"center", gap:14, padding:"14px 16px", background:"var(--surface)", border:`1px solid ${done?"rgba(45,106,79,0.2)":partial?"rgba(183,146,76,0.2)":"var(--border)"}`, borderRadius:isExp?"12px 12px 0 0":12, cursor:"pointer", userSelect:"none" as const, transition:"box-shadow 0.18s, transform 0.18s, border-color 0.18s" }}>
+        <div style={{ width:38, height:38, borderRadius:10, background:"var(--green-pale)", color:"var(--green-mid)", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{icon}</div>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontSize:15, fontWeight:600, color:"var(--text)" }}>{label}</div>
+          {sublabel && <div style={{ fontSize:12.5, color:"var(--text-dim)", marginTop:3 }}>{sublabel}</div>}
+        </div>
+        {onInfo && (
+          <button
+            onClick={e => { e.stopPropagation(); onInfo(); }}
+            title="צפה שוב בהדרכה"
+            aria-label="צפה שוב בהדרכה"
+            style={{ background:"none", border:"none", cursor:"pointer", color:"var(--text-dim)", padding:"4px", borderRadius:6, display:"flex", alignItems:"center", flexShrink:0, transition:"color 0.15s" }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "var(--green-mid)"; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = "var(--text-dim)"; }}
+          >
+            <DocIcon name="play-circle" size={15} color="currentColor" />
+          </button>
+        )}
+        <span style={{ fontSize:12, fontWeight:600, padding:"4px 10px", borderRadius:99, flexShrink:0, ...statusSt }}>{statusLabel}</span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color:"var(--text-dim)", flexShrink:0, transform:isExp?"rotate(180deg)":"rotate(0deg)", transition:"transform 0.15s" }}><polyline points="6 9 12 15 18 9"/></svg>
       </div>
-      {done && <span style={{ background:"rgba(46,204,138,0.15)", color:"#22c55e", borderRadius:20, padding:"3px 12px", fontSize: 14, fontWeight:700, display:"inline-flex", alignItems:"center", gap:4 }}><DocIcon name="check-circle" color="#22c55e" size={14} /> הושלם</span>}
-      {!done && partial && <span style={{ background:"rgba(79,142,247,0.12)", color:"var(--green-mid)", borderRadius:20, padding:"3px 12px", fontSize: 14 }}>בתהליך</span>}
-      {onInfo && (
-        <button
-          onClick={e => { e.stopPropagation(); onInfo(); }}
-          title="צפה שוב בהדרכה"
-          aria-label="צפה שוב בהדרכה"
-          style={{ background:"none", border:"none", cursor:"pointer", color:"var(--text-dim)", padding:"4px", borderRadius:6, display:"flex", alignItems:"center", flexShrink:0, transition:"color 0.15s" }}
-          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "var(--green-mid)"; }}
-          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = "var(--text-dim)"; }}
-        >
-          <DocIcon name="play-circle" size={15} color="currentColor" />
-        </button>
-      )}
-      <span style={{ color:"var(--text-dim)", fontSize: 16, marginRight:4 }}>{expanded===id?"▲":"▼"}</span>
-    </div>
-  );
+    );
+  };
 
-  const DoneLine = ({ done }) => done ? <div style={{ height:3, background:"linear-gradient(90deg,#22c55e,rgba(46,204,138,0.2))", borderRadius:"0 0 6px 6px", marginBottom:2 }} /> : null;
+  const DoneLine = ({ done }) => null;
 
   const openFile = async (path) => {
     if (!path) return;
@@ -1935,7 +2183,7 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
           <div key={i} style={{ display:"flex", alignItems:"center", gap:8, fontSize: 14, color:"var(--text)", padding:"3px 0" }}>
             <span style={{ display:"flex", alignItems:"center", gap:4 }}><DocIcon name="paperclip" color="var(--text-dim)" size={14} />{f.filename}</span>
             {f.path && <button onClick={() => openFile(f.path)} style={{ background:"none", border:"none", color:"var(--green-mid)", cursor:"pointer", fontSize: 13, padding:"0 2px", display:"inline-flex", alignItems:"center" }} title="צפה"><DocIcon name="eye" color="var(--green-mid)" size={13} /></button>}
-            <button onClick={() => deleteFile(cat, i)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize: 13, padding:"0 2px" }} title="מחק">✕</button>
+            <button onClick={() => deleteFile(cat, i)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize: 13, padding:"0 2px" }} title="מחק">×</button>
           </div>
         ))}
         {pend.map((f,i) => (
@@ -1954,7 +2202,7 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
   );
 
   const fldStyle = { width:"100%", boxSizing:"border-box", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"8px 10px", color:"var(--text)", fontSize: 14, fontFamily:"inherit", outline:"none" };
-  const bodyStyle = { border:"1px solid var(--border)", borderTop:"none", borderRadius:"0 0 10px 10px", padding:"16px 18px", background:"var(--surface)", marginBottom:2, animation:"accordionIn 0.18s ease-out" };
+  const bodyStyle = { border:"1px solid var(--border)", borderTop:"none", borderRadius:"0 0 12px 12px", padding:"16px 18px", background:"var(--surface)", marginBottom:2, animation:"accordionIn 0.18s ease-out" };
   const descStyle = { fontSize: 15, color:"var(--text)", opacity:0.8, marginBottom:12 };
 
   return (
@@ -1963,22 +2211,30 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
       {/* Edit month modal */}
       {editMonthEntry && (
         <>
-          <div onClick={() => setEditMonthEntry(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:9000 }} />
-          <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:16, padding:28, zIndex:9001, width:300, boxShadow:"0 20px 60px rgba(0,0,0,0.5)" }}>
+          <div onClick={() => setEditMonthEntry(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:"var(--z-back)" }} />
+          <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:16, padding:28, zIndex:"var(--z-modal)", width:300, boxShadow:"0 20px 60px rgba(0,0,0,0.5)" }}>
             <div style={{ fontWeight:700, fontSize: 18, marginBottom:16, display:"flex", alignItems:"center", gap:8 }}><DocIcon name="pencil" color="var(--green-deep)" />ערוך חודש</div>
             <div style={{ marginBottom:12 }}>
               <div style={{ fontSize: 14, color:"var(--text-mid)", marginBottom:5, fontWeight:600 }}>חודש</div>
-              <select value={editMonthVal.month} onChange={e => { setEditMonthVal(p => ({...p, month: Number(e.target.value)})); setEditMonthErr(""); }} style={{ width:"100%", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"9px 12px", color:"var(--text)", fontFamily:"inherit", fontSize: 15, direction:"rtl" }}>
-                {HEBREW_MONTHS.map((m,i) => <option key={i} value={i}>{m}</option>)}
-              </select>
+              <CustomSelect
+                value={editMonthVal.month}
+                onChange={v => { setEditMonthVal(p => ({...p, month: Number(v)})); setEditMonthErr(""); }}
+                options={HEBREW_MONTHS.map((m, i) => ({ value: i, label: m }))}
+                dropdownZIndex={9010}
+                style={{ width: "100%" }}
+              />
             </div>
             <div style={{ marginBottom:16 }}>
               <div style={{ fontSize: 14, color:"var(--text-mid)", marginBottom:5, fontWeight:600 }}>שנה</div>
-              <select value={editMonthVal.year} onChange={e => { setEditMonthVal(p => ({...p, year: Number(e.target.value)})); setEditMonthErr(""); }} style={{ width:"100%", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"9px 12px", color:"var(--text)", fontFamily:"inherit", fontSize: 15, direction:"rtl" }}>
-                {[2023,2024,2025,2026,2027].map(y => <option key={y} value={y}>{y}</option>)}
-              </select>
+              <CustomSelect
+                value={editMonthVal.year}
+                onChange={v => { setEditMonthVal(p => ({...p, year: Number(v)})); setEditMonthErr(""); }}
+                options={[2023,2024,2025,2026,2027].map(y => ({ value: y, label: String(y) }))}
+                dropdownZIndex={9010}
+                style={{ width: "100%" }}
+              />
             </div>
-            {editMonthErr && <div style={{ fontSize: 14, color:"var(--red)", marginBottom:10 }}>⚠️ {editMonthErr}</div>}
+            {editMonthErr && <div style={{ fontSize: 14, color:"var(--red)", marginBottom:10 }}>{editMonthErr}</div>}
             <div style={{ display:"flex", gap:8 }}>
               <Btn onClick={saveEditMonth} disabled={editMonthSaving} style={{ flex:1, justifyContent:"center" }}>{editMonthSaving ? "שומר..." : "שמור"}</Btn>
               <Btn variant="ghost" onClick={() => setEditMonthEntry(null)} style={{ flex:1, justifyContent:"center" }}>ביטול</Btn>
@@ -1987,20 +2243,18 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
         </>
       )}
 
-      {/* Progress bar */}
-      <div style={{ marginBottom:20 }}>
-        <div style={{ display:"flex", justifyContent:"space-between", fontSize: 15, color:"var(--text-dim)", marginBottom:6 }}>
-          <span>התקדמות כללית</span>
-          <span style={{ fontWeight:700, color: progressPct===100?"#22c55e":"var(--text-dim)" }}>{progressPct}%</span>
+      {/* Page title */}
+      <h1 style={{ fontFamily:"'Frank Ruhl Libre', serif", fontSize:32, fontWeight:700, color:"var(--text)", textAlign:"center", marginBottom:16, marginTop:0 }}>חומרי בסיס</h1>
+      <div style={{ height:1, background:"var(--border)", marginBottom:20 }} />
+
+      {/* Progress card */}
+      <div style={{ marginBottom:20, background:"var(--surface)", border:"1px solid var(--border)", borderRadius:12, padding:"12px 16px" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:6 }}>
+          <span style={{ fontSize:14, color:"var(--text-dim)" }}>התקדמות כללית</span>
+          <span style={{ fontFamily:"'Frank Ruhl Libre', serif", fontSize:24, fontWeight:700, color:"var(--green-deep)", lineHeight:1 }}>{progressPct}%</span>
         </div>
-        <div style={{ background:"var(--surface2)", borderRadius:20, height:10, overflow:"hidden" }}>
-          <div style={{ width:`${progressPct}%`, height:"100%", background:"linear-gradient(90deg,var(--green-mid),var(--green-soft))", borderRadius:20, transition:"width .4s" }} />
-        </div>
-        <div style={{ fontSize: 13, color:"var(--text-dim)", marginTop:6, display:"flex", gap:12, flexWrap:"wrap" }}>
-          <span style={{ color: txsDone ? "var(--green-soft)" : "var(--text-dim)" }}>{txsDone ? "✓" : "○"} תנועות {Math.min(finalizedMonths.length, REQUIRED_MONTHS)}/{REQUIRED_MONTHS}</span>
-          {needsBankStmt && <span style={{ color: bankStmtDone ? "var(--green-soft)" : "var(--text-dim)" }}>{bankStmtDone ? "✓" : "○"} פירוט עו"ש</span>}
-          <span style={{ color: payslipsDone ? "var(--green-soft)" : "var(--text-dim)" }}>{payslipsDone ? "✓" : "○"} תלושי שכר {Math.min(payslips.length, REQUIRED_MONTHS)}/{REQUIRED_MONTHS}</span>
-          {needsQuestionnaire && <span style={{ color: questDone ? "var(--green-soft)" : "var(--text-dim)" }}>{questDone ? "✓" : "○"} שאלון אישי</span>}
+        <div style={{ height:8, background:"var(--surface2)", borderRadius:99, overflow:"hidden" }}>
+          <div style={{ width:`${progressPct}%`, height:"100%", background:"linear-gradient(90deg,var(--green-soft),var(--green-mid))", borderRadius:99, transition:"width .4s" }} />
         </div>
       </div>
 
@@ -2011,24 +2265,26 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
 
       {/* 1. פירוט תנועות */}
       <div style={{ marginBottom:8 }}>
-        <SectionHeader id="txs" icon={<DocIcon name="folder" />} label="פירוט תנועות — 3 חודשים" required done={txsDone} partial={finalizedMonths.length>0&&!txsDone} onClick={()=>toggle("txs")} />
+        <SectionHeader id="txs" icon={<DocIcon name="folder" />} label="פירוט תנועות — 3 חודשים" required progressText={`${finalizedMonths.length} מתוך 3 הועלו`} done={txsDone} partial={finalizedMonths.length>0&&!txsDone} onClick={()=>toggle("txs")} />
         <DoneLine done={txsDone} />
         {expanded==="txs" && (
           <div style={bodyStyle}>
             {finalizedMonths.map(m => (
-              <div key={m.id} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", fontSize: 15, color:"var(--text)", padding:"3px 0" }}>
-                <span>✓ {m.label}</span>
-                <button onClick={() => openEditMonth(m)} style={{ background:"none", border:"none", color:"var(--text-mid)", cursor:"pointer", padding:"2px 6px", display:"inline-flex", alignItems:"center" }} title="ערוך שם חודש"><DocIcon name="pencil" color="var(--text-dim)" size={14} /></button>
+              <div key={m.id} style={{ display:"flex", alignItems:"center", gap:10, fontSize: 15, color:"var(--text)", padding:"4px 0" }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--green-mid)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}><polyline points="20 6 9 17 4 12"/></svg>
+                {m.label}
+                <Btn size="sm" variant="secondary" onClick={()=>{setExpanded(null);onOpenExistingMonth&&onOpenExistingMonth(m);}} style={{ fontSize:12, padding:"3px 10px" }}>ערוך ←</Btn>
               </div>
             ))}
             {(inProgressMonths||[]).map(m => (
-              <div key={m.id} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", fontSize: 15, color:"var(--text-mid)", padding:"3px 0" }}>
-                <span>⏳ {m.label} — בתהליך</span>
-                <Btn size="sm" variant="ghost" onClick={()=>{setExpanded(null);onOpenExistingMonth&&onOpenExistingMonth(m);}} style={{ fontSize:12, padding:"2px 8px" }}>המשך וסיים →</Btn>
+              <div key={m.id} style={{ display:"flex", alignItems:"center", gap:10, fontSize: 15, color:"var(--text-mid)", padding:"4px 0" }}>
+                <span style={{ width:8, height:8, borderRadius:"50%", background:"#F0A500", display:"inline-block", flexShrink:0 }} />
+                {m.label}
+                <Btn size="sm" variant="secondary" onClick={()=>{setExpanded(null);onOpenExistingMonth&&onOpenExistingMonth(m);}} style={{ fontSize:12, padding:"3px 10px" }}>המשך ←</Btn>
               </div>
             ))}
             <div style={{ ...descStyle, marginTop:6 }}>{txsDone ? "3 חודשי פירוט הושלמו ✓" : `הושלמו ${finalizedMonths.length} מתוך 3 חודשים`}</div>
-            {!txsDone && <Btn size="sm" onClick={()=>{setExpanded(null);onNavigateTxs();}} style={{ display:"inline-flex", alignItems:"center", gap:6 }}><DocIcon name="folder" color="#fff" /> הוסף חודש →</Btn>}
+            {!txsDone && <Btn size="sm" onClick={()=>{setExpanded(null);onNavigateTxs();}} style={{ display:"inline-flex", alignItems:"center", gap:6 }}><DocIcon name="folder" color="#fff" /> הוסף חודש ←</Btn>}
           </div>
         )}
       </div>
@@ -2085,7 +2341,7 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
                     <>
                       {bankParseWarnings[n] && (
                         <div style={{ fontSize:13, color:"#d97706", background:"rgba(217,119,6,0.1)", borderRadius:6, padding:"6px 10px", marginBottom:8, borderRight:"3px solid #d97706" }}>
-                          ⚠️ הבנק לא זוהה אוטומטית — הקובץ הועלה בהצלחה, אך לא ניתן לנתח אותו בצורה אוטומטית. אלון יבדוק אותו ידנית.
+                          הבנק לא זוהה אוטומטית — הקובץ הועלה בהצלחה, אך לא ניתן לנתח אותו בצורה אוטומטית. אלון יבדוק אותו ידנית.
                         </div>
                       )}
                       <UploadArea cat={`bank_stmt_${n}`} accept=".pdf,.xlsx,.xls,.csv,.jpg,.jpeg,.png" />
@@ -2112,7 +2368,7 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
 
       {/* 3. תלושי שכר */}
       <div style={{ marginBottom:8 }}>
-        <SectionHeader id="pays" icon={<DocIcon name="payslip" />} label={hasSpouse2 ? "תלושי שכר — 3 חודשים לכל אחד" : "תלושי שכר — 3 חודשים"} required done={payslipsDone} partial={(s1Payslips.length>0||s2Payslips.length>0||!!noPayslipReasons.s1||!!noPayslipReasons.s2)&&!payslipsDone} onClick={()=>toggle("pays")} />
+        <SectionHeader id="pays" icon={<DocIcon name="payslip" />} label={hasSpouse2 ? "תלושי שכר — 3 חודשים לכל אחד" : "תלושי שכר — 3 חודשים"} required progressText={`${payslips.length} מתוך ${hasSpouse2?6:3} הועלו`} done={payslipsDone} partial={(s1Payslips.length>0||s2Payslips.length>0||!!noPayslipReasons.s1||!!noPayslipReasons.s2)&&!payslipsDone} onClick={()=>toggle("pays")} />
         <DoneLine done={payslipsDone} />
         {expanded==="pays" && (
           <div style={bodyStyle}>
@@ -2148,7 +2404,7 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
                         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
                           <Btn size="sm" variant="secondary" onClick={()=>{setExpanded(null);onNavigatePayslips(idx);}} style={{ display:"inline-flex", alignItems:"center", gap:6 }}>
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--green-deep)" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
-                            העלה תלוש →
+                            העלה תלוש ←
                           </Btn>
                           {noPayslipInput?.spouse !== idx && (
                             <Btn size="sm" variant="ghost" onClick={() => setNoPayslipInput({ spouse: idx, val: "" })} style={{ fontSize:13, color:"var(--text-dim)" }}>אין לי תלושים</Btn>
@@ -2182,7 +2438,108 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
         )}
       </div>
 
-      {/* 3. הלוואות */}
+      {/* 4. פירוט חשבון חשמל */}
+      <div style={{ marginBottom:8 }}>
+        <SectionHeader id="electricity" icon={<DocIcon name="doc" />} label="פירוט חשבון חשמל שנתי" required done={electricityDone} partial={electricityPartial} onClick={()=>toggle("electricity")} />
+        <DoneLine done={electricityDone} />
+        {expanded==="electricity" && (
+          <div style={bodyStyle}>
+            <div style={descStyle}>הזן את חשבונות החשמל שלך לשנה האחרונה. לכל חשבון ציין את הסכום וכמה חודשים הוא מכסה.</div>
+            {/* KPI — מוצג רק לאחר הוספת חשבון ראשון */}
+            {electricityBills.length > 0 && (
+              <div style={{ display:"flex", gap:10, marginBottom:12, marginTop:10, flexWrap:"wrap" }}>
+                <div style={{ flex:1, background:"var(--surface2)", borderRadius:8, padding:"8px 12px", minWidth:90, textAlign:"center" }}>
+                  <div style={{ fontSize:11, color:"var(--text-dim)", marginBottom:2 }}>חודשים שמולאו</div>
+                  <div style={{ fontSize:20, fontWeight:700 }}>{elecTotalMonths}<span style={{ fontSize:12, color:"var(--text-dim)", marginRight:2 }}>/12</span></div>
+                </div>
+                <div style={{ flex:1, background:"var(--surface2)", borderRadius:8, padding:"8px 12px", minWidth:90, textAlign:"center" }}>
+                  <div style={{ fontSize:11, color:"var(--text-dim)", marginBottom:2 }}>חודשים שנותרו</div>
+                  <div style={{ fontSize:20, fontWeight:700, color: elecTotalMonths>=12 ? "var(--green)" : "var(--text)" }}>{Math.max(0,12-elecTotalMonths)}</div>
+                </div>
+                {elecTotalMonths > 0 && (
+                  <div style={{ flex:1, background:"var(--surface2)", borderRadius:8, padding:"8px 12px", minWidth:90, textAlign:"center" }}>
+                    <div style={{ fontSize:11, color:"var(--text-dim)", marginBottom:2 }}>ממוצע חודשי</div>
+                    <div style={{ fontSize:20, fontWeight:700 }}>₪{Math.round(electricityBills.reduce((s,r)=>s+(parseFloat(r.amount)||0),0)/elecTotalMonths).toLocaleString()}</div>
+                  </div>
+                )}
+              </div>
+            )}
+            {/* טבלת חשבונות */}
+            {electricityBills.length > 0 && (() => {
+              let cumulative = 0;
+              const rowErrors: (number|null)[] = electricityBills.map(row => {
+                const remaining = 12 - cumulative;
+                const months = row.months || 0;
+                const err = months > 0 && months > remaining ? remaining : null;
+                cumulative += months;
+                return err;
+              });
+              return (
+                <table style={{ width:"100%", borderCollapse:"separate", borderSpacing:"0 4px", marginBottom:8 }}>
+                  <thead>
+                    <tr style={{ fontSize:13, color:"var(--text-dim)" }}>
+                      <th style={{ textAlign:"right", paddingBottom:4, fontWeight:500 }}>סכום (₪)</th>
+                      <th style={{ textAlign:"right", paddingBottom:4, fontWeight:500, paddingRight:8 }}>מספר חודשים</th>
+                      <th style={{ width:32 }} />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {electricityBills.map((row, i) => {
+                      const hasError = rowErrors[i] !== null;
+                      const maxForRow = rowErrors[i] as number;
+                      return (
+                        <>
+                          <tr key={i}>
+                            <td style={{ paddingLeft:8 }}>
+                              <input type="number" value={row.amount}
+                                onChange={e => onElectricityChange(electricityBills.map((r,idx)=>idx===i?{...r,amount:e.target.value}:r))}
+                                style={{ padding:"6px 8px", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:6, color:"var(--text)", fontSize:15, fontFamily:"inherit", width:"100%" }}
+                                placeholder="0" min="0" />
+                            </td>
+                            <td style={{ paddingRight:8, width:140 }}>
+                              <input type="number" value={row.months||""}
+                                onChange={e => onElectricityChange(electricityBills.map((r,idx)=>idx===i?{...r,months:parseInt(e.target.value)||0}:r))}
+                                style={{ padding:"6px 8px", background:"var(--surface2)", border:`1px solid ${hasError?"var(--red)":"var(--border)"}`, borderRadius:6, color:hasError?"var(--red)":"var(--text)", fontSize:15, fontFamily:"inherit", width:"100%" }}
+                                placeholder="חודשים" min="1" />
+                            </td>
+                            <td style={{ width:32, textAlign:"center" }}>
+                              <button onClick={() => onElectricityChange(electricityBills.filter((_,idx)=>idx!==i))}
+                                style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize:18, padding:"0 4px" }}>×</button>
+                            </td>
+                          </tr>
+                          {hasError && (
+                            <tr key={`err-${i}`}>
+                              <td colSpan={3} style={{ paddingBottom:6 }}>
+                                <div style={{ display:"flex", alignItems:"center", gap:6, color:"var(--red)", fontSize:13, padding:"6px 12px", background:"rgba(239,68,68,0.07)", borderRadius:8, border:"1px solid rgba(239,68,68,0.25)" }}>
+                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                                  <span>חרגת — נשאר{maxForRow===1?"":"ו"} רק <strong>{maxForRow}</strong> חודש{maxForRow===1?"":"ים"} פנוי{maxForRow===1?"":"ים"}. הזן {maxForRow} לכל היותר.</span>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              );
+            })()}
+            {!electricityDone && (
+              <button onClick={() => onElectricityChange([...electricityBills, {amount:"",months:0}])}
+                style={{ background:"none", border:"1px dashed var(--border)", borderRadius:8, padding:"6px 14px", fontSize:14, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}>
+                + הוסף חשבון
+              </button>
+            )}
+            {electricityDone && (
+              <div style={{ marginTop:8, padding:"8px 12px", background:"rgba(34,197,94,0.1)", borderRadius:8, color:"var(--green)", fontSize:13, fontWeight:600 }}>
+                ✓ כיסית 12 חודשים — ממוצע חודשי: ₪{Math.round(electricityBills.reduce((s,r)=>s+(parseFloat(r.amount)||0),0)/12).toLocaleString()}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* 5. הלוואות */}
       {visibleOptional.includes("loans") && (
         <div style={{ marginBottom:8 }}>
           <SectionHeader id="loans" icon={<DocIcon name="clipboard" />} label="מסמכי הלוואות" done={loansDone} partial={loansHasAny&&!loansDone} onClick={()=>toggle("loans")} />
@@ -2209,7 +2566,7 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
                           <div key={i} style={{ display:"flex", alignItems:"center", gap:8, fontSize: 14, color:f._pending?"var(--green-mid)":"var(--text)", padding:"2px 0" }}>
                             <span style={{ display:"flex", alignItems:"center", gap:4 }}><DocIcon name="paperclip" color={f._pending?"var(--green-mid)":"var(--text-dim)"} size={14} />{f.filename}{f._pending&&" (ממתין)"}</span>
                             {!f._pending && f.path && <button onClick={()=>openFile(f.path)} style={{ background:"none", border:"none", color:"var(--green-mid)", cursor:"pointer", fontSize: 13, display:"inline-flex", alignItems:"center" }}><DocIcon name="eye" color="var(--green-mid)" size={13} /></button>}
-                            {!f._pending && <button onClick={()=>deleteFile(cat,f._i)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize: 13 }}>✕</button>}
+                            {!f._pending && <button onClick={()=>deleteFile(cat,f._i)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize: 13 }}>×</button>}
                           </div>
                         ))}
                         <div style={{ display:"flex", gap:8, marginTop:8 }}>
@@ -2236,7 +2593,7 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
                     <button onClick={()=>setShowLoanPicker(false)} style={{ marginTop:10, fontSize: 15, color:"var(--text-dim)", background:"none", border:"none", cursor:"pointer" }}>ביטול</button>
                   </div>
               }
-              <Btn onClick={markLoansDone} disabled={!loansHasAny||saving==="loans_section"} style={{ width:"100%" }}>{saving==="loans_section"?"שומר...":"סיימתי להוסיף הלוואות"}</Btn>
+              {loansDone?<Btn onClick={()=>undoDone("loans_section")} disabled={saving==="loans_section"} style={{ width:"100%", background:"#FFF8E7", border:"1px solid #F0C040", color:"#A67C00" }}>{saving==="loans_section"?"מעדכן...":"ערוך הגשה"}</Btn>:<Btn onClick={markLoansDone} disabled={!loansHasAny||saving==="loans_section"} style={{ width:"100%" }}>{saving==="loans_section"?"שומר...":"סיימתי"}</Btn>}
             </div>
           )}
         </div>
@@ -2248,7 +2605,7 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
           <SectionHeader id="provident" icon={<DocIcon name="coins" />} label="יתרת קרן השתלמות" done={isDone("provident_fund")} partial={hasFiles("provident_fund")&&!isDone("provident_fund")} onClick={()=>toggle("provident")} />
           <NoteBar docKey="provident" />
           <DoneLine done={isDone("provident_fund")} />
-          {expanded==="provident" && <div style={bodyStyle}><div style={descStyle}>העלה דוח יתרה מחברת הביטוח / קרן הפנסיה</div><UploadArea cat="provident_fund" /><Btn onClick={()=>saveAndDone("provident_fund","קרן השתלמות")} disabled={!hasFiles("provident_fund")||saving==="provident_fund"} style={{ marginTop:14, width:"100%" }}>{saving==="provident_fund"?"שומר...":"סיימתי"}</Btn></div>}
+          {expanded==="provident" && <div style={bodyStyle}><div style={descStyle}>העלה דוח יתרה מחברת הביטוח / קרן הפנסיה</div><UploadArea cat="provident_fund" />{isDone("provident_fund")?<Btn onClick={()=>undoDone("provident_fund")} disabled={saving==="provident_fund"} style={{ marginTop:14, width:"100%", background:"#FFF8E7", border:"1px solid #F0C040", color:"#A67C00" }}>{saving==="provident_fund"?"מעדכן...":"ערוך הגשה"}</Btn>:<Btn onClick={()=>saveAndDone("provident_fund","קרן השתלמות")} disabled={!hasFiles("provident_fund")||saving==="provident_fund"} style={{ marginTop:14, width:"100%" }}>{saving==="provident_fund"?"שומר...":"סיימתי"}</Btn>}</div>}
         </div>
       )}
 
@@ -2263,7 +2620,7 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
               <SectionHeader id={`pl_${sp.idx}`} icon={<DocIcon name="bar-chart" />} label={sp.name ? `דוח רווח והפסד — ${sp.name}` : "דוח רווח והפסד"} done={isDone(sp.cat)} partial={hasFiles(sp.cat)&&!isDone(sp.cat)} onClick={()=>toggle(`pl_${sp.idx}`)} />
               <NoteBar docKey="pl" />
               <DoneLine done={isDone(sp.cat)} />
-              {expanded===`pl_${sp.idx}` && <div style={bodyStyle}><div style={descStyle}>העלה דוח רווח והפסד שנתי + מאזן בוחן של שנה קודמת</div><UploadArea cat={sp.cat} /><Btn onClick={()=>saveAndDone(sp.cat,"דוח רווח והפסד")} disabled={!hasFiles(sp.cat)||saving===sp.cat} style={{ marginTop:14, width:"100%" }}>{saving===sp.cat?"שומר...":"סיימתי"}</Btn></div>}
+              {expanded===`pl_${sp.idx}` && <div style={bodyStyle}><div style={descStyle}>העלה דוח רווח והפסד שנתי + מאזן בוחן של שנה קודמת</div><UploadArea cat={sp.cat} />{isDone(sp.cat)?<Btn onClick={()=>undoDone(sp.cat)} disabled={saving===sp.cat} style={{ marginTop:14, width:"100%", background:"#FFF8E7", border:"1px solid #F0C040", color:"#A67C00" }}>{saving===sp.cat?"מעדכן...":"ערוך הגשה"}</Btn>:<Btn onClick={()=>saveAndDone(sp.cat,"דוח רווח והפסד")} disabled={!hasFiles(sp.cat)||saving===sp.cat} style={{ marginTop:14, width:"100%" }}>{saving===sp.cat?"שומר...":"סיימתי"}</Btn>}</div>}
             </div>
           ))}
           {/* Fallback: employment_type לא הוגדר — שורה כללית */}
@@ -2272,7 +2629,7 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
               <SectionHeader id="pl" icon={<DocIcon name="bar-chart" />} label="דוח רווח והפסד (לעצמאיים)" done={isDone("profit_loss")} partial={hasFiles("profit_loss")&&!isDone("profit_loss")} onClick={()=>toggle("pl")} />
               <NoteBar docKey="pl" />
               <DoneLine done={isDone("profit_loss")} />
-              {expanded==="pl" && <div style={bodyStyle}><div style={descStyle}>רלוונטי לעצמאיים — העלה דוח רווח והפסד שנתי + מאזן בוחן של שנה קודמת</div><UploadArea cat="profit_loss" /><Btn onClick={()=>saveAndDone("profit_loss","דוח רווח והפסד")} disabled={!hasFiles("profit_loss")||saving==="profit_loss"} style={{ marginTop:14, width:"100%" }}>{saving==="profit_loss"?"שומר...":"סיימתי"}</Btn></div>}
+              {expanded==="pl" && <div style={bodyStyle}><div style={descStyle}>רלוונטי לעצמאיים — העלה דוח רווח והפסד שנתי + מאזן בוחן של שנה קודמת</div><UploadArea cat="profit_loss" />{isDone("profit_loss")?<Btn onClick={()=>undoDone("profit_loss")} disabled={saving==="profit_loss"} style={{ marginTop:14, width:"100%", background:"#FFF8E7", border:"1px solid #F0C040", color:"#A67C00" }}>{saving==="profit_loss"?"מעדכן...":"ערוך הגשה"}</Btn>:<Btn onClick={()=>saveAndDone("profit_loss","דוח רווח והפסד")} disabled={!hasFiles("profit_loss")||saving==="profit_loss"} style={{ marginTop:14, width:"100%" }}>{saving==="profit_loss"?"שומר...":"סיימתי"}</Btn>}</div>}
             </div>
           )}
         </>
@@ -2284,7 +2641,7 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
           <SectionHeader id="savings" icon={<DocIcon name="building" />} label="פירוט חסכונות ופנסיה" done={isDone("savings_pension")} partial={hasFiles("savings_pension")&&!isDone("savings_pension")} onClick={()=>toggle("savings")} />
           <NoteBar docKey="savings" />
           <DoneLine done={isDone("savings_pension")} />
-          {expanded==="savings" && <div style={bodyStyle}><div style={descStyle}>כולל: פנסיה, קופות גמל, ביטוח מנהלים, חסכונות בנקאיים, השקעות. ציין גם מועדי נזילות.</div><UploadArea cat="savings_pension" /><Btn onClick={()=>saveAndDone("savings_pension","חסכונות ופנסיה")} disabled={!hasFiles("savings_pension")||saving==="savings_pension"} style={{ marginTop:14, width:"100%" }}>{saving==="savings_pension"?"שומר...":"סיימתי"}</Btn></div>}
+          {expanded==="savings" && <div style={bodyStyle}><div style={descStyle}>כולל: פנסיה, קופות גמל, ביטוח מנהלים, חסכונות בנקאיים, השקעות. ציין גם מועדי נזילות.</div><UploadArea cat="savings_pension" />{isDone("savings_pension")?<Btn onClick={()=>undoDone("savings_pension")} disabled={saving==="savings_pension"} style={{ marginTop:14, width:"100%", background:"#FFF8E7", border:"1px solid #F0C040", color:"#A67C00" }}>{saving==="savings_pension"?"מעדכן...":"ערוך הגשה"}</Btn>:<Btn onClick={()=>saveAndDone("savings_pension","חסכונות ופנסיה")} disabled={!hasFiles("savings_pension")||saving==="savings_pension"} style={{ marginTop:14, width:"100%" }}>{saving==="savings_pension"?"שומר...":"סיימתי"}</Btn>}</div>}
         </div>
       )}
 
@@ -2294,7 +2651,7 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
           <SectionHeader id="retirement" icon={<DocIcon name="user" />} label="דוח תחזית פרישה (מעל גיל 55)" done={isDone("retirement_forecast")} partial={hasFiles("retirement_forecast")&&!isDone("retirement_forecast")} onClick={()=>toggle("retirement")} />
           <NoteBar docKey="retirement" />
           <DoneLine done={isDone("retirement_forecast")} />
-          {expanded==="retirement" && <div style={bodyStyle}><div style={descStyle}>רלוונטי למי שמעל גיל 55 — דוח תחזית פרישה מסוכן הביטוח</div><UploadArea cat="retirement_forecast" /><Btn onClick={()=>saveAndDone("retirement_forecast","דוח תחזית פרישה")} disabled={!hasFiles("retirement_forecast")||saving==="retirement_forecast"} style={{ marginTop:14, width:"100%" }}>{saving==="retirement_forecast"?"שומר...":"סיימתי"}</Btn></div>}
+          {expanded==="retirement" && <div style={bodyStyle}><div style={descStyle}>רלוונטי למי שמעל גיל 55 — דוח תחזית פרישה מסוכן הביטוח</div><UploadArea cat="retirement_forecast" />{isDone("retirement_forecast")?<Btn onClick={()=>undoDone("retirement_forecast")} disabled={saving==="retirement_forecast"} style={{ marginTop:14, width:"100%", background:"#FFF8E7", border:"1px solid #F0C040", color:"#A67C00" }}>{saving==="retirement_forecast"?"מעדכן...":"ערוך הגשה"}</Btn>:<Btn onClick={()=>saveAndDone("retirement_forecast","דוח תחזית פרישה")} disabled={!hasFiles("retirement_forecast")||saving==="retirement_forecast"} style={{ marginTop:14, width:"100%" }}>{saving==="retirement_forecast"?"שומר...":"סיימתי"}</Btn>}</div>}
         </div>
       )}
 
@@ -2304,7 +2661,7 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
           <SectionHeader id="checks" icon={<DocIcon name="file" />} label="שיקים דחויים" done={isDone("deferred_checks")} partial={hasFiles("deferred_checks")&&!isDone("deferred_checks")} onClick={()=>toggle("checks")} />
           <NoteBar docKey="checks" />
           <DoneLine done={isDone("deferred_checks")} />
-          {expanded==="checks" && <div style={bodyStyle}><div style={descStyle}>שיקים דחויים שאינם חלק מהוצאה שוטפת</div><UploadArea cat="deferred_checks" /><Btn onClick={()=>saveAndDone("deferred_checks","שיקים דחויים")} disabled={!hasFiles("deferred_checks")||saving==="deferred_checks"} style={{ marginTop:14, width:"100%" }}>{saving==="deferred_checks"?"שומר...":"סיימתי"}</Btn></div>}
+          {expanded==="checks" && <div style={bodyStyle}><div style={descStyle}>שיקים דחויים שאינם חלק מהוצאה שוטפת</div><UploadArea cat="deferred_checks" />{isDone("deferred_checks")?<Btn onClick={()=>undoDone("deferred_checks")} disabled={saving==="deferred_checks"} style={{ marginTop:14, width:"100%", background:"#FFF8E7", border:"1px solid #F0C040", color:"#A67C00" }}>{saving==="deferred_checks"?"מעדכן...":"ערוך הגשה"}</Btn>:<Btn onClick={()=>saveAndDone("deferred_checks","שיקים דחויים")} disabled={!hasFiles("deferred_checks")||saving==="deferred_checks"} style={{ marginTop:14, width:"100%" }}>{saving==="deferred_checks"?"שומר...":"סיימתי"}</Btn>}</div>}
         </div>
       )}
 
@@ -2314,7 +2671,7 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
           <SectionHeader id="debts_other" icon={<DocIcon name="alert" />} label="פיגורי תשלומים וחובות אחרים" done={isDone("debts_other")} partial={hasFiles("debts_other")&&!isDone("debts_other")} onClick={()=>toggle("debts_other")} />
           <NoteBar docKey="debts_other" />
           <DoneLine done={isDone("debts_other")} />
-          {expanded==="debts_other" && <div style={bodyStyle}><div style={descStyle}>חובות לאנשים פרטיים, גמ"ח, מקום עבודה, פיגורים בתשלומים</div><UploadArea cat="debts_other" /><Btn onClick={()=>saveAndDone("debts_other","פיגורי תשלומים וחובות")} disabled={!hasFiles("debts_other")||saving==="debts_other"} style={{ marginTop:14, width:"100%" }}>{saving==="debts_other"?"שומר...":"סיימתי"}</Btn></div>}
+          {expanded==="debts_other" && <div style={bodyStyle}><UploadArea cat="debts_other" />{isDone("debts_other")?<Btn onClick={()=>undoDone("debts_other")} disabled={saving==="debts_other"} style={{ marginTop:14, width:"100%", background:"#FFF8E7", border:"1px solid #F0C040", color:"#A67C00" }}>{saving==="debts_other"?"מעדכן...":"ערוך הגשה"}</Btn>:<Btn onClick={()=>saveAndDone("debts_other","פיגורי תשלומים וחובות")} disabled={!hasFiles("debts_other")||saving==="debts_other"} style={{ marginTop:14, width:"100%" }}>{saving==="debts_other"?"שומר...":"סיימתי"}</Btn>}</div>}
         </div>
       )}
 
@@ -2330,7 +2687,7 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
             {expanded===cd.id && (
               <div style={bodyStyle}>
                 <UploadArea cat={cd.id} />
-                <Btn onClick={()=>saveAndDone(cd.id, cd.label)} disabled={!hasFiles(cd.id)||saving===cd.id} style={{ marginTop:14, width:"100%" }}>{saving===cd.id?"שומר...":"סיימתי"}</Btn>
+                {isDone(cd.id)?<Btn onClick={()=>undoDone(cd.id)} disabled={saving===cd.id} style={{ marginTop:14, width:"100%", background:"#FFF8E7", border:"1px solid #F0C040", color:"#A67C00" }}>{saving===cd.id?"מעדכן...":"ערוך הגשה"}</Btn>:<Btn onClick={()=>saveAndDone(cd.id, cd.label)} disabled={!hasFiles(cd.id)||saving===cd.id} style={{ marginTop:14, width:"100%" }}>{saving===cd.id?"שומר...":"סיימתי"}</Btn>}
               </div>
             )}
           </div>
@@ -2349,7 +2706,7 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
               <div style={{ fontSize: 13, color:"var(--text-dim)" }}>לחץ כדי למלא את השאלון</div>
             </div>
             {questDone
-              ? <span style={{ background:"rgba(46,204,138,0.15)", color:"#22c55e", borderRadius:20, padding:"3px 12px", fontSize: 14, fontWeight:700, display:"inline-flex", alignItems:"center", gap:4 }}><DocIcon name="check-circle" color="#22c55e" size={14} /> הושלם</span>
+              ? <span style={{ background:"rgba(46,204,138,0.15)", color:"var(--green-soft)", borderRadius:20, padding:"3px 12px", fontSize: 14, fontWeight:700, display:"inline-flex", alignItems:"center", gap:4 }}><DocIcon name="check-circle" color="var(--green-soft)" size={14} /> הושלם</span>
               : <span style={{ display:"flex", alignItems:"center", color:"var(--green-mid)" }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg></span>
             }
           </div>
@@ -2386,18 +2743,13 @@ function OnboardingChecklist({ session, finalizedMonths, inProgressMonths, paysl
       )}
 
       {/* הגשה */}
-      <div style={{ marginTop:24, padding:"18px 20px", background:requiredDone?"rgba(46,204,138,0.06)":"var(--surface2)", borderRadius:12, border:`1px solid ${requiredDone?"rgba(46,204,138,0.3)":"var(--border)"}` }}>
+      <div style={{ marginTop:24, textAlign:"center" }}>
         {!requiredDone && (
-          <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:10, textAlign:"center", lineHeight:1.6 }}>
-            להגשה יש להשלים קודם:
-            {!txsDone && <span> · פירוט תנועות</span>}
-            {needsBankStmt && !bankStmtDone && <span> · פירוט עו"ש</span>}
-            {!payslipsDone && <span> · תלושי שכר</span>}
-            {!allOptDone && <span> · כל הסעיפים הנדרשים</span>}
-            {!questDone && <span> · שאלון אישי</span>}
+          <div style={{ fontSize: 14, color:"var(--text-dim)", marginBottom:12 }}>
+            להגשה יש להשלים את כל המסמכים הדרושים
           </div>
         )}
-        <Btn onClick={handleSubmit} disabled={!requiredDone||submitting} title={!requiredDone?"השלם את כל הסעיפים הנדרשים כדי להגיש":undefined} style={{ width:"100%", padding:"14px", fontSize: 17, fontWeight:700, opacity:requiredDone?1:0.45 }}>{submitting?"מגיש...":"הגש לאלון"}</Btn>
+        <Btn onClick={handleSubmit} disabled={!requiredDone||submitting} title={!requiredDone?"השלם את כל המסמכים הדרושים כדי להגיש":undefined} style={{ padding:"10px 32px", fontSize:15, fontWeight:600, opacity:requiredDone?1:0.45 }}>{submitting?"מגיש...":"הגש"}</Btn>
       </div>
     </div>
   );
@@ -2414,13 +2766,13 @@ function FinalizeCheckModal({ monthLabel, emptyCats, isMonth3, estimates, onEsti
   const sections = Object.keys(grouped);
 
   return (
-    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.55)", zIndex:10000, display:"flex", alignItems:"center", justifyContent:"center", padding:20, overflowY:"auto" }}>
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.55)", zIndex:"var(--z-top)", display:"flex", alignItems:"center", justifyContent:"center", padding:20, overflowY:"auto" }}>
       <div style={{ background:"var(--surface)", borderRadius:18, padding:"32px 28px", maxWidth:560, width:"100%", boxShadow:"0 24px 64px rgba(0,0,0,0.35)", direction:"rtl", maxHeight:"85vh", display:"flex", flexDirection:"column" }}>
 
         {/* כותרת */}
         <div style={{ marginBottom:18 }}>
           <div style={{ fontSize:22, fontWeight:700, marginBottom:6 }}>
-            {isMonth3 ? "סיכום 3 חודשים — לפני שמגישים 📋" : "רגע לפני שמסמנים הושלם 🔍"}
+            {isMonth3 ? "סיכום 3 חודשים — לפני שמגישים" : "רגע לפני שמסמנים הושלם"}
           </div>
           <div style={{ fontSize:15, color:"var(--text-dim)", lineHeight:1.7 }}>
             {isMonth3
@@ -2437,7 +2789,8 @@ function FinalizeCheckModal({ monthLabel, emptyCats, isMonth3, estimates, onEsti
             <div style={{ fontWeight:600, fontSize:16 }}>כל הקטגוריות כוסו!</div>
           </div>
         ) : (
-          <div style={{ flex:1, overflowY:"auto", marginBottom:20, marginTop:4 }}>
+          <div style={{ flex:1, overflowY:"auto", marginBottom:20, marginTop:4, direction:"ltr" }}>
+            <div style={{ direction:"rtl" }}>
             {sections.map(sec => {
               const isOpen = openSections[sec] !== false; // פתוח כברירת מחדל
               return (
@@ -2467,7 +2820,7 @@ function FinalizeCheckModal({ monthLabel, emptyCats, isMonth3, estimates, onEsti
                               {estimates[cat.name] ? (
                                 <div style={{ display:"flex", alignItems:"center", gap:6 }}>
                                   <span style={{ fontSize:13, color:"var(--green-soft)", fontWeight:600 }}>✓ ₪{Number(estimates[cat.name]).toLocaleString()}/חודש</span>
-                                  <button onClick={() => onEstimateChange(cat.name, "")} style={{ background:"none", border:"none", cursor:"pointer", color:"var(--text-dim)", fontSize:12, padding:"2px 4px" }}>✕</button>
+                                  <button onClick={() => onEstimateChange(cat.name, "")} style={{ background:"none", border:"none", cursor:"pointer", color:"var(--text-dim)", fontSize:12, padding:"2px 4px" }}>×</button>
                                 </div>
                               ) : (
                                 <EstimateInlineInput catName={cat.name} onChange={onEstimateChange} />
@@ -2481,6 +2834,7 @@ function FinalizeCheckModal({ monthLabel, emptyCats, isMonth3, estimates, onEsti
                 </div>
               );
             })}
+            </div>
           </div>
         )}
 
@@ -2576,6 +2930,7 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
   const [editCatOpen, setEditCatOpen] = useState(null);
   const [catSearch, setCatSearch]   = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string|null>(null);
+  const [pendingRemember, setPendingRemember] = useState<{name:string;cat:string}|null>(null);
 
   const startEdit = (sub) => { setEditingSub(sub.id); setEditTx(sub.transactions || []); };
   const saveEdit  = async () => {
@@ -2589,9 +2944,29 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
 
   return (
     <div style={{ maxWidth:900, margin:"0 auto", padding:"28px 20px" }}>
+      <RememberModal
+        pendingRemember={pendingRemember}
+        onAlways={async () => {
+          await supabase.from("remembered_mappings").upsert(
+            [{ client_id: clientId, business_name: pendingRemember!.name, category: pendingRemember!.cat }],
+            { onConflict: "client_id,business_name" }
+          );
+          await supabase.from("client_change_log").insert([{
+            client_id: clientId, event_type: "remap_business",
+            details: { business_name: pendingRemember!.name, to_cat: pendingRemember!.cat },
+          }]);
+          setPendingRemember(null);
+        }}
+        onThisSession={() => {
+          const { name, cat } = pendingRemember!;
+          setEditTx(p => p.map(t => t.name === name ? { ...t, cat, edited: true } : t));
+          setPendingRemember(null);
+        }}
+        onJustHere={() => setPendingRemember(null)}
+      />
       {/* Header */}
       <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:20, flexWrap:"wrap" }}>
-        <Btn variant="ghost" size="sm" onClick={onBack}>← חזור</Btn>
+        <Btn variant="ghost" size="sm" onClick={onBack}>חזור ←</Btn>
         <div style={{ flex:1 }}>
           <div style={{ display:"flex", alignItems:"center", gap:10 }}>
             <div style={{ fontWeight:700, fontSize: 22 }}>{entry.label}</div>
@@ -2619,17 +2994,79 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
         </Card>
       ) : (
         <>
-          {/* Category summary — compact */}
+          {/* Category summary — table */}
           <Card style={{ marginBottom:16 }}>
-            <div style={{ fontWeight:700, marginBottom:10, fontSize: 18, display:"flex", alignItems:"center", gap:8 }}><DocIcon name="bar-chart" color="var(--green-deep)" size={18} /> סיכום לפי סעיף</div>
-            <div style={{ display:"flex", flexWrap:"wrap", gap:"4px 16px" }}>
-              {catSummary.filter(([cat]) => !ignoredCats.has(cat)).slice(0,10).map(([cat, amt]) => (
-                <div key={cat} style={{ display:"flex", gap:6, fontSize: 14, alignItems:"center" }}>
-                  <span style={{ color:"var(--text-dim)" }}>{cat}</span>
-                  <span style={{ fontWeight:700, color:"var(--red)" }}>₪{Math.round(amt).toLocaleString()}</span>
-                </div>
-              ))}
+            <div style={{ fontWeight:700, marginBottom:16, fontSize: 18, display:"flex", alignItems:"center", gap:8 }}>
+              <DocIcon name="bar-chart" color="var(--green-deep)" size={18} /> סיכום לפי סעיף
             </div>
+            {(() => {
+              const visible = catSummary.filter(([cat]) => !ignoredCats.has(cat));
+              const totalAmt = visible.reduce((s, [, a]) => s + Math.abs(a), 0);
+              const headerCell: React.CSSProperties = {
+                fontSize: 11, color:"var(--text-dim)", fontWeight:700,
+                textTransform:"uppercase", letterSpacing:"0.6px",
+              };
+              return (
+                <>
+                  {/* Column headers */}
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"0 10px 8px", borderBottom:"1px solid var(--border)" }}>
+                    <span style={headerCell}>סעיף</span>
+                    <div style={{ display:"flex", gap:24 }}>
+                      <span style={headerCell}>סכום</span>
+                      <span style={{ ...headerCell, minWidth:34, textAlign:"center" }}>%</span>
+                    </div>
+                  </div>
+                  {/* Rows */}
+                  <div>
+                    {visible.map(([cat, amt], i) => {
+                      const isIncome = amt < 0;
+                      const absAmt = Math.abs(amt);
+                      const pct = totalAmt > 0 ? Math.round((absAmt / totalAmt) * 100) : 0;
+                      const isTop = i === 0;
+                      return (
+                        <div key={cat}
+                          style={{
+                            display:"flex", justifyContent:"space-between", alignItems:"center",
+                            padding:"10px 10px",
+                            borderBottom: i < visible.length - 1 ? "1px solid var(--border)" : "none",
+                            borderRight: isTop ? "3px solid var(--red)" : "3px solid transparent",
+                            transition:"background 0.12s",
+                            cursor:"default",
+                          }}
+                          onMouseEnter={e => (e.currentTarget.style.background = "rgba(247,92,92,0.04)")}
+                          onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                        >
+                          <span style={{
+                            fontSize: 14, flex:1,
+                            color: isTop ? "var(--text)" : "var(--text-dim)",
+                            fontWeight: isTop ? 600 : 400,
+                            overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
+                          }}>{cat}</span>
+                          <div style={{ display:"flex", gap:24, alignItems:"center", flexShrink:0 }}>
+                            <span style={{ fontSize:14, fontWeight:700, color: isIncome ? "var(--green-mid)" : "var(--red)" }}>
+                              {isIncome ? "+" : ""}₪{absAmt.toLocaleString()}
+                            </span>
+                            <span style={{ fontSize:12, color:"var(--text-dim)", minWidth:34, textAlign:"center" }}>
+                              {pct}%
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {/* Total row */}
+                  {visible.length > 1 && (
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 10px 2px", borderTop:"1.5px solid var(--border)", marginTop:2 }}>
+                      <span style={{ fontSize:13, color:"var(--text-dim)", fontWeight:700 }}>סה"כ הוצאות</span>
+                      <div style={{ display:"flex", gap:24, alignItems:"center" }}>
+                        <span style={{ fontSize:14, fontWeight:800, color:"var(--red)" }}>₪{Math.round(totalAmt).toLocaleString()}</span>
+                        <span style={{ fontSize:12, color:"var(--text-dim)", minWidth:34, textAlign:"center" }}>100%</span>
+                      </div>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </Card>
 
           {/* Sources — expandable inline */}
@@ -2724,7 +3161,7 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
                               hiddenCats={hiddenCats}
                               onHiddenCatsChange={onHiddenCatsChange}
                               scenarioCats={scenarioCats}
-                              onSelect={(cat) => { setEditTx(p => p.map((t,j) => j===i?{...t,cat,edited:true}:t)); setEditCatOpen(null); setCatSearch(""); }}
+                              onSelect={(cat) => { setEditTx(p => p.map((t,j) => j===i?{...t,cat,edited:true}:t)); setEditCatOpen(null); setCatSearch(""); setPendingRemember({ name: tx.name, cat }); }}
                             />
                           </div>
                         )}
@@ -2772,7 +3209,7 @@ function MonthDetailScreen({ entry, subs, onAddSource, onFinalize, onReopen, onB
 
 
 // ── Portfolio Tab ─────────────────────────────────────────────────────────────
-function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, onDataChange, onMonthCreated, rememberedMappings, onRememberingAdded, cycleStartDay, importedTxs, manualTxs, onManualTxAdded, onManualTxDeleted, onUpdatePortfolioTxCat, onDeletePortfolioSub, onCycleStartDayChange, categories, categoryRows = [], clientCats, onCategoryAdded, ignoredCats = IGNORED_CATEGORIES, incomeCats = new Set<string>(), categoryRules = [] as any[], hiddenCats = [] as string[], onHiddenCatsChange = undefined as any, scenarioCats = null as any, activeSubTab = "control", visitedSubTabs = new Set(["control"]) as Set<string>, onSubTabChange = (_id: string) => {} }) {
+function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, onDataChange, onMonthCreated, rememberedMappings, onRememberingAdded, cycleStartDay, importedTxs, manualTxs, onManualTxAdded, onManualTxDeleted, onUpdatePortfolioTxCat, onDeletePortfolioSub, onCycleStartDayChange, categories, categoryRows = [], clientCats, onCategoryAdded, ignoredCats = IGNORED_CATEGORIES, incomeCats = new Set<string>(), categoryRules = [] as any[], hiddenCats = [] as string[], onHiddenCatsChange = undefined as any, scenarioCats = null as any, activeSubTab = "control", visitedSubTabs = new Set(["control"]) as Set<string>, onSubTabChange = (_id: string) => {}, maxSessionActive = false as boolean, maxLastSync = null as string|null }) {
   // Lift upload state here so re-renders don't reset it
   const [pStep, setPStep]                 = useState("list");
   const [activeEntry, setActiveEntry]     = useState(null);
@@ -2807,6 +3244,8 @@ function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, on
             ignoredCats={ignoredCats}
             incomeCats={incomeCats}
             categoryRules={categoryRules}
+            maxSessionActive={maxSessionActive}
+            maxLastSync={maxLastSync}
           />
         </div>
       )}
@@ -2858,11 +3297,13 @@ function PortfolioTab({ clientId, clientPlan, portfolioMonths, portfolioSubs, on
         </div>
       )}
       {activeSubTab === "savings" && (
-        <Card style={{ textAlign:"center", padding:"64px 32px" }}>
-          <div style={{ fontSize:48, marginBottom:16 }}>🚧</div>
-          <div style={{ fontWeight:700, fontSize: 20, marginBottom:8 }}>פירוט חסכונות</div>
-          <div style={{ color:"var(--text-dim)", fontSize: 16 }}>בקרוב</div>
-        </Card>
+        <>
+          <h1 style={{ fontFamily:"'Frank Ruhl Libre', serif", fontSize:32, fontWeight:700, color:"var(--text)", textAlign:"center", marginBottom:16, marginTop:0 }}>פירוט חסכונות</h1>
+          <div style={{ height:1, background:"var(--border)", marginBottom:20 }} />
+          <Card style={{ textAlign:"center", padding:"64px 32px" }}>
+            <div style={{ color:"var(--text-dim)", fontSize: 16 }}>בקרוב</div>
+          </Card>
+        </>
       )}
       {visitedSubTabs.has("balance") && (
         <div style={{ display: activeSubTab === "balance" ? "block" : "none" }}>
@@ -3238,7 +3679,7 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
 
         {/* Header */}
         <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:20, flexWrap:"wrap" }}>
-          <Btn variant="ghost" size="sm" onClick={() => setStep("list")}>← חזור</Btn>
+          <Btn variant="ghost" size="sm" onClick={() => setStep("list")}>חזור ←</Btn>
           <div style={{ flex:1 }}>
             <div style={{ display:"flex", alignItems:"center", gap:8 }}>
               <span style={{ fontWeight:700, fontSize: 20 }}>{activeEntry.label}</span>
@@ -3316,14 +3757,14 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
     return (
     <div style={{ maxWidth:580, margin:"0 auto" }}>
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:20 }}>
-        <Btn variant="ghost" size="sm" onClick={() => setStep("month")}>← חזור</Btn>
+        <Btn variant="ghost" size="sm" onClick={() => setStep("month")}>חזור ←</Btn>
         <div style={{ fontWeight:700, fontSize: 18 }}>הוסף מקור — {activeEntry?.label}</div>
       </div>
 
       <Card style={{ marginBottom:14 }}>
         <div style={{ fontWeight:700, marginBottom:10, fontSize: 15 }}>שם המקור</div>
         <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom: sourceType ? 12 : 0 }}>
-          {["כלול בכרטיס","עו\"ש","אחר"].map(s => (
+          {["כרטיס אשראי","עו\"ש","אחר"].map(s => (
             <button type="button" key={s}
               onClick={() => { setSourceType(s === sourceType ? "" : s); setSourceNickname(""); }}
               style={{ padding:"12px 28px", borderRadius:12, fontSize: 18, fontWeight:700, cursor:"pointer", fontFamily:"inherit",
@@ -3337,12 +3778,16 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
         {sourceType && (
           <div>
             <div style={{ fontSize: 14, color:"var(--text-dim)", marginBottom:5 }}>
-              {sourceType === "אחר" ? "שם חופשי (אופציונלי)" : `כינוי (אופציונלי) — למשל: לאומי, פועלים, כאל`}
+              {sourceType === "כרטיס אשראי"
+                ? "כינוי הכרטיס (אופציונלי) — למשל: ויזה לאומי, מאסטרקארד עבודה"
+                : sourceType === "אחר"
+                  ? "שם חופשי (אופציונלי)"
+                  : "כינוי (אופציונלי) — למשל: לאומי, פועלים"}
             </div>
             <input
               value={sourceNickname}
               onChange={e => setSourceNickname(e.target.value)}
-              placeholder={sourceType === "אחר" ? "למשל: קופת גמל, ביטקוין..." : `למשל: ${sourceType} לאומי`}
+              placeholder={sourceType === "כרטיס אשראי" ? "משה אשראי עבודה" : sourceType === "אחר" ? "למשל: קופת גמל, ביטקוין..." : `למשל: ${sourceType} לאומי`}
               style={{ width:"100%", boxSizing:"border-box", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"9px 12px", color:"var(--text)", fontSize:15, fontFamily:"inherit", outline:"none" }}
             />
             {sourceLabel && (
@@ -3364,9 +3809,9 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
         onDragLeave={() => setDragOver(false)}
         onDrop={e => { e.preventDefault(); setDragOver(false); const files = Array.from(e.dataTransfer.files) as File[]; setUploadedFiles(p => [...p, ...files.filter((f: File) => !p.find((u: File) => u.name===f.name))]); }}
       >
-        <div style={{ fontSize: 30, marginBottom:8 }}>{dragOver ? "⬇️" : "📎"}</div>
+        <div style={{ marginBottom:8 }}>{dragOver ? <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--green-mid)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg> : <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--green-mid)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>}</div>
         <div style={{ fontWeight:600, fontSize: 15, marginBottom:4 }}>{dragOver ? "שחרר להוספה" : "גרור קבצים לכאן"}</div>
-        <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:12 }}>Excel, CSV, PDF, Word, תמונות וכל קובץ פיננסי</div>
+        <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:12 }}>Excel, CSV, PDF</div>
         <input ref={fileRef} type="file"
           accept=".xlsx,.xls,.csv,.pdf,.png,.jpg,.jpeg,.doc,.docx,.txt,.ods"
           multiple style={{ display:"none" }}
@@ -3380,11 +3825,11 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
             const res = analyzeResults.find(r => r.name === f.name);
             return (
               <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom:i<uploadedFiles.length-1?`1px solid ${"var(--border)"}22`:"none", fontSize: 14 }}>
-                <span>📄 {f.name}</span>
+                <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>{f.name}</span>
                 <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                   {res && (
                     <span style={{ fontSize: 13, color: res.error ? "var(--red)" : res.count === 0 ? "var(--gold)" : "var(--green-soft)" }}>
-                      {res.error ? `⚠️ ${res.error}` : res.count === 0 ? "⚠️ לא זוהו תנועות" : (
+                      {res.error ? res.error : res.count === 0 ? "לא זוהו תנועות" : (
                         res.rangeLabel
                           ? `✓ ${res.count} תנועות נוספו לטווח ${res.rangeLabel}${(res.outOfRange || 0) > 0 ? ` • ${res.outOfRange} מחוץ לטווח` : ""}`
                           : `✓ ${res.count} תנועות`
@@ -3402,12 +3847,12 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
 
       {analyzeResults.length > 0 && !analyzing && analyzeResults.every(r => r.count === 0) && (
         <div style={{ background:"rgba(255,183,77,0.1)", border:"1px solid var(--gold)", borderRadius:8, padding:"10px 14px", marginBottom:12, fontSize: 14, color:"var(--gold)" }}>
-          ⚠️ לא זוהו תנועות באף קובץ. בדוק שהקבצים הם Excel/CSV עם עמודות תאריך, שם עסק וסכום.
+          לא זוהו תנועות באף קובץ. בדוק שהקבצים הם Excel/CSV עם עמודות תאריך, שם עסק וסכום.
         </div>
       )}
 
       <Btn onClick={analyzeFiles} disabled={uploadedFiles.length===0||!sourceType||analyzing} style={{ width:"100%", justifyContent:"center" }}>
-        {analyzing ? "⏳ מנתח..." : "🔍 נתח תנועות ←"}
+        {analyzing ? "מנתח..." : "נתח תנועות ←"}
       </Btn>
     </div>
   );
@@ -3429,7 +3874,7 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
       )}
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:8 }}>
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-          <Btn variant="ghost" size="sm" onClick={() => { const wasEditing = !!editingSubId; setEditingSubId(null); setStep(wasEditing ? "month" : "upload"); }}>← חזור</Btn>
+          <Btn variant="ghost" size="sm" onClick={() => { const wasEditing = !!editingSubId; setEditingSubId(null); setStep(wasEditing ? "month" : "upload"); }}>חזור ←</Btn>
           <div style={{ fontWeight:700, display:"inline-flex", alignItems:"center", gap:6 }}><DocIcon name="pencil" color="var(--text)" size={15} /> {editingSubId ? "עריכת" : "סיווג"} תנועות — {sourceLabel}</div>
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
@@ -3509,7 +3954,7 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
                     <button
                       onClick={e => { e.stopPropagation(); setActiveTxId(activeTxId===tx.id?null:tx.id); setCatSearch(""); }}
                       style={{ background: needsCat ? "rgba(192,57,43,0.08)" : "var(--green-mint)", border:`1px solid ${needsCat ? "var(--red)" : "var(--green-soft)"}`, borderRadius:8, padding:"5px 12px", fontSize: 15, color: needsCat ? "var(--red)" : "var(--green-deep)", cursor:"pointer", fontFamily:"inherit", fontWeight:600 }}>
-                      {needsCat ? '⚠️ דרוש סיווג' : tx.cat}
+                      {needsCat ? 'דרוש סיווג' : tx.cat}
                     </button>
                     {tx.cat !== 'להתעלם' ? (
                       <button
@@ -3579,14 +4024,14 @@ function PortfolioUploadTab({ clientId, portfolioMonths, portfolioSubs, onDataCh
             {hasIncome && (
               <>
                 <div style={{ fontWeight:800, fontSize: 20, color:"var(--green-deep)", marginBottom:10, marginTop:8, padding:"10px 14px", background:"var(--green-mint)", borderRadius:10, display:"flex", alignItems:"center", gap:8, borderBottom:"2px solid var(--green-soft)" }}>
-                  💰 הכנסות <span style={{ fontWeight:500, color:"var(--green-mid)", fontSize: 16 }}>({incomeTxs.length})</span>
+                  הכנסות <span style={{ fontWeight:500, color:"var(--green-mid)", fontSize: 16 }}>({incomeTxs.length})</span>
                 </div>
                 {incomeTxs.map(tx => renderCard(tx, false))}
               </>
             )}
             {expenseTxs.length > 0 && (
               <div style={{ fontWeight:800, fontSize: 20, color:"var(--red)", marginBottom:10, marginTop: hasIncome ? 16 : 8, padding:"10px 14px", background:"var(--red-light)", borderRadius:10, display:"flex", alignItems:"center", gap:8, borderBottom:"2px solid var(--red)" }}>
-                💸 הוצאות <span style={{ fontWeight:500, color:"var(--text-dim)", fontSize: 16 }}>({expenseTxs.length})</span>
+                הוצאות <span style={{ fontWeight:500, color:"var(--text-dim)", fontSize: 16 }}>({expenseTxs.length})</span>
               </div>
             )}
             {expenseTxs.map(tx => renderCard(tx, false))}
@@ -4001,6 +4446,8 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
 
   return (
     <>
+    <h1 style={{ fontFamily:"'Frank Ruhl Libre', serif", fontSize:32, fontWeight:700, color:"var(--text)", textAlign:"center", marginBottom:16, marginTop:0 }}>בקרת תיק כלכלי</h1>
+    <div style={{ height:1, background:"var(--border)", marginBottom:20 }} />
     {/* ── באנר: קטגוריות לא מתוכננות ── */}
 
     <div>
@@ -4014,7 +4461,7 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
           padding: "12px 16px",
           display: "flex", alignItems: "flex-start", gap: 12,
         }}>
-          <span style={{ fontSize: 18, flexShrink: 0, marginTop: 1 }}>⚠️</span>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--red)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0, marginTop:1 }}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 15, fontWeight: 700, color: "var(--red)", marginBottom: 8 }}>
               {missingCats.length} קטגוריות עם הוצאות אינן מוגדרות בתסריט
@@ -4149,15 +4596,15 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
             </tr>
           </thead>
           <tbody>
-            {renderSectionHeader("📈 הכנסות", "income", "rgba(52,211,153,0.10)")}
+            {renderSectionHeader("הכנסות", "income", "rgba(52,211,153,0.10)")}
             {!collapsed.income && sortItems(incomeDisplay).map((item, idx) => renderItemRow(item, true, idx))}
             {renderTotalRow('סה"כ הכנסות', incomeDisplay, false, true)}
 
-            {renderSectionHeader("🏠 הוצאות קבועות", "fixed", "rgba(79,142,247,0.10)")}
+            {renderSectionHeader("הוצאות קבועות", "fixed", "rgba(79,142,247,0.10)")}
             {!collapsed.fixed && sortItems(fixed).map((item, idx) => renderItemRow(item, false, idx))}
             {renderTotalRow('סה"כ הוצאות קבועות', fixed)}
 
-            {renderSectionHeader("🛒 הוצאות משתנות", "variable", "rgba(251,191,36,0.10)")}
+            {renderSectionHeader("הוצאות משתנות", "variable", "rgba(251,191,36,0.10)")}
             {!collapsed.variable && sortItems(variable).map((item, idx) => renderItemRow(item, false, idx))}
             {renderTotalRow('סה"כ הוצאות משתנות', variable)}
 
@@ -4207,11 +4654,11 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
       return (
         <>
           <div onClick={() => setDrillDown(null)}
-            style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.45)", zIndex:9000 }} />
+            style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.45)", zIndex:"var(--z-back)" }} />
           <div style={{
             position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)",
             background:"var(--surface)", border:"1px solid var(--border)", borderRadius:16,
-            padding:"24px", zIndex:9001, width:"min(560px,95vw)",
+            padding:"24px", zIndex:"var(--z-modal)", width:"min(560px,95vw)",
             maxHeight:"80vh", display:"flex", flexDirection:"column", boxShadow:"0 20px 60px rgba(0,0,0,0.5)",
             direction:"rtl",
           }}>
@@ -4219,7 +4666,7 @@ function PortfolioControlTab({ clientId, portfolioMonths, portfolioSubs, cycleSt
               <div style={{ fontWeight:700, fontSize: 18, display:"flex", alignItems:"center", gap:8 }}><DocIcon name="bar-chart" color="var(--green-deep)" size={18} /> {title}</div>
               <button onClick={() => setDrillDown(null)}
                 style={{ background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"6px 16px", fontSize: 15, cursor:"pointer", fontFamily:"inherit", fontWeight:700, color:"var(--text)" }}>
-                ← חזור
+                חזור ←
               </button>
             </div>
             {filtered.length === 0 ? (
@@ -4275,10 +4722,10 @@ function RememberModal({ pendingRemember, onAlways, onThisSession, onJustHere })
   };
   return (
     <>
-      <div onClick={onJustHere} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:9000 }} />
-      <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:`1px solid ${"var(--border)"}`, borderRadius:16, padding:"24px 28px", zIndex:9001, width:"min(400px,90vw)", boxShadow:"0 20px 60px rgba(0,0,0,0.6)" }}>
+      <div onClick={onJustHere} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:"var(--z-back)" }} />
+      <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:`1px solid ${"var(--border)"}`, borderRadius:16, padding:"24px 28px", zIndex:"var(--z-modal)", width:"min(400px,90vw)", boxShadow:"0 20px 60px rgba(0,0,0,0.6)" }}>
         <div style={{ textAlign:"center", marginBottom:16 }}>
-          <div style={{ fontSize:32, marginBottom:8 }}>🧠</div>
+          <div style={{ marginBottom:8 }}><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--green-mid)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg></div>
           <div style={{ fontWeight:700, fontSize: 18, marginBottom:6 }}>לשנות את הסיווג של</div>
           <div style={{ fontSize: 17, color:"var(--text-dim)", lineHeight:1.5 }}>
             <strong style={{ color:"var(--text)" }}>"{pendingRemember.name}"</strong>
@@ -4378,7 +4825,8 @@ function normalizeAllTxs(portfolioSubs, importedTxs, rememberedMappings, cycleSt
 function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, rememberedMappings, onDataChange,
   onManualTxAdded, onManualTxDeleted,
   cycleStartDay, onCycleStartDayChange, onUpdatePortfolioTxCat, onDeletePortfolioSub, onNavigateToUpload,
-  categories, categoryRows = [], clientCats, onCategoryAdded, ignoredCats = IGNORED_CATEGORIES, incomeCats = new Set<string>(), categoryRules = [] as any[], hiddenCats = [] as string[], onHiddenCatsChange = undefined as any, scenarioCats = null as any }) {
+  categories, categoryRows = [], clientCats, onCategoryAdded, ignoredCats = IGNORED_CATEGORIES, incomeCats = new Set<string>(), categoryRules = [] as any[], hiddenCats = [] as string[], onHiddenCatsChange = undefined as any, scenarioCats = null as any,
+  maxSessionActive = false as boolean, maxLastSync = null as string|null }) {
   // ── Derived transaction list (useMemo keeps it in sync with props automatically) ──
   const [localEdits, setLocalEdits] = useState<Map<string, string>>(new Map());
   const [deletedUids, setDeletedUids] = useState<Set<string>>(new Set());
@@ -4396,7 +4844,10 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
   const filterBarRef = useRef<HTMLDivElement>(null);
   const [filterProvider, setFilterProvider] = useState("all");
   const [filterCat, setFilterCat] = useState("all");
+  const [catDropdownOpen, setCatDropdownOpen] = useState(false);
   const [searchText, setSearchText] = useState("");
+  const [filterDate, setFilterDate] = useState("");
+  const [advFilterOpen, setAdvFilterOpen] = useState(false);
   const [sortConfig, setSortConfig] = useState<{field: "date"|"amount"|"cat", dir: "asc"|"desc"}>({ field: "date", dir: "desc" });
   const [openMonthKeys, setOpenMonthKeys] = useState<Set<string>>(() => {
     const now = new Date();
@@ -4627,7 +5078,8 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
     if (filterProvider !== "all" && t.source_label !== filterProvider) return false;
     if (filterCat !== "all" && t.cat !== filterCat) return false;
     const q = searchText.trim().toLowerCase();
-    if (q && !(t.name || "").toLowerCase().includes(q) && !(t.cat || "").toLowerCase().includes(q)) return false;
+    if (q && !(t.name || "").toLowerCase().includes(q)) return false;
+    if (filterDate && t.date !== filterDate) return false;
     return true;
   });
   const byCycle = {};
@@ -4692,7 +5144,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
           borderRadius: 10, padding: "12px 16px", marginBottom: 16,
           display: "flex", alignItems: "center", gap: 12,
         }}>
-          <span style={{ fontSize: 22 }}>🔴</span>
+          <div style={{ width:20, height:20, borderRadius:"50%", background:"var(--red)", flexShrink:0 }} />
           <div style={{ flex: 1 }}>
             <div style={{ fontWeight: 700, color: "var(--red)", fontSize: 16 }}>
               {pendingClassification.length} תנועות מזומן ממתינות לסיווג
@@ -4708,7 +5160,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
             }}
             style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--red)", background: "transparent", color: "var(--red)", fontSize: 14, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}
           >
-            הצג →
+            הצג ←
           </button>
         </div>
       )}
@@ -4747,7 +5199,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                   else deleteTx(confirmDelete.uid, confirmDelete.dbId);
                 }}
                 disabled={!!deletingTxUid || !!deletingCycleKey}
-                style={{ padding:"9px 20px", borderRadius:8, border:"none", background:"#e53935", color:"#fff", fontSize: 16, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
+                style={{ padding:"9px 20px", borderRadius:8, border:"none", background:"var(--red)", color:"#fff", fontSize: 16, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
                 {(deletingTxUid || deletingCycleKey) ? "מוחק..." : "מחק"}
               </button>
             </div>
@@ -4755,88 +5207,165 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
         </div>
       )}
 
+
       {/* Header */}
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16, flexWrap:"wrap", gap:10 }}>
-        <div>
-          <div style={{ fontFamily:"'Frank Ruhl Libre', serif", fontSize: 28, fontWeight:700, color:"var(--green-deep)", lineHeight:1.1 }}>
-            כל התנועות
-          </div>
-          <div style={{ fontSize: 15, color:"var(--text-dim)", marginTop:5 }}>
-            {filteredTxs.length}{filteredTxs.length !== allTxs.length ? ` מתוך ${allTxs.length}` : ""} תנועות · <span style={{direction:"ltr", unicodeBidi:"embed", color: totalAmount <= 0 ? "var(--green-mid)" : "inherit"}}>{totalAmount <= 0 ? `+₪${Math.abs(Math.round(totalAmount)).toLocaleString()}` : `₪−${Math.round(totalAmount).toLocaleString()}`}</span> סה"כ
-          </div>
+      <div style={{ marginBottom:22 }}>
+        <h1 style={{ fontSize:28, fontWeight:700, color:"var(--green-deep)", letterSpacing:"-0.01em", lineHeight:1.15, marginBottom:6, marginTop:0 }}>פירוט תנועות</h1>
+        <div style={{ fontSize:13, color:"var(--text-dim)", display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+          {maxLastSync && <><span>עדכון אחרון: <b style={{ color:"var(--text-mid)", fontWeight:600 }}>{new Date(maxLastSync).toLocaleDateString("he-IL")}</b></span><span style={{ color:"var(--border)" }}>·</span></>}
+          <span>{filteredTxs.length}{filteredTxs.length !== allTxs.length ? ` מתוך ${allTxs.length}` : ""} תנועות</span>
+          <span style={{ color:"var(--border)" }}>·</span>
+          <span>סה"כ <span style={{ fontFamily:"'Frank Ruhl Libre', serif", color:"var(--red)", fontWeight:600, direction:"ltr", unicodeBidi:"embed", fontSize:16 }}>{totalAmount <= 0 ? `+₪${Math.abs(Math.round(totalAmount)).toLocaleString()}` : `₪−${Math.round(totalAmount).toLocaleString()}`}</span></span>
         </div>
-        <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
-          <button onClick={onNavigateToUpload}
-            style={{ padding:"7px 14px", borderRadius:8, fontSize: 15, cursor:"pointer", fontFamily:"inherit",
-              border:"1.5px solid var(--green-mid)", background:"var(--green-mint)", color:"var(--green-deep)", display:"flex", alignItems:"center", gap:5 }}>
-            ⬆️ הוסף תנועות
-          </button>
+      </div>
+      {/* Toolbar card */}
+      <div ref={filterBarRef} style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:16, padding:"14px 18px", boxShadow:"0 1px 4px rgba(30,77,53,0.06)", marginBottom:18 }}>
+        {/* Row 1: search + actions */}
+        <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
+          {/* Search */}
+          <div style={{ flex:1, minWidth:240, position:"relative" }}>
+            <svg style={{ position:"absolute", right:12, top:"50%", transform:"translateY(-50%)", width:16, height:16, opacity:0.55, pointerEvents:"none" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>
+            </svg>
+            <input value={searchText} onChange={e => setSearchText(e.target.value)}
+              placeholder="חיפוש לפי שם עסק או קטגוריה..."
+              style={{ width:"100%", padding:"10px 38px 10px 14px", border:"1px solid var(--border)", borderRadius:10, background:"var(--surface2)", color:"var(--text)", fontSize:14, fontFamily:"inherit", outline:"none", direction:"rtl", textAlign:"right", boxSizing:"border-box" }} />
+          </div>
+          {/* Excel — secondary */}
           <button onClick={exportToExcel}
-            style={{ padding:"7px 14px", borderRadius:8, fontSize: 15, cursor:"pointer", fontFamily:"inherit",
-              border:"1.5px solid var(--border)", background:"var(--surface2)", color:"var(--text-mid)", display:"flex", alignItems:"center", gap:5 }}>
-            📥 Excel
+            style={{ padding:"9px 16px", borderRadius:8, fontSize:14, fontWeight:600, cursor:"pointer", fontFamily:"inherit",
+              border:"1px solid var(--green-mint)", background:"var(--green-pale)", color:"var(--green-deep)", display:"inline-flex", alignItems:"center", gap:6, lineHeight:1, whiteSpace:"nowrap" }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+            Excel
+          </button>
+          {/* הוסף תנועות — primary */}
+          <button onClick={onNavigateToUpload}
+            style={{ padding:"9px 16px", borderRadius:8, fontSize:14, fontWeight:600, cursor:"pointer", fontFamily:"inherit",
+              border:"1px solid transparent", background:"var(--green-mid)", color:"#fff", boxShadow:"0 4px 16px rgba(45,106,79,0.18)", display:"inline-flex", alignItems:"center", gap:6, lineHeight:1, whiteSpace:"nowrap" }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+            הוסף תנועות
           </button>
         </div>
-      </div>
 
-      {/* Search + filters */}
-      <div style={{ marginBottom:10 }}>
-        <input
-          value={searchText} onChange={e => setSearchText(e.target.value)}
-          placeholder="🔍 חיפוש לפי שם עסק או קטגוריה..."
-          style={{ width:"100%", padding:"8px 14px", borderRadius:8, border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text)", fontSize: 16, fontFamily:"inherit", boxSizing:"border-box" }}
-        />
-      </div>
-
-      {/* Source filter */}
-      <div ref={filterBarRef} style={{ display:"flex", gap:8, marginBottom:8, flexWrap:"wrap", alignItems:"center" }}>
-        <span style={{ fontSize: 15, color:"var(--text-dim)" }}>מקור:</span>
-        {[["all","הכל"], ["file","קבצים"], ["ext","מקס"], ["manual","ידני"]].map(([v,l]) => (
-          <button key={v} onClick={() => { setFilterSource(v); setFilterProvider("all"); }}
-            style={{ padding:"4px 12px", borderRadius:20, fontSize: 14, cursor:"pointer", fontFamily:"inherit",
-              border:`1px solid ${filterSource===v?"var(--green-mid)":"var(--border)"}`,
-              background:filterSource===v?"var(--green-mint)":"transparent",
-              color:filterSource===v?"var(--green-deep)":"var(--text-mid)" }}>
-            {l}
+        {/* Row 2: category filter + advanced toggle */}
+        <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap", marginTop:12 }}>
+          <span style={{ fontSize:13, color:"var(--text-dim)", fontWeight:500, whiteSpace:"nowrap" }}>קטגוריה:</span>
+          {(() => {
+            const allCatOptions = [...new Set(allTxs.map(t => t.cat).filter(Boolean))].sort();
+            const allOpts = ["all", ...allCatOptions];
+            return (
+              <div style={{ position:"relative" }}>
+                <button
+                  onClick={() => setCatDropdownOpen(p => !p)}
+                  style={{ display:"inline-flex", alignItems:"center", gap:8, minWidth:140,
+                    background: filterCat !== "all" ? "var(--green-mint)" : "var(--surface2)",
+                    border:`1px solid ${filterCat !== "all" ? "var(--green-soft)" : "var(--border)"}`,
+                    borderRadius:10, padding:"8px 14px", fontFamily:"inherit", fontSize:13,
+                    color: filterCat !== "all" ? "var(--green-deep)" : "var(--text)",
+                    cursor:"pointer", fontWeight: filterCat !== "all" ? 600 : 400 }}>
+                  <span style={{ flex:1, textAlign:"right", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                    {filterCat === "all" ? "הכל" : filterCat}
+                  </span>
+                  <svg style={{ width:11, height:11, flexShrink:0, transition:"transform 0.2s", transform: catDropdownOpen ? "rotate(180deg)" : "none" }} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 4l4 4 4-4"/></svg>
+                </button>
+                {catDropdownOpen && (
+                  <>
+                    <div onClick={() => setCatDropdownOpen(false)} style={{ position:"fixed", inset:0, zIndex:"calc(var(--z-drop) - 1)" }} />
+                    <div style={{ position:"absolute", top:"calc(100% + 4px)", right:0, zIndex:"var(--z-drop)",
+                      background:"var(--surface)", border:"1px solid var(--border)", borderRadius:12,
+                      boxShadow:"0 8px 24px rgba(0,0,0,0.12)", minWidth:180, maxHeight:260,
+                      overflowY:"auto", padding:4 }}>
+                      {allOpts.map(c => (
+                        <button key={c} onClick={() => { setFilterCat(c); setCatDropdownOpen(false); }}
+                          style={{ display:"block", width:"100%", textAlign:"right", padding:"8px 12px",
+                            borderRadius:8, border:"none", fontFamily:"inherit", fontSize:13, cursor:"pointer",
+                            background: filterCat === c ? "var(--green-mint)" : "transparent",
+                            color: filterCat === c ? "var(--green-deep)" : "var(--text)",
+                            fontWeight: filterCat === c ? 600 : 400 }}>
+                          {c === "all" ? "הכל" : c}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })()}
+          <button onClick={() => setAdvFilterOpen(p => !p)}
+            style={{ marginRight:"auto", padding:"9px 16px", borderRadius:8, fontSize:14, fontWeight:600, cursor:"pointer", fontFamily:"inherit",
+              border:"1px solid var(--border)", background:"transparent", color:"var(--text-mid)", display:"inline-flex", alignItems:"center", gap:6, lineHeight:1 }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/>
+              <circle cx="8" cy="6" r="2" fill="currentColor"/><circle cx="15" cy="12" r="2" fill="currentColor"/><circle cx="10" cy="18" r="2" fill="currentColor"/>
+            </svg>
+            סינון מתקדם
+            <svg style={{ width:12, height:12, transition:"transform 0.2s", transform: advFilterOpen ? "rotate(180deg)" : "none" }} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M2 4l4 4 4-4"/>
+            </svg>
           </button>
-        ))}
-      </div>
-
-      {/* Category filter */}
-      {(() => {
-        const allCatOptions = [...new Set(allTxs.map(t => t.cat).filter(Boolean))].sort();
-        if (allCatOptions.length === 0) return null;
-        return (
-          <div style={{ display:"flex", gap:8, marginBottom:8, alignItems:"center", flexWrap:"wrap" }}>
-            <span style={{ fontSize: 15, color:"var(--text-dim)" }}>קטגוריה:</span>
-            <select value={filterCat} onChange={e => setFilterCat(e.target.value)}
-              style={{ padding:"4px 10px", borderRadius:8, border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text)", fontSize: 14, fontFamily:"inherit" }}>
-              <option value="all">הכל</option>
-              {allCatOptions.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-            {(filterCat !== "all" || filterSource !== "all" || searchText.trim()) && (
-              <button onClick={() => { setFilterCat("all"); setFilterSource("all"); setFilterProvider("all"); setSearchText(""); }}
-                style={{ padding:"3px 10px", borderRadius:8, fontSize: 13, cursor:"pointer", fontFamily:"inherit", border:"1px solid var(--border)", background:"transparent", color:"var(--text-dim)" }}>
-                נקה פילטרים
-              </button>
-            )}
-          </div>
-        );
-      })()}
-
-      {providerLabels.length > 1 && (
-        <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap" }}>
-          {[["all","הכל"], ...providerLabels.map(p => [p, p])].map(([v,l]) => (
-            <button key={v} onClick={() => setFilterProvider(v)}
-              style={{ padding:"4px 12px", borderRadius:20, fontSize: 14, cursor:"pointer", fontFamily:"inherit",
-                border:`1px solid ${filterProvider===v?"var(--green-mid)":"var(--border)"}`,
-                background:filterProvider===v?"var(--green-mint)":"transparent",
-                color:filterProvider===v?"var(--green-deep)":"var(--text-mid)" }}>
-              {l}
+          {(filterCat !== "all" || filterSource !== "all" || searchText.trim() || filterDate || filterProvider !== "all") && (
+            <button onClick={() => { setFilterCat("all"); setFilterSource("all"); setFilterProvider("all"); setSearchText(""); setFilterDate(""); }}
+              style={{ padding:"6px 12px", borderRadius:8, fontSize:13, cursor:"pointer", fontFamily:"inherit", border:"1px solid var(--border)", background:"transparent", color:"var(--text-dim)" }}>
+              נקה פילטרים
             </button>
-          ))}
+          )}
         </div>
-      )}
+
+        {/* Advanced panel */}
+        {advFilterOpen && (
+          <div style={{ marginTop:14, paddingTop:14, borderTop:"1px dashed var(--border)" }}>
+            {/* מקור — pill-grp */}
+            <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap", marginBottom:10 }}>
+              <span style={{ fontSize:13, color:"var(--text-dim)", fontWeight:500, whiteSpace:"nowrap" }}>מקור:</span>
+              <div style={{ display:"inline-flex", background:"var(--surface2)", borderRadius:10, padding:3, gap:2 }}>
+                {[["all","הכל"], ["file","קבצים"], ["ext","מקס"], ["manual","ידני"]].map(([v,l]) => (
+                  <button key={v} onClick={() => { setFilterSource(v); setFilterProvider("all"); }}
+                    style={{ background: filterSource===v ? "var(--surface)" : "transparent",
+                      border:0, padding:"6px 12px", borderRadius:8, fontFamily:"inherit", fontSize:13, fontWeight: filterSource===v ? 600 : 500,
+                      color: filterSource===v ? "var(--green-deep)" : "var(--text-mid)", cursor:"pointer",
+                      boxShadow: filterSource===v ? "0 1px 2px rgba(0,0,0,0.04)" : "none" }}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* Provider sub-filter */}
+            {providerLabels.length > 1 && (
+              <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap", marginBottom:10 }}>
+                <span style={{ fontSize:13, color:"var(--text-dim)", fontWeight:500, whiteSpace:"nowrap" }}>ספק:</span>
+                <div style={{ display:"inline-flex", background:"var(--surface2)", borderRadius:10, padding:3, gap:2 }}>
+                  {[["all","הכל"], ...providerLabels.map(p => [p, p])].map(([v,l]) => (
+                    <button key={v} onClick={() => setFilterProvider(v)}
+                      style={{ background: filterProvider===v ? "var(--surface)" : "transparent",
+                        border:0, padding:"6px 12px", borderRadius:8, fontFamily:"inherit", fontSize:13, fontWeight: filterProvider===v ? 600 : 500,
+                        color: filterProvider===v ? "var(--green-deep)" : "var(--text-mid)", cursor:"pointer",
+                        boxShadow: filterProvider===v ? "0 1px 2px rgba(0,0,0,0.04)" : "none" }}>
+                      {l}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* Date filter */}
+            <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+              <span style={{ fontSize:13, color:"var(--text-dim)", fontWeight:500, whiteSpace:"nowrap" }}>תאריך:</span>
+              {filterDate ? (
+                <>
+                  <input type="date" value={filterDate} onChange={e => setFilterDate(e.target.value)}
+                    style={{ padding:"6px 10px", borderRadius:8, border:"1px solid var(--border)", background:"var(--surface)", color:"var(--text)", fontSize:13, fontFamily:"inherit" }} />
+                  <button onClick={() => setFilterDate("")}
+                    style={{ padding:"5px 8px", borderRadius:8, fontSize:13, cursor:"pointer", fontFamily:"inherit", border:"1px solid var(--border)", background:"transparent", color:"var(--text-dim)" }}>×</button>
+                </>
+              ) : (
+                <button onClick={() => setFilterDate(new Date().toISOString().slice(0,10))}
+                  style={{ padding:"6px 12px", borderRadius:8, fontSize:13, cursor:"pointer", fontFamily:"inherit", border:"1px solid var(--border)", background:"transparent", color:"var(--text-dim)" }}>
+                  + בחר תאריך
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* ── Unified expandable month list ── */}
       <RememberModal pendingRemember={pendingRemember}
@@ -4905,170 +5434,182 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
 
         const renderTxRow = (tx, isIgnored) => {
           const needsClassification = tx.source === "manual" && tx.conf && tx.conf !== "high";
+          const isUncat = !tx.cat || tx.cat === "לא מסווג";
+          const isIncome = tx.type === "income" || incomeCats.has(tx.cat);
           return (
-          <Card key={tx._uid} style={{ marginBottom:6, padding:"14px 18px",
+          <div key={tx._uid} style={{
+            display:"flex", alignItems:"center", gap:14,
             background: needsClassification ? "rgba(247,92,92,0.04)" : isIgnored ? "rgba(180,180,180,0.06)" : "var(--surface)",
-            borderRight: needsClassification ? "3px solid var(--red)" : isIgnored ? "3px solid var(--text-dim)" : "none",
-            boxShadow: "0 1px 3px rgba(30,77,53,0.05)" }}>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:10 }}>
-              <div style={{ flex:1 }}>
-                <div style={{ fontWeight:600, fontSize: 17, lineHeight:1.3,
-                  textDecoration: isIgnored ? "line-through" : "none",
-                  color: isIgnored ? "var(--text-dim)" : "var(--text)" }}>{tx.name}</div>
-                <div style={{ fontSize: 15, color:"var(--text-dim)", display:"flex", gap:6, alignItems:"center", marginTop:3 }}>
-                  <span>{tx.date}</span>
-                  <span style={{ padding:"1px 6px", borderRadius:10, fontSize: 13,
-                    background: tx.source === "ext" ? "rgba(79,142,247,0.12)" : tx.source === "manual" ? "rgba(251,191,36,0.12)" : "rgba(46,204,138,0.12)",
-                    color: tx.source === "ext" ? "var(--green-mid)" : tx.source === "manual" ? "var(--gold)" : "var(--green-deep)" }}>
-                    {tx.source_label}
-                  </span>
-                </div>
-              </div>
-              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                <span style={{ fontFamily:"'Frank Ruhl Libre', serif", fontWeight:700, color: (tx.type === "income" || incomeCats.has(tx.cat)) ? "var(--green-mid)" : "var(--red)", fontSize: 19, letterSpacing:"-0.3px" }}>
-                  {(tx.type === "income" || incomeCats.has(tx.cat)) ? "+" : ""}₪{Number(tx.amount).toLocaleString()}
+            border:`1px solid ${selectedUids.has(tx._uid) ? "var(--green-mid)" : needsClassification ? "rgba(192,57,43,0.25)" : "var(--border)"}`,
+            borderRadius:12,
+            padding:"12px 16px",
+            flexWrap:"wrap",
+            transition:"border-color 0.15s, background 0.15s"
+          }}>
+            <input type="checkbox" checked={selectedUids.has(tx._uid)}
+              onChange={() => toggleSelectTx(tx._uid)}
+              onClick={e => e.stopPropagation()}
+              style={{ width:18, height:18, cursor:"pointer", flexShrink:0, accentColor:"var(--green-mid)", borderRadius:4 }}
+            />
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontWeight:600, fontSize:15, color: isIgnored ? "var(--text-dim)" : "var(--text)",
+                whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", marginBottom:3,
+                textDecoration: isIgnored ? "line-through" : "none" }}>{tx.name}</div>
+              <div style={{ fontSize:12, color:"var(--text-dim)", display:"flex", alignItems:"center", gap:8 }}>
+                {tx.date && <span style={{ direction:"ltr", unicodeBidi:"embed" }}>{tx.date}</span>}
+                {tx.date && tx.source_label && <span style={{ color:"var(--border)" }}>·</span>}
+                <span style={{ display:"inline-flex", alignItems:"center", padding:"2px 8px", borderRadius:6,
+                  fontSize:11, fontWeight:600, background:"var(--surface2)", color:"var(--text-mid)", letterSpacing:"0.02em" }}>
+                  {tx.source_label}
                 </span>
-                <button
-                  onClick={() => { setActiveTxUid(tx._uid === activeTxUid ? null : tx._uid); setCatSearch(""); setPendingRemember(null); }}
-                  style={{ background:"var(--green-pale)", border:"1px solid var(--green-mint)", borderRadius:20, padding:"4px 14px",
-                    fontSize: 14, color:"var(--green-deep)", cursor:"pointer", fontFamily:"inherit", fontWeight:600, whiteSpace:"nowrap" }}>
-                  {tx.cat || "לא מסווג"}
-                </button>
-                <input type="checkbox" checked={selectedUids.has(tx._uid)}
-                  onChange={() => toggleSelectTx(tx._uid)}
-                  onClick={e => e.stopPropagation()}
-                  style={{ width:16, height:16, cursor:"pointer", accentColor:"var(--green-mid)" }}
-                />
-                <button onClick={() => {
-                    if (tx.source === "manual") setConfirmDelete({ type:"manual", uid:tx._uid, dbId:tx._dbId, label:tx.name });
-                    else if (tx.source === "file") setConfirmDelete({ type:"file", uid:tx._uid, tx, label:tx.name });
-                    else setConfirmDelete({ type:"tx", uid:tx._uid, dbId:tx._dbId, label:tx.name });
-                  }}
-                  title="מחק תנועה"
-                  style={{ padding:"3px 7px", borderRadius:6, border:"1px solid #ffcdd2", background:"#fff8f8", color:"#e53935", fontSize: 14, cursor:"pointer", fontFamily:"inherit" }}>
-                  <DocIcon name="trash" color="#e53935" size={14} />
-                </button>
               </div>
             </div>
+            <button
+              onClick={() => { setActiveTxUid(tx._uid === activeTxUid ? null : tx._uid); setCatSearch(""); setPendingRemember(null); }}
+              style={{ padding:"5px 12px", borderRadius:20, fontSize:13, fontWeight:500,
+                background:"var(--surface2)",
+                border:`1px solid ${isUncat ? "rgba(192,57,43,0.2)" : "var(--border)"}`,
+                color: isUncat ? "var(--red)" : "var(--text-mid)",
+                cursor:"pointer", fontFamily:"inherit", whiteSpace:"nowrap",
+                transition:"border-color 0.15s, background 0.15s" }}>
+              {tx.cat || "לא מסווג"}
+            </button>
+            <span style={{ fontFamily:"'Frank Ruhl Libre', serif", fontWeight:600, fontSize:17, letterSpacing:"-0.2px",
+              color: isIncome ? "var(--green-mid)" : isIgnored ? "var(--text-dim)" : "var(--red)",
+              direction:"ltr", unicodeBidi:"embed", minWidth:90, textAlign:"left", whiteSpace:"nowrap" }}>
+              {isIncome ? "+" : ""}₪{Number(tx.amount).toLocaleString()}
+            </span>
+            <button onClick={() => {
+                if (tx.source === "manual") setConfirmDelete({ type:"manual", uid:tx._uid, dbId:tx._dbId, label:tx.name });
+                else if (tx.source === "file") setConfirmDelete({ type:"file", uid:tx._uid, tx, label:tx.name });
+                else setConfirmDelete({ type:"tx", uid:tx._uid, dbId:tx._dbId, label:tx.name });
+              }}
+              title="מחק תנועה"
+              style={{ width:32, height:32, display:"grid", placeItems:"center",
+                background:"transparent", border:"1px solid transparent", borderRadius:8,
+                color:"var(--text-dim)", cursor:"pointer", flexShrink:0, transition:"all 0.15s" }}
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color="var(--red)"; (e.currentTarget as HTMLButtonElement).style.background="var(--red-light)"; (e.currentTarget as HTMLButtonElement).style.borderColor="rgba(192,57,43,0.18)"; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color="var(--text-dim)"; (e.currentTarget as HTMLButtonElement).style.background="transparent"; (e.currentTarget as HTMLButtonElement).style.borderColor="transparent"; }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+              </svg>
+            </button>
             {activeTxUid === tx._uid && (
-              <CategoryPicker current={tx.cat} catSearch={catSearch} setCatSearch={setCatSearch}
-                categories={categories} rows={categoryRows} clientCats={clientCats} clientId={clientId} onCategoryAdded={onCategoryAdded}
-                hiddenCats={hiddenCats} onHiddenCatsChange={onHiddenCatsChange} scenarioCats={scenarioCats}
-                onSelect={async (cat) => {
-                  if (tx.source === "ext") {
-                    // קודם שנה רק את התנועה הבודדת ב-localEdits
-                    setLocalEdits(prev => { const next = new Map(prev); next.set(tx._uid, cat); return next; });
-                    // שאל את המשתמש מה לעשות — ה-modal יטפל בהמשך
-                    setPendingRemember({ name: tx.name, cat, singleUid: tx._uid });
-                  } else if (tx.source === "manual") {
-                    const oldCat = tx.cat;
-                    await supabase.from("manual_transactions").update({ cat, conf: "high" }).eq("id", tx._dbId);
-                    await supabase.from("client_change_log").insert([{ client_id: clientId, event_type: "remap_business", details: { business_name: tx.name, from_cat: oldCat, to_cat: cat } }]);
-                    setLocalEdits(prev => { const next = new Map(prev); next.set(tx._uid, cat); return next; });
-                    onDataChange();
-                  } else {
-                    setLocalEdits(prev => { const next = new Map(prev); next.set(tx._uid, cat); return next; });
-                    await onUpdatePortfolioTxCat(tx._submissionId, tx._txIndex, cat);
-                    onDataChange();
-                  }
-                  setActiveTxUid(null);
-                }}
-              />
+              <div style={{ width:"100%" }}>
+                <CategoryPicker current={tx.cat} catSearch={catSearch} setCatSearch={setCatSearch}
+                  categories={categories} rows={categoryRows} clientCats={clientCats} clientId={clientId} onCategoryAdded={onCategoryAdded}
+                  hiddenCats={hiddenCats} onHiddenCatsChange={onHiddenCatsChange} scenarioCats={scenarioCats}
+                  onSelect={async (cat) => {
+                    if (tx.source === "ext") {
+                      setLocalEdits(prev => { const next = new Map(prev); next.set(tx._uid, cat); return next; });
+                      setPendingRemember({ name: tx.name, cat, singleUid: tx._uid });
+                    } else if (tx.source === "manual") {
+                      const oldCat = tx.cat;
+                      await supabase.from("manual_transactions").update({ cat, conf: "high" }).eq("id", tx._dbId);
+                      await supabase.from("client_change_log").insert([{ client_id: clientId, event_type: "remap_business", details: { business_name: tx.name, from_cat: oldCat, to_cat: cat } }]);
+                      setLocalEdits(prev => { const next = new Map(prev); next.set(tx._uid, cat); return next; });
+                      onDataChange();
+                    } else {
+                      setLocalEdits(prev => { const next = new Map(prev); next.set(tx._uid, cat); return next; });
+                      await onUpdatePortfolioTxCat(tx._submissionId, tx._txIndex, cat);
+                      onDataChange();
+                    }
+                    setActiveTxUid(null);
+                  }}
+                />
+              </div>
             )}
-          </Card>
+          </div>
           );
         };
 
+        const cycleExpenses = activeTxs.filter(t => t.flow_type !== 'credit_transfer' && !incomeCats.has(t.cat)).reduce((s,t) => s + Number(t.amount||0), 0);
+        const cycleIncome  = activeTxs.filter(t => t.flow_type !== 'credit_transfer' &&  incomeCats.has(t.cat)).reduce((s,t) => s + Number(t.amount||0), 0);
+        const cycleBalance = cycleIncome - cycleExpenses;
+
         return (
-          <div key={key} style={{ marginBottom:16 }}>
+          <div key={key} style={{ marginBottom:14 }}>
             {/* Month header — click to expand/collapse */}
             <div onClick={() => toggleMonth(key)}
-              style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
-                background: "linear-gradient(135deg, var(--green-pale) 0%, #e4f5e9 100%)",
-                border:"1.5px solid var(--green-mint)",
-                borderRadius: isOpen ? "12px 12px 0 0" : 12,
+              style={{ display:"flex", alignItems:"center", gap:16,
+                background:"var(--surface)",
+                border:"1px solid var(--border)",
+                borderBottom: isOpen ? "1px solid var(--border)" : "1px solid var(--border)",
+                borderRadius: isOpen ? "14px 14px 0 0" : 14,
                 padding:"16px 20px", cursor:"pointer",
-                boxShadow: isOpen ? "none" : "0 2px 12px rgba(45,106,79,0.08)",
-                transition:"box-shadow 0.2s" }}>
-              <div>
-                <div style={{ fontFamily:"'Frank Ruhl Libre', serif", fontWeight:700, fontSize: 22, color:"var(--green-deep)", lineHeight:1.2 }}>{label}</div>
-                {!isOpen && (
-                  <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:8 }}>
-                    {top3.map(([cat,amt]) => (
-                      <span key={cat} style={{ background:"rgba(45,106,79,0.08)", border:"1px solid rgba(45,106,79,0.15)", borderRadius:20, padding:"2px 10px", fontSize: 14, color:"var(--green-deep)" }}>
-                        {cat}: ₪{Math.round(amt).toLocaleString()}
-                      </span>
-                    ))}
-                    {ignoredTxs.length > 0 && (
-                      <span style={{ fontSize: 15, color:"var(--text-dim)", fontWeight:600 }}>🚫 {ignoredTxs.length} מוסתרות</span>
-                    )}
-                  </div>
-                )}
+                boxShadow:"0 1px 4px rgba(30,77,53,0.06)",
+                transition:"border-color 0.2s, box-shadow 0.2s" }}>
+              {/* Month name */}
+              <div style={{ fontWeight:700, fontSize:18, color:"var(--green-deep)", letterSpacing:"-0.01em", lineHeight:1.2, flexShrink:0 }}>{label}</div>
+              {/* Summary */}
+              <div style={{ display:"flex", alignItems:"center", gap:16, fontSize:13, color:"var(--text-dim)", flex:1 }}>
+                <span><b style={{ color:"var(--text-mid)", fontWeight:600 }}>{activeTxs.length}</b> תנועות</span>
+                <span style={{ color:"var(--border)" }}>·</span>
+                <span>הוצאות <span style={{ fontFamily:"'Frank Ruhl Libre', serif", fontWeight:600, fontSize:17, lineHeight:1, letterSpacing:"-0.3px", direction:"ltr", unicodeBidi:"embed", color:"var(--red)" }}>₪−{Math.round(cycleExpenses).toLocaleString()}</span></span>
+                <span style={{ color:"var(--border)" }}>·</span>
+                <span>הכנסות <span style={{ fontFamily:"'Frank Ruhl Libre', serif", fontWeight:600, fontSize:17, lineHeight:1, letterSpacing:"-0.3px", direction:"ltr", unicodeBidi:"embed", color:"var(--green-mid)" }}>+₪{Math.round(cycleIncome).toLocaleString()}</span></span>
+                <span style={{ color:"var(--border)" }}>·</span>
+                <span>מאזן <span style={{ fontFamily:"'Frank Ruhl Libre', serif", fontWeight:600, fontSize:17, lineHeight:1, letterSpacing:"-0.3px", direction:"ltr", unicodeBidi:"embed", color: cycleBalance >= 0 ? "var(--green-mid)" : "var(--red)" }}>{cycleBalance >= 0 ? `+₪${Math.round(cycleBalance).toLocaleString()}` : `₪−${Math.abs(Math.round(cycleBalance)).toLocaleString()}`}</span></span>
               </div>
-              <div style={{ display:"flex", alignItems:"center", gap:14 }}>
-                <span style={{ fontSize: 15, color:"var(--text-dim)" }}>{activeTxs.length} תנועות</span>
-                <span style={{ fontFamily:"'Frank Ruhl Libre', serif", fontSize: 28, fontWeight:700, color: cycleTotal <= 0 ? "var(--green-mid)" : "var(--red)", letterSpacing:"-0.5px", direction:"ltr", unicodeBidi:"embed" }}>
-                  {cycleTotal <= 0 ? "+" : "₪−"}{cycleTotal <= 0 ? `₪${Math.abs(Math.round(cycleTotal)).toLocaleString()}` : `${Math.round(cycleTotal).toLocaleString()}`}
-                </span>
-                {(() => {
-                  if (cycleTxs.length === 0) return null;
-                  const allSel = cycleTxs.every(t => selectedUids.has(t._uid));
-                  const monthSelectedCount = cycleTxs.filter(t => selectedUids.has(t._uid)).length;
-                  return (
-                    <div style={{ display:"flex", gap:6, alignItems:"center" }} onClick={e => e.stopPropagation()}>
-                      <button onClick={() => toggleSelectMonth(cycleTxs)}
-                        style={{ padding:"4px 12px", fontSize: 14, borderRadius:7, fontFamily:"inherit", cursor:"pointer",
-                          border:"1px solid var(--border)", background: allSel ? "rgba(229,57,53,0.08)" : "transparent",
-                          color: allSel ? "#e53935" : "var(--text-dim)" }}>
-                        {allSel ? "בטל בחירה" : "בחר הכל"}
-                      </button>
-                      {monthSelectedCount > 0 ? (
-                        <>
-                          <button onClick={ignoreSelected}
-                            style={{ padding:"6px 16px", fontSize: 15, borderRadius:8, fontFamily:"inherit", cursor:"pointer",
-                              border:"1.5px solid var(--border)", background:"var(--surface)", color:"var(--text-mid)", fontWeight:700,
-                              display:"flex", alignItems:"center", gap:5 }}>
-                            ⊘ התעלם ({monthSelectedCount})
-                          </button>
-                          <button onClick={deleteSelected}
-                            style={{ padding:"6px 16px", fontSize: 15, borderRadius:8, fontFamily:"inherit", cursor:"pointer",
-                              border:"1.5px solid #e53935", background:"#e53935", color:"#fff", fontWeight:700,
-                              display:"flex", alignItems:"center", gap:5 }}>
-                            מחק ({monthSelectedCount})
-                          </button>
-                          <button onClick={() => setSelectedUids(new Set())}
-                            style={{ background:"transparent", border:"none", color:"var(--text-dim)", cursor:"pointer", fontSize: 20, padding:"0 4px", lineHeight:1 }}>×</button>
-                        </>
-                      ) : (
-                        <button onClick={() => deleteMonth(cycleTxs)}
-                          title="מחק את כל תנועות החודש"
-                          style={{ padding:"4px 12px", fontSize: 14, borderRadius:7, fontFamily:"inherit", cursor:"pointer",
-                            border:"1px solid rgba(229,57,53,0.4)", background:"rgba(229,57,53,0.06)", color:"#e53935" }}>
-                          מחק חודש
+              {/* Actions */}
+              {(() => {
+                if (cycleTxs.length === 0) return null;
+                const allSel = cycleTxs.every(t => selectedUids.has(t._uid));
+                const monthSelectedCount = cycleTxs.filter(t => selectedUids.has(t._uid)).length;
+                return (
+                  <div style={{ display:"flex", gap:6, alignItems:"center" }} onClick={e => e.stopPropagation()}>
+                    <button onClick={() => toggleSelectMonth(cycleTxs)}
+                      style={{ padding:"7px 12px", fontSize:13, borderRadius:8, fontFamily:"inherit", cursor:"pointer", fontWeight:600,
+                        border:"1px solid var(--border)", background:"transparent", color:"var(--text-mid)" }}>
+                      {allSel ? "בטל בחירה" : "בחר הכל"}
+                    </button>
+                    {monthSelectedCount > 0 ? (
+                      <>
+                        <button onClick={ignoreSelected}
+                          style={{ padding:"6px 14px", fontSize:13, borderRadius:8, fontFamily:"inherit", cursor:"pointer",
+                            border:"1px solid var(--border)", background:"var(--surface)", color:"var(--text-mid)", fontWeight:600 }}>
+                          ⊘ התעלם ({monthSelectedCount})
                         </button>
-                      )}
-                    </div>
-                  );
-                })()}
-                <span style={{ color:"var(--text-dim)", fontSize: 18 }}>{isOpen ? "▲" : "▼"}</span>
-              </div>
+                        <button onClick={deleteSelected}
+                          style={{ padding:"6px 14px", fontSize:13, borderRadius:8, fontFamily:"inherit", cursor:"pointer",
+                            border:"1px solid #e53935", background:"var(--red)", color:"#fff", fontWeight:600 }}>
+                          מחק ({monthSelectedCount})
+                        </button>
+                        <button onClick={() => setSelectedUids(new Set())}
+                          style={{ background:"transparent", border:"none", color:"var(--text-dim)", cursor:"pointer", fontSize:18, padding:"0 4px", lineHeight:1 }}>×</button>
+                      </>
+                    ) : isOpen ? (
+                      <button onClick={() => deleteMonth(cycleTxs)}
+                        style={{ padding:"7px 12px", fontSize:13, borderRadius:8, fontFamily:"inherit", cursor:"pointer", fontWeight:600,
+                          border:"1px solid var(--red-light)", background:"transparent", color:"var(--red)" }}>
+                        מחק חודש
+                      </button>
+                    ) : null}
+                  </div>
+                );
+              })()}
+              {/* Chevron */}
+              <svg style={{ width:20, height:20, color:"var(--text-dim)", transition:"transform 0.2s", transform: isOpen ? "rotate(180deg)" : "none", flexShrink:0 }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
             </div>
 
             {/* Expanded content */}
             {isOpen && (
-              <div style={{ border:"1.5px solid var(--green-mint)", borderTop:"none", borderRadius:"0 0 12px 12px", padding:"14px 14px 10px", background:"var(--surface)" }}>
-                {/* Sort controls */}
-                <div style={{ display:"flex", gap:6, marginBottom:10, alignItems:"center", flexWrap:"wrap" }}>
-                  <span style={{ fontSize: 13, color:"var(--text-dim)" }}>מיון:</span>
+              <div style={{ border:"1px solid var(--border)", borderTop:"none", borderRadius:"0 0 14px 14px", background:"var(--surface)", padding:"14px 18px 18px" }}>
+                {/* Sort bar */}
+                <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap", marginBottom:12, paddingBottom:12, borderBottom:"1px dashed var(--border)" }}>
+                  <span style={{ fontSize:12, color:"var(--text-dim)" }}>מיון:</span>
                   {([["date","תאריך"], ["amount","סכום"], ["cat","קטגוריה"]] as const).map(([field, label]) => {
                     const active = sortConfig.field === field;
                     return (
                       <button key={field} onClick={() => setSortConfig(prev => ({ field, dir: prev.field === field && prev.dir === "asc" ? "desc" : "asc" }))}
-                        style={{ padding:"2px 10px", borderRadius:14, fontSize: 13, cursor:"pointer", fontFamily:"inherit",
+                        style={{ padding:"4px 12px", borderRadius:14, fontSize:12, cursor:"pointer", fontFamily:"inherit", fontWeight:500,
                           border:`1px solid ${active?"var(--green-mid)":"var(--border)"}`,
                           background:active?"var(--green-mint)":"transparent",
-                          color:active?"var(--green-deep)":"var(--text-dim)" }}>
-                        {label} {active ? (sortConfig.dir === "asc" ? "↑" : "↓") : ""}
+                          color:active?"var(--green-deep)":"var(--text-mid)",
+                          transition:"all 0.15s" }}>
+                        {label}{active ? (sortConfig.dir === "asc" ? " ↑" : " ↓") : ""}
                       </button>
                     );
                   })}
@@ -5112,33 +5653,35 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                       onDataChange();
                     };
                     return (
-                    <div key={g.label}>
-                      <div style={{ display:"flex", alignItems:"center", gap:10, margin:"14px 0 8px", padding:"12px 16px", borderRadius:10,
-                        background: groupBg, border:`1.5px solid ${groupColor}33`, boxShadow:"0 1px 4px rgba(30,77,53,0.06)" }}>
-                        <span style={{ fontSize: 17, fontWeight:700, color: groupColor }}>
-                          {g.label}
+                    <div key={g.label} style={{ marginTop:14 }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8, padding:"10px 14px",
+                        background:"var(--surface2)", borderRadius:10 }}>
+                        <span style={{ fontSize:14, fontWeight:700, color:"var(--green-deep)" }}>{g.label}</span>
+                        <span style={{ fontSize:13, color:"var(--text-dim)", fontWeight:500 }}>{g.txs.length} תנועות</span>
+                        <span style={{ marginRight:"auto", fontFamily:"'Frank Ruhl Libre', serif", fontSize:16, fontWeight:600, letterSpacing:"-0.2px", direction:"ltr", unicodeBidi:"embed",
+                          color: groupTotal <= 0 ? "var(--green-mid)" : "var(--red)" }}>
+                          {groupTotal <= 0 ? `+₪${Math.abs(groupTotal).toLocaleString()}` : `₪−${groupTotal.toLocaleString()}`}
                         </span>
-                        <span style={{ fontSize: 15, color:"var(--text-dim)", fontWeight:500 }}>{g.txs.length} תנועות</span>
-                        <span style={{ fontFamily:"'Frank Ruhl Libre', serif", fontSize: 20, fontWeight:700, marginRight:"auto", color: groupTotal <= 0 ? "var(--green-mid)" : "var(--red)", letterSpacing:"-0.3px", direction:"ltr", unicodeBidi:"embed" }}>
-                          {groupTotal <= 0 ? "+" : "₪−"}{groupTotal <= 0 ? `₪${Math.abs(groupTotal).toLocaleString()}` : `${groupTotal.toLocaleString()}`}
-                        </span>
-                        <button onClick={() => setSelectedUids(prev => {
-                          const next = new Set(prev);
-                          if (allGroupSel) groupUids.forEach(uid => next.delete(uid));
-                          else groupUids.forEach(uid => next.add(uid));
-                          return next;
-                        })} style={{ padding:"4px 12px", fontSize: 14, borderRadius:7, fontFamily:"inherit", cursor:"pointer",
-                          border:"1px solid var(--border)", background: allGroupSel ? "rgba(229,57,53,0.08)" : "transparent",
-                          color: allGroupSel ? "#e53935" : "var(--text-dim)" }}>
-                          {allGroupSel ? "בטל בחירה" : "בחר הכל"}
-                        </button>
-                        <button onClick={deleteGroup}
-                          style={{ padding:"4px 12px", fontSize: 14, borderRadius:7, fontFamily:"inherit", cursor:"pointer",
-                            border:"1px solid rgba(229,57,53,0.4)", background:"rgba(229,57,53,0.06)", color:"#e53935", fontWeight:600 }}>
-                          מחק מקור
-                        </button>
+                        <div style={{ display:"flex", gap:6 }}>
+                          <button onClick={() => setSelectedUids(prev => {
+                            const next = new Set(prev);
+                            if (allGroupSel) groupUids.forEach(uid => next.delete(uid));
+                            else groupUids.forEach(uid => next.add(uid));
+                            return next;
+                          })} style={{ padding:"7px 12px", fontSize:13, borderRadius:8, fontFamily:"inherit", cursor:"pointer", fontWeight:600,
+                            border:"1px solid var(--border)", background:"transparent", color:"var(--text-mid)" }}>
+                            {allGroupSel ? "בטל בחירה" : "בחר הכל"}
+                          </button>
+                          <button onClick={deleteGroup}
+                            style={{ padding:"7px 12px", fontSize:13, borderRadius:8, fontFamily:"inherit", cursor:"pointer", fontWeight:600,
+                              border:"1px solid var(--red-light)", background:"transparent", color:"var(--red)" }}>
+                            מחק מקור
+                          </button>
+                        </div>
                       </div>
-                      {g.txs.map(tx => renderTxRow(tx, false))}
+                      <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                        {g.txs.map(tx => renderTxRow(tx, false))}
+                      </div>
                     </div>
                     );
                   });
@@ -5148,7 +5691,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                   <>
                     <div style={{ marginTop:12, marginBottom:6, display:"flex", alignItems:"center", gap:10, padding:"8px 12px", background:"var(--surface2)", borderRadius:8 }}>
                       <span style={{ fontSize: 16, color:"var(--text-dim)", fontWeight:600 }} title={`קטגוריות מוסתרות: ${[...ignoredCats].join(", ")}`}>
-                        🚫 {ignoredTxs.length} תנועות מוסתרות (קטגוריות מסוננות)
+                        {ignoredTxs.length} תנועות מוסתרות (קטגוריות מסוננות)
                       </span>
                       <button onClick={() => setIgnoredOpen(p => ({ ...p, [key]: !p[key] }))}
                         style={{ padding:"4px 14px", borderRadius:10, fontSize: 15, cursor:"pointer", fontFamily:"inherit",
@@ -5185,7 +5728,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                         + הוסף הכנסה
                       </button>
                       <button onClick={() => setMonthAddMode(key, "expense-choice")}
-                        style={{ padding:"5px 14px", fontSize: 14, fontFamily:"inherit", borderRadius:8, border:"1px solid #ffcdd2", background:"#fff8f8", color:"#e53935", cursor:"pointer", fontWeight:600 }}>
+                        style={{ padding:"5px 14px", fontSize: 14, fontFamily:"inherit", borderRadius:8, border:"1px solid var(--red)", background:"var(--red-light)", color:"var(--red)", cursor:"pointer", fontWeight:600 }}>
                         − הוסף הוצאה
                       </button>
                       <button onClick={() => resetAdd(key)}
@@ -5238,7 +5781,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
 
                   if (mode === "expense-cash" || mode === "expense-other") return (
                     <div style={{ marginTop:10, background:"rgba(247,92,92,0.04)", border:"1px solid rgba(247,92,92,0.18)", borderRadius:10, padding:"14px 14px 10px" }}>
-                      <div style={{ fontWeight:700, fontSize: 15, marginBottom:10, color:"#e53935" }}>
+                      <div style={{ fontWeight:700, fontSize: 15, marginBottom:10, color:"var(--red)" }}>
                         − הוצאה {mode === "expense-cash" ? "במזומן" : ""}
                       </div>
                       {mode === "expense-other" && (
@@ -5260,19 +5803,22 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                         </div>
                         <div style={{ flex:2, minWidth:140 }}>
                           <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:3 }}>סיווג *</div>
-                          <select style={inputS} value={form.cat||""} onChange={e=>updateForm(key,"cat",e.target.value)}>
-                            <option value="">בחר קטגוריה...</option>
-                            {Object.entries(categories || CATEGORIES).map(([section, cats]) => (
-                              <optgroup key={section} label={section}>
-                                {(cats as string[]).map(c => <option key={c} value={c}>{c}</option>)}
-                              </optgroup>
-                            ))}
-                            {clientCats && clientCats.length > 0 && (
-                              <optgroup label="⭐ הקטגוריות שלי">
-                                {clientCats.map(c => <option key={c} value={c}>{c}</option>)}
-                              </optgroup>
-                            )}
-                          </select>
+                          <CustomSelect
+                            value={form.cat || ""}
+                            onChange={v => updateForm(key, "cat", v as string)}
+                            groups={[
+                              ...Object.entries(categories || CATEGORIES).map(([section, cats]) => ({
+                                label: section,
+                                options: (cats as string[]).map(c => ({ value: c, label: c })),
+                              })),
+                              ...(clientCats && clientCats.length > 0 ? [{
+                                label: "הקטגוריות שלי",
+                                options: clientCats.map(c => ({ value: c, label: c })),
+                              }] : []),
+                            ]}
+                            placeholder="בחר קטגוריה..."
+                            style={{ width: "100%" }}
+                          />
                         </div>
                         <div style={{ flex:1, minWidth:110 }}>
                           <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:3 }}>תאריך (אופציונלי)</div>
@@ -5282,7 +5828,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                       <div style={{ display:"flex", gap:8 }}>
                         <button onClick={() => saveManualTx(key, "expense")}
                           disabled={!form.name || !form.amount || !form.cat}
-                          style={{ padding:"6px 18px", borderRadius:8, border:"none", background:"#e53935", color:"#fff", fontSize: 15, fontWeight:700, cursor:"pointer", fontFamily:"inherit", opacity:(!form.name||!form.amount||!form.cat)?0.5:1 }}>
+                          style={{ padding:"6px 18px", borderRadius:8, border:"none", background:"var(--red)", color:"#fff", fontSize: 15, fontWeight:700, cursor:"pointer", fontFamily:"inherit", opacity:(!form.name||!form.amount||!form.cat)?0.5:1 }}>
                           שמור
                         </button>
                         <button onClick={() => resetAdd(key)} style={{ padding:"6px 12px", borderRadius:8, border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text)", fontSize: 15, cursor:"pointer", fontFamily:"inherit" }}>ביטול</button>
@@ -5309,7 +5855,7 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                         </button>
                         <button onClick={() => setConfirmDelete({ type:"submission", submissionId:subId, label:subLabel, count:subCount })}
                           style={{ padding:"4px 8px", borderRadius:8, fontSize: 14, cursor:"pointer", fontFamily:"inherit",
-                            border:"1px solid #ffcdd2", background:"#fff8f8", color:"#e53935" }}>
+                            border:"1px solid var(--red)", background:"var(--red-light)", color:"var(--red)" }}>
                           הסר
                         </button>
                       </span>
@@ -5318,14 +5864,14 @@ function AllTransactionsTab({ clientId, importedTxs, portfolioSubs, manualTxs, r
                   {hasExtTxs && (
                     <button onClick={() => setConfirmDelete({ type:"cycle", cycleKey:key, label, count:cycleTxs.filter(t=>t.source==="ext").length })}
                       style={{ padding:"4px 10px", borderRadius:8, fontSize: 14, cursor:"pointer", fontFamily:"inherit",
-                        border:"1px solid #ffcdd2", background:"#fff8f8", color:"#e53935" }}>
+                        border:"1px solid var(--red)", background:"var(--red-light)", color:"var(--red)" }}>
                       מחק תנועות מקס מחודש זה
                     </button>
                   )}
                   <button onClick={onNavigateToUpload}
                     style={{ padding:"4px 10px", borderRadius:8, fontSize: 14, cursor:"pointer", fontFamily:"inherit",
                       border:"1px solid var(--green-mid)", background:"var(--green-mint)", color:"var(--green-deep)" }}>
-                    ➕ הוסף מקור לחודש זה
+                    + הוסף מקור לחודש זה
                   </button>
                 </div>
 
@@ -5389,39 +5935,39 @@ function PayslipsScreen({ clientId, payslips, spouseIndex, spouseName, subsCount
     const storagePath = `${clientId}/payslips/${monthKey}_${Date.now()}_${pendingFile.name}`;
     let savedPath = null;
     const { error: storageErr } = await supabase.storage.from("client-documents").upload(storagePath, pendingFile, { upsert: false });
-    if (storageErr) { setMsg("❌ שגיאה בהעלאת הקובץ — נסה שנית"); setUploading(false); return; }
+    if (storageErr) { setMsg("err:שגיאה בהעלאת הקובץ — נסה שנית"); setUploading(false); return; }
     savedPath = storagePath;
     const { error } = await supabase.from("payslips").insert([{ client_id: clientId, label, month_key: monthKey, filename: pendingFile.name, path: savedPath, spouse_index: spouseIndex || null, created_at: new Date().toISOString() }]);
-    if (error) { setMsg("❌ שגיאה בשמירה"); setUploading(false); return; }
-    setPendingFile(null); setShowPicker(false); setMsg("✅ תלוש נשמר!");
+    if (error) { setMsg("err:שגיאה בשמירה"); setUploading(false); return; }
+    setPendingFile(null); setShowPicker(false); setMsg("ok:תלוש נשמר!");
     setTimeout(() => setMsg(""), 2000);
     onDone();
     setUploading(false);
   };
 
-  const screenTitle = spouseName ? `💼 תלושי משכורת — ${spouseName}` : "💼 תלושי משכורת";
+  const screenTitle = spouseName ? `תלושי משכורת — ${spouseName}` : "תלושי משכורת";
   const remaining = 3 - myPayslips.length;
 
   return (
     <div style={{ maxWidth:700, margin:"0 auto", padding:"28px 20px" }}>
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:24 }}>
-        <Btn variant="ghost" size="sm" onClick={onBack}>← חזור</Btn>
+        <Btn variant="ghost" size="sm" onClick={onBack}>חזור ←</Btn>
         <div style={{ fontWeight:700, fontSize: 20 }}>{screenTitle}</div>
       </div>
       <Card style={{ marginBottom:20, textAlign:"center", padding:"32px 24px" }}>
-        <div style={{ fontSize:36, marginBottom:12 }}>📄</div>
+        <div style={{ marginBottom:12 }}><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--green-mid)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg></div>
         <div style={{ fontWeight:700, fontSize: 18, marginBottom:8 }}>העלה תלוש משכורת</div>
         <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:20 }}>צריך {remaining} תלוש{remaining !== 1 ? "ים" : ""} נוספים</div>
         <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display:"none" }} onChange={handleFile} />
-        <Btn onClick={() => fileRef.current?.click()} disabled={myPayslips.length >= 3}>📎 בחר קובץ</Btn>
+        <Btn onClick={() => fileRef.current?.click()} disabled={myPayslips.length >= 3}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>בחר קובץ</Btn>
       </Card>
-      {msg && <div style={{ background:msg.startsWith("✅")?"rgba(46,204,138,0.1)":"rgba(247,92,92,0.1)", border:`1px solid ${msg.startsWith("✅")?"rgba(46,204,138,0.3)":"rgba(247,92,92,0.3)"}`, borderRadius:10, padding:"10px 16px", marginBottom:16, fontSize: 15, color:msg.startsWith("✅")?"var(--green-soft)":"var(--red)" }}>{msg}</div>}
+      {msg && <div style={{ background:msg.startsWith("ok:")?"var(--green-pale)":"var(--red-light)", border:`1px solid ${msg.startsWith("ok:")?"var(--green-mint)":"var(--red)"}`, borderRadius:10, padding:"10px 16px", marginBottom:16, fontSize: 15, color:msg.startsWith("ok:")?"var(--green-mid)":"var(--red)" }}>{msg.replace(/^(ok:|err:)/,"")}</div>}
       {myPayslips.length > 0 && (
         <div>
           <div style={{ fontWeight:700, marginBottom:12 }}>תלושים שהועלו</div>
           {myPayslips.map(p => (
             <Card key={p.id} style={{ marginBottom:10, padding:"14px 20px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-              <div><div style={{ fontWeight:600 }}>📄 {p.label}</div><div style={{ fontSize: 13, color:"var(--text-dim)" }}>{p.filename} · {new Date(p.created_at).toLocaleDateString("he-IL")}</div></div>
+              <div><div style={{ fontWeight:600, display:"inline-flex", alignItems:"center", gap:5 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>{p.label}</div><div style={{ fontSize: 13, color:"var(--text-dim)" }}>{p.filename} · {new Date(p.created_at).toLocaleDateString("he-IL")}</div></div>
               <span style={{ background:"rgba(46,204,138,0.15)", color:"var(--green-soft)", borderRadius:20, padding:"3px 12px", fontSize: 14, fontWeight:700, display:"inline-flex", alignItems:"center" }}><DocIcon name="check-circle" color="var(--green-soft)" size={14} /></span>
             </Card>
           ))}
@@ -5429,19 +5975,27 @@ function PayslipsScreen({ clientId, payslips, spouseIndex, spouseName, subsCount
       )}
       {showPicker && (
         <>
-          <div onClick={() => setShowPicker(false)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", zIndex:9998 }} />
-          <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:`1px solid ${"var(--border)"}`, borderRadius:16, padding:"28px 32px", zIndex:9999, minWidth:320, textAlign:"center" }}>
+          <div onClick={() => setShowPicker(false)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", zIndex:"var(--z-back)" }} />
+          <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)", background:"var(--surface)", border:`1px solid ${"var(--border)"}`, borderRadius:16, padding:"28px 32px", zIndex:"var(--z-modal)", minWidth:320, textAlign:"center" }}>
             <div style={{ fontWeight:700, fontSize: 18, marginBottom:6 }}>לאיזה חודש התלוש?</div>
             <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:20 }}>{pendingFile?.name}</div>
             <div style={{ display:"flex", gap:10, marginBottom:20, justifyContent:"center" }}>
-              <select value={selectedMonth} onChange={e => setSelectedMonth(+e.target.value)} style={{ background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:8, padding:"8px 12px", color:"var(--text)", fontSize: 15, fontFamily:"inherit", cursor:"pointer" }}>
-                {HEBREW_MONTHS.map((m,i) => <option key={i} value={i}>{m}</option>)}
-              </select>
-              <select value={selectedYear} onChange={e => setSelectedYear(+e.target.value)} style={{ background:"var(--surface2)", border:`1px solid ${"var(--border)"}`, borderRadius:8, padding:"8px 12px", color:"var(--text)", fontSize: 15, fontFamily:"inherit", cursor:"pointer" }}>
-                {years.map(y => <option key={y} value={y}>{y}</option>)}
-              </select>
+              <CustomSelect
+                value={selectedMonth}
+                onChange={v => setSelectedMonth(Number(v))}
+                options={HEBREW_MONTHS.map((m, i) => ({ value: i, label: m }))}
+                dropdownZIndex={10010}
+                style={{ minWidth: 120 }}
+              />
+              <CustomSelect
+                value={selectedYear}
+                onChange={v => setSelectedYear(Number(v))}
+                options={years.map(y => ({ value: y, label: String(y) }))}
+                dropdownZIndex={10010}
+                style={{ minWidth: 90 }}
+              />
             </div>
-            {alreadyUploaded && <div style={{ color:"var(--gold)", fontSize: 14, marginBottom:12 }}>⚠️ כבר העלית תלוש לחודש זה</div>}
+            {alreadyUploaded && <div style={{ color:"var(--gold)", fontSize: 14, marginBottom:12 }}>כבר העלית תלוש לחודש זה</div>}
             <div style={{ display:"flex", gap:10, justifyContent:"center" }}>
               <Btn onClick={savePayslip} disabled={alreadyUploaded || uploading}>שמור תלוש</Btn>
               <Btn variant="ghost" onClick={() => setShowPicker(false)}>ביטול</Btn>
@@ -5454,7 +6008,7 @@ function PayslipsScreen({ clientId, payslips, spouseIndex, spouseName, subsCount
 }
 
 // ── Client personal tab ───────────────────────────────────────────────────────
-function ClientPersonalTab({ session }) {
+function ClientPersonalTab({ session, onOpenConnectCard = undefined as any, maxLastSync = null as string|null }) {
   const [editName, setEditName] = useState(session.name);
   const [editEmail, setEditEmail] = useState("");
   const [editPhone, setEditPhone] = useState("");
@@ -5474,25 +6028,44 @@ function ClientPersonalTab({ session }) {
   const saveDetails = async () => {
     setLoading(true);
     const { error } = await supabase.from("clients").update({ name: editName, email: editEmail, phone: editPhone }).eq("id", session.id);
-    if (error) showMsg("❌ שגיאה בשמירה"); else showMsg("✅ הפרטים עודכנו");
+    if (error) showMsg("err:שגיאה בשמירה"); else showMsg("ok:הפרטים עודכנו");
     setLoading(false);
   };
 
   const changePassword = async () => {
-    if (newPass.length < 4) { showMsg("❌ סיסמה חייבת להיות לפחות 4 תווים"); return; }
-    if (newPass !== confirmPass) { showMsg("❌ הסיסמאות לא תואמות"); return; }
+    if (newPass.length < 4) { showMsg("err:סיסמה חייבת להיות לפחות 4 תווים"); return; }
+    if (newPass !== confirmPass) { showMsg("err:הסיסמאות לא תואמות"); return; }
     setLoading(true);
     const { error } = await supabase.from("clients").update({ password: newPass }).eq("id", session.id);
-    if (error) showMsg("❌ שגיאה"); else { showMsg("✅ הסיסמה עודכנה"); setNewPass(""); setConfirmPass(""); }
+    if (error) showMsg("err:שגיאה"); else { showMsg("ok:הסיסמה עודכנה"); setNewPass(""); setConfirmPass(""); }
     setLoading(false);
   };
 
   if (!loaded) return <div style={{ color:"var(--text-dim)", padding:32, textAlign:"center" }}>טוען...</div>;
 
   return (
+    <>
+    <h1 style={{ fontFamily:"'Frank Ruhl Libre', serif", fontSize:32, fontWeight:700, color:"var(--text)", textAlign:"center", marginBottom:16, marginTop:0 }}>פרטים אישיים</h1>
+    <div style={{ height:1, background:"var(--border)", marginBottom:20 }} />
     <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))", gap:16 }}>
+      {onOpenConnectCard && (
+        <Card style={{ gridColumn:"1/-1", cursor:"pointer", border: maxLastSync ? "2px solid var(--green-soft)" : "2px solid var(--border)" }} onClick={onOpenConnectCard}>
+          <div style={{ display:"flex", alignItems:"center", gap:14 }}>
+            <div style={{ width:44, height:44, borderRadius:10, background: maxLastSync ? "var(--green-mint)" : "var(--surface2)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:22 }}>
+              {maxLastSync ? <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--green-mid)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg> : <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v6M8 3l2 5M16 3l-2 5M6.5 19.5C4.5 17.5 4 15 4 12a8 8 0 0 1 16 0c0 3-0.5 5.5-2.5 7.5"/><path d="M9 19v3M15 19v3"/></svg>}
+            </div>
+            <div style={{ flex:1 }}>
+              <div style={{ fontWeight:700, fontSize:16 }}>חיבור כרטיסי אשראי</div>
+              <div style={{ fontSize:14, color:"var(--text-dim)", marginTop:2 }}>
+                {maxLastSync ? `סנכרון MAX אחרון: ${new Date(maxLastSync).toLocaleDateString("he-IL")}` : "הגדר תוסף מאזן MAX לסנכרון ישיר"}
+              </div>
+            </div>
+            <div style={{ color:"var(--text-dim)", fontSize:18 }}>←</div>
+          </div>
+        </Card>
+      )}
       <Card>
-        <div style={{ fontWeight:700, fontSize: 18, marginBottom:16 }}>👤 הפרטים שלי</div>
+        <div style={{ fontWeight:700, fontSize: 18, marginBottom:16, display:"flex", alignItems:"center", gap:8 }}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-mid)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>הפרטים שלי</div>
         <Input label="שם מלא" value={editName} onChange={e => setEditName(e.target.value)} />
         <Input label="מייל" type="email" value={editEmail} onChange={e => setEditEmail(e.target.value)} placeholder="example@gmail.com" />
         <Input label="טלפון" value={editPhone} onChange={e => setEditPhone(e.target.value)} placeholder="050-0000000" />
@@ -5500,17 +6073,18 @@ function ClientPersonalTab({ session }) {
           <div style={{ marginBottom:4 }}>שם משתמש לכניסה</div>
           <div style={{ color:"var(--text)", fontWeight:600 }}>@{session.username}</div>
         </div>
-        {msg && <div style={{ fontSize: 14, color:msg.startsWith("✅")?"var(--green-soft)":"var(--red)", marginBottom:12 }}>{msg}</div>}
+        {msg && <div style={{ fontSize: 14, color:msg.startsWith("ok:")?"var(--green-mid)":"var(--red)", marginBottom:12 }}>{msg.replace(/^(ok:|err:)/,"")}</div>}
         <Btn onClick={saveDetails} disabled={loading}>שמור שינויים</Btn>
       </Card>
       <Card>
-        <div style={{ fontWeight:700, fontSize: 18, marginBottom:16 }}>🔐 שינוי סיסמה</div>
+        <div style={{ fontWeight:700, fontSize: 18, marginBottom:16, display:"flex", alignItems:"center", gap:8 }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--text-mid)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>שינוי סיסמה</div>
         <Input label="סיסמה חדשה" type="password" value={newPass} onChange={e => setNewPass(e.target.value)} placeholder="לפחות 4 תווים" />
         <Input label="אימות סיסמה" type="password" value={confirmPass} onChange={e => setConfirmPass(e.target.value)} placeholder="הכנס שוב" />
-        {msg && <div style={{ fontSize: 14, color:msg.startsWith("✅")?"var(--green-soft)":"var(--red)", marginBottom:12 }}>{msg}</div>}
+        {msg && <div style={{ fontSize: 14, color:msg.startsWith("ok:")?"var(--green-mid)":"var(--red)", marginBottom:12 }}>{msg.replace(/^(ok:|err:)/,"")}</div>}
         <Btn onClick={changePassword} disabled={loading||!newPass||!confirmPass}>עדכן סיסמה</Btn>
       </Card>
     </div>
+    </>
   );
 }
 
@@ -5644,7 +6218,7 @@ function CoachingQuestionnaire({ session, spousesCount = 1, onNavigateBack }) {
           <div style={{ fontSize: 15, color:"var(--text-mid)", marginBottom:20 }}>סימנת "סיימתי" עבור בן/בת הזוג הזה</div>
           <div style={{ display:"flex", gap:10, justifyContent:"center", flexWrap:"wrap" }}>
             {onNavigateBack && (
-              <Btn onClick={onNavigateBack}>← חזור להגשת המסמכים</Btn>
+              <Btn onClick={onNavigateBack}>חזור להגשת המסמכים ←</Btn>
             )}
             <Btn variant="ghost" onClick={() => setDoneMap(prev => ({ ...prev, [spouseIndex]: false }))} style={{ display:"inline-flex", alignItems:"center", gap:6 }}><DocIcon name="pencil" color="var(--text-mid)" />ערוך תשובות</Btn>
           </div>

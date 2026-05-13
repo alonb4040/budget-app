@@ -217,7 +217,7 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
           const budgetType = type === "income" ? "הכנסה" : type === "expense_fixed" ? "קבוע" : "משתנה";
           await supabase.from("categories").insert([{
             name,
-            section: "⭐ הקטגוריות שלי",
+            section: "הקטגוריות שלי",
             budget_type: budgetType,
             client_id: Number(client.id),
             is_active: true,
@@ -303,7 +303,7 @@ export default function ScenarioTab({ client }: ScenarioTabProps) {
 
       {/* מודל חובה לבחור תסריט */}
       {showActivateModal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: "var(--z-back)", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div style={{ background: "var(--surface)", borderRadius: 16, padding: 32, minWidth: 360, maxWidth: 440, boxShadow: "0 8px 40px rgba(0,0,0,0.35)", textAlign: "center" }}>
             <div style={{ fontSize: 40, marginBottom: 12 }}>⚠️</div>
             <div style={{ fontWeight: 700, fontSize: 20, marginBottom: 10 }}>חובה לבחור תסריט פעיל</div>
@@ -500,7 +500,7 @@ function ScenarioTableView({ scenarios, activeScenarioId, clientId, onDelete, on
     <div>
       {/* מודל הפעלת תסריט */}
       {activateModal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: "var(--z-back)", display: "flex", alignItems: "center", justifyContent: "center" }}
           onClick={() => setActivateModal(null)}>
           <div style={{ background: "var(--surface)", borderRadius: 16, padding: 32, minWidth: 340, maxWidth: 420, boxShadow: "0 8px 40px rgba(0,0,0,0.3)" }}
             onClick={e => e.stopPropagation()}>

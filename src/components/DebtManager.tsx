@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../supabase";
-import { Card, Btn, Spinner } from "../ui";
+import { Card, Btn, Spinner, CustomSelect } from "../ui";
 import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer } from "recharts";
 
 // ── Utility functions ─────────────────────────────────────────────────────────
@@ -80,7 +80,7 @@ function calculatePayoffPlan(debtsWithBal: any[], extraMonthly: string, strategy
 }
 
 const DEBT_TYPE_LABEL: Record<string, string> = { loan:"הלוואה", mortgage:"משכנתה", credit_card:"אשראי", overdraft:"אוברדראפט", other:"אחר" };
-const DEBT_TYPE_COLOR: Record<string, string> = { loan:"var(--green-mid)", mortgage:"#6366f1", credit_card:"var(--red)", overdraft:"var(--gold)", other:"var(--text-dim)" };
+const DEBT_TYPE_COLOR: Record<string, string> = { loan:"var(--green-mid)", mortgage:"var(--gold)", credit_card:"var(--red)", overdraft:"var(--text-mid)", other:"var(--text-dim)" };
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -152,12 +152,13 @@ export default function DebtManager({ clientId }: Props) {
 
   return (
     <div style={{ direction:"rtl" }}>
+      <h1 style={{ fontFamily:"'Frank Ruhl Libre', serif", fontSize:32, fontWeight:700, color:"var(--text)", textAlign:"center", marginBottom:16, marginTop:0 }}>מנהל חובות</h1>
+      <div style={{ height:1, background:"var(--border)", marginBottom:20 }} />
       {/* Header */}
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
         <div>
-          <div style={{ fontWeight:700, fontSize: 20 }}>💳 מנהל חובות</div>
           {debts.length > 0 && (
-            <div style={{ color:"var(--text-dim)", fontSize: 15, marginTop:4 }}>
+            <div style={{ color:"var(--text-dim)", fontSize: 15 }}>
               {debts.length} חובות · יתרה כוללת: <strong style={{ color:"var(--red)" }}>₪{Math.round(totalDebt).toLocaleString()}</strong>
             </div>
           )}
@@ -186,13 +187,18 @@ export default function DebtManager({ clientId }: Props) {
             ))}
             <div>
               <div style={{ fontSize: 14, color:"var(--text-dim)", marginBottom:4 }}>סוג</div>
-              <select value={form.type||"loan"} onChange={e => setForm((p: any) =>({...p,type:e.target.value}))} style={inpS}>
-                <option value="loan">הלוואה</option>
-                <option value="mortgage">משכנתה</option>
-                <option value="credit_card">כרטיס אשראי</option>
-                <option value="overdraft">אוברדראפט</option>
-                <option value="other">אחר</option>
-              </select>
+              <CustomSelect
+                value={form.type || "loan"}
+                onChange={v => setForm((p: any) => ({...p, type: v as string}))}
+                options={[
+                  { value: "loan",        label: "הלוואה" },
+                  { value: "mortgage",    label: "משכנתה" },
+                  { value: "credit_card", label: "כרטיס אשראי" },
+                  { value: "overdraft",   label: "אוברדראפט" },
+                  { value: "other",       label: "אחר" },
+                ]}
+                style={{ width: "100%" }}
+              />
             </div>
           </div>
           <div style={{ marginBottom:14 }}>
@@ -209,7 +215,7 @@ export default function DebtManager({ clientId }: Props) {
       {/* Empty state */}
       {debts.length === 0 && !form ? (
         <Card style={{ textAlign:"center", padding:"56px 32px", color:"var(--text-dim)" }}>
-          <div style={{ fontSize:52, marginBottom:16 }}>💳</div>
+          <div style={{ marginBottom:16, display:"flex", justifyContent:"center" }}><svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="var(--border)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></div>
           <div style={{ fontWeight:700, fontSize: 18, marginBottom:8, color:"var(--text)" }}>אין חובות רשומים</div>
           <div style={{ fontSize: 15, marginBottom:20 }}>הוסף הלוואות, משכנתה, או אשראי כדי לראות תוכנית פירעון</div>
           <Btn onClick={openNew}>+ הוסף חוב ראשון</Btn>
@@ -232,8 +238,8 @@ export default function DebtManager({ clientId }: Props) {
                       </span>
                     </div>
                     <div style={{ display:"flex", gap:6 }}>
-                      <button onClick={() => openEdit(d)} style={{ background:"none", border:"1px solid var(--border)", borderRadius:6, padding:"3px 8px", fontSize: 13, cursor:"pointer", color:"var(--text-dim)", fontFamily:"inherit" }}>✏️</button>
-                      <button onClick={() => deleteDebt(d.id)} style={{ background:"none", border:"1px solid rgba(247,92,92,0.4)", borderRadius:6, padding:"3px 8px", fontSize: 13, cursor:"pointer", color:"var(--red)", fontFamily:"inherit" }}>🗑</button>
+                      <Btn variant="ghost" size="sm" onClick={() => openEdit(d)}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></Btn>
+                      <Btn variant="danger" size="sm" onClick={() => deleteDebt(d.id)}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></Btn>
                     </div>
                   </div>
                   <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:12, fontSize: 15 }}>
@@ -263,7 +269,7 @@ export default function DebtManager({ clientId }: Props) {
                   <div style={{ height:6, background:"var(--surface2)", borderRadius:3, overflow:"hidden" }}>
                     <div style={{ height:"100%", width:`${pct}%`, background:"var(--green-soft)", borderRadius:3, transition:"width 0.5s" }} />
                   </div>
-                  {isAutoCalc && <div style={{ fontSize: 12, color:"var(--text-dim)", marginTop:6 }}>✦ יתרה מחושבת אוטומטית מתאריך תחילה</div>}
+                  {isAutoCalc && <div style={{ fontSize: 12, color:"var(--text-dim)", marginTop:6, display:"flex", alignItems:"center", gap:4 }}><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>יתרה מחושבת אוטומטית מתאריך תחילה</div>}
                 </Card>
               );
             })}
@@ -271,7 +277,7 @@ export default function DebtManager({ clientId }: Props) {
 
           {/* Payoff strategy */}
           <Card style={{ padding:"20px 24px" }}>
-            <div style={{ fontWeight:700, fontSize: 17, marginBottom:16 }}>📅 תוכנית פירעון</div>
+            <div style={{ fontWeight:700, fontSize: 17, marginBottom:16, display:"flex", alignItems:"center", gap:8 }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>תוכנית פירעון</div>
             <div style={{ display:"flex", alignItems:"center", gap:16, flexWrap:"wrap", marginBottom:16 }}>
               <div style={{ display:"flex", alignItems:"center", gap:8, fontSize: 15 }}>
                 <span style={{ color:"var(--text-dim)" }}>תשלום נוסף מעל המינימום:</span>
@@ -281,14 +287,14 @@ export default function DebtManager({ clientId }: Props) {
               </div>
               <div style={{ display:"flex", gap:8 }}>
                 {[
-                  { id:"avalanche", label:"🔥 מפולת", sub:"חוסך ריבית", color:"var(--red)", bg:"rgba(248,113,113,0.12)" },
-                  { id:"snowball",  label:"❄️ כדור שלג", sub:"קל פסיכולוגית", color:"var(--green-mid)", bg:"rgba(79,142,247,0.12)" },
+                  { id:"avalanche", label:"מפולת", sub:"חוסך ריבית", activeColor:"var(--red)", activeBg:"var(--red-light)" },
+                  { id:"snowball",  label:"כדור שלג", sub:"קל פסיכולוגית", activeColor:"var(--green-deep)", activeBg:"var(--green-pale)" },
                 ].map(s => (
                   <button key={s.id} onClick={() => setStrategy(s.id)} style={{
-                    padding:"7px 14px", borderRadius:8, fontSize: 14, fontFamily:"inherit", cursor:"pointer",
-                    background: strategy===s.id ? s.bg : "var(--surface2)",
-                    border:`1px solid ${strategy===s.id ? s.color : "var(--border)"}`,
-                    color: strategy===s.id ? s.color : "var(--text-dim)", fontWeight: strategy===s.id ? 700 : 400,
+                    padding:"7px 14px", borderRadius:8, fontSize: 14, fontFamily:"'Heebo',sans-serif", cursor:"pointer",
+                    background: strategy===s.id ? s.activeBg : "var(--surface2)",
+                    border:`1px solid ${strategy===s.id ? s.activeColor : "var(--border)"}`,
+                    color: strategy===s.id ? s.activeColor : "var(--text-dim)", fontWeight: strategy===s.id ? 700 : 400,
                     lineHeight:1.3,
                   }}>
                     <div>{s.label}</div>
@@ -324,7 +330,7 @@ export default function DebtManager({ clientId }: Props) {
                     </thead>
                     <tbody>
                       {plan.debts.map((d, i) => (
-                        <tr key={d.id} style={{ borderBottom:"1px solid var(--border)44", background:i%2===0?"transparent":"rgba(0,0,0,0.02)" }}>
+                        <tr key={d.id} style={{ borderBottom:"1px solid var(--border)44", background:i%2===0?"transparent":"var(--surface2)" }}>
                           <td style={{ padding:"8px 12px", color:"var(--text-dim)", fontSize: 13 }}>{i+1}</td>
                           <td style={{ padding:"8px 12px", fontWeight:600 }}>{d.name}</td>
                           <td style={{ padding:"8px 12px", color:"var(--red)" }}>₪{Math.round(d.currentBalance).toLocaleString()}</td>

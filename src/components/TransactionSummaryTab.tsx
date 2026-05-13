@@ -653,7 +653,7 @@ export default function TransactionSummaryTab({ client }: { client: any }) {
         <div
           onClick={() => !deleteChecking && setDeleteTarget(null)}
           style={{
-            position: "fixed", inset: 0, zIndex: 1000,
+            position: "fixed", inset: 0, zIndex: "var(--z-back)",
             background: "rgba(0,0,0,0.45)",
             display: "flex", alignItems: "center", justifyContent: "center",
           }}

@@ -21,3 +21,7 @@ tests/screenshots/
 
 # Local Netlify folder
 .netlify
+
+# MAX Sync Server
+server/.env
+server/node_modules/

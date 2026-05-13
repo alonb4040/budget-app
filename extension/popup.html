@@ -202,6 +202,16 @@
         <button class="sync-btn secondary" disabled>בקרוב</button>
       </div>
 
+      <!-- תצוגה מקדימה לפני שמירה -->
+      <div id="preview-box" class="result-box" style="display:none; background:#fff8e1; border-color:#ffe082;">
+        <div style="font-size:13px; color:#5d4037; margin-bottom:6px;">נמצאו <span class="num" id="preview-count" style="font-size:18px; color:#e65100;">0</span> תנועות</div>
+        <div class="month-tag" id="preview-month"></div>
+        <div style="display:flex; gap:8px; margin-top:10px;">
+          <button class="sync-btn" id="btn-confirm-save" style="flex:1;">שלח לשרת ✓</button>
+          <button class="sync-btn secondary" id="btn-cancel-save" style="flex:1;">ביטול</button>
+        </div>
+      </div>
+
       <!-- תוצאה -->
       <div id="result-box" class="result-box" style="display:none">
         <div class="num" id="result-added">0</div>
@@ -213,6 +223,7 @@
 
     <div class="footer">
       <span id="user-info"></span>
+      <span id="ext-version" style="font-size:10px; color:#b0c4b8;"></span>
       <button class="logout-btn" id="btn-logout">התנתק</button>
     </div>
   </div>

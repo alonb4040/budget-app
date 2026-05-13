@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import type { CSSProperties, ReactNode, MouseEventHandler } from 'react';
 import type { Conf } from './types';
 
@@ -238,3 +239,117 @@ export const KpiCard = ({ icon, label, value, color }: KpiCardProps) => (
     <div style={{ fontSize: 15, color: "var(--text-dim)", fontWeight: 500 }}>{label}</div>
   </div>
 );
+
+export interface CustomSelectOption { value: string | number; label: string; }
+export interface CustomSelectGroup  { label: string; options: CustomSelectOption[]; }
+
+interface CustomSelectProps {
+  value: string | number;
+  onChange: (val: any) => void;
+  options?: CustomSelectOption[];
+  groups?: CustomSelectGroup[];
+  placeholder?: string;
+  style?: CSSProperties;
+  dropdownZIndex?: number;
+  size?: "sm" | "md";
+  disabled?: boolean;
+}
+
+export const CustomSelect = ({
+  value, onChange, options = [], groups, placeholder = "בחר...",
+  style, dropdownZIndex = 1000, size = "md", disabled = false,
+}: CustomSelectProps) => {
+  const [open, setOpen] = React.useState(false);
+  const [pos,  setPos]  = React.useState({ top: 0, left: 0, width: 0 });
+  const triggerRef = React.useRef<HTMLButtonElement>(null);
+  const dropRef    = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (triggerRef.current?.contains(e.target as Node)) return;
+      if (dropRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+
+  const handleOpen = () => {
+    if (disabled) return;
+    if (triggerRef.current) {
+      const r = triggerRef.current.getBoundingClientRect();
+      setPos({ top: r.bottom + 4, left: r.left, width: r.width });
+    }
+    setOpen(v => !v);
+  };
+
+  const allOpts = groups ? groups.flatMap(g => g.options) : options;
+  const selectedLabel = allOpts.find(o => String(o.value) === String(value))?.label;
+
+  const itemS = (sel: boolean): CSSProperties => ({
+    display: "block", width: "100%", padding: "9px 14px",
+    background: sel ? "var(--green-pale)" : "transparent",
+    color: sel ? "var(--green-deep)" : "var(--text)",
+    fontFamily: "'Heebo', sans-serif", fontSize: 14,
+    direction: "rtl", textAlign: "right",
+    cursor: "pointer", border: "none",
+    fontWeight: sel ? 700 : 400,
+  });
+
+  return (
+    <div style={{ position: "relative", ...style }}>
+      <button
+        ref={triggerRef} type="button"
+        onClick={handleOpen} disabled={disabled}
+        style={{
+          width: "100%",
+          background: "var(--surface2)",
+          border: `1px solid ${open ? "var(--green-mid)" : "var(--border)"}`,
+          borderRadius: 8,
+          padding: size === "sm" ? "7px 10px" : "9px 12px",
+          color: selectedLabel ? "var(--text)" : "var(--text-dim)",
+          fontFamily: "'Heebo', sans-serif",
+          fontSize: size === "sm" ? 14 : 15,
+          direction: "rtl", cursor: disabled ? "not-allowed" : "pointer",
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          gap: 8, textAlign: "right", boxSizing: "border-box", outline: "none",
+          opacity: disabled ? 0.5 : 1,
+        }}
+      >
+        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {selectedLabel ?? placeholder}
+        </span>
+        <span style={{ flexShrink: 0, opacity: 0.4, fontSize: 10 }}>{open ? "▲" : "▼"}</span>
+      </button>
+      {open && createPortal(
+        <div ref={dropRef} style={{
+          position: "fixed", top: pos.top, left: pos.left, width: pos.width,
+          background: "var(--surface)", border: "1px solid var(--border)",
+          borderRadius: 10, boxShadow: "0 8px 24px rgba(30,77,53,0.15)",
+          zIndex: "var(--z-drop)", maxHeight: 240, overflowY: "auto",
+        }}>
+          {groups ? groups.map(g => (
+            <div key={g.label}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-dim)", padding: "7px 12px 3px", letterSpacing: "0.05em", borderBottom: "1px solid rgba(0,0,0,0.06)" }}>{g.label}</div>
+              {g.options.map(o => (
+                <button key={String(o.value)} type="button"
+                  onClick={() => { onChange(o.value); setOpen(false); }}
+                  style={itemS(String(o.value) === String(value))}>
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          )) : options.map(o => (
+            <button key={String(o.value)} type="button"
+              onClick={() => { onChange(o.value); setOpen(false); }}
+              style={itemS(String(o.value) === String(value))}>
+              {o.label}
+            </button>
+          ))}
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+};

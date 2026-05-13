@@ -98,6 +98,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  // חלץ תנועות בלבד מה-DOM — ללא שמירה
   if (msg.action === 'extractNow') {
     chrome.tabs.query({}, async (allTabs) => {
       const maxTab = allTabs.find(t => t.active && t.url && t.url.includes('max.co.il'))
@@ -108,7 +109,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       try {
-        // בדוק תחילה אם deal-table קיים — אחרת זה לא עמוד פירוט חיובים לפי חודש
         const dealTableCheck = await chrome.scripting.executeScript({
           target: { tabId: maxTab.id },
           func: () => {
@@ -125,7 +125,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return;
         }
 
-        // הפרסר מוגדר inline — self-contained, לא תלוי ב-scope של ה-service worker
         const results = await chrome.scripting.executeScript({
           target: { tabId: maxTab.id },
           func: () => {
@@ -285,7 +284,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         });
 
         const pageResult = results[0]?.result || {};
-        // תמיכה בשני פורמטים: object חדש עם { transactions, billingMonthKey } או array ישן
         const txs = Array.isArray(pageResult) ? pageResult : (pageResult.transactions || []);
         const billingMonthKey = pageResult.billingMonthKey || null;
         const maxBillingTotal = pageResult.maxBillingTotal || null;
@@ -295,13 +293,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return;
         }
 
-        const saveResult = await saveTransactions(txs, msg.userId, msg.accessToken, 'max', null, billingMonthKey, maxBillingTotal);
-        sendResponse(saveResult);
+        // החזר תצוגה מקדימה — ללא שמירה
+        sendResponse({ success: true, preview: true, transactions: txs, billingMonthKey, maxBillingTotal, count: txs.length });
 
       } catch(e) {
         sendResponse({ success: false, error: 'שגיאה: ' + e.message });
       }
     });
+    return true;
+  }
+
+  // שמור תנועות שכבר חולצו (אחרי אישור המשתמש)
+  if (msg.action === 'confirmSave') {
+    const { transactions, billingMonthKey, maxBillingTotal, userId, accessToken } = msg;
+    (async () => {
+      try {
+        const saveResult = await saveTransactions(transactions, userId, accessToken, 'max', null, billingMonthKey, maxBillingTotal);
+        sendResponse(saveResult);
+      } catch(e) {
+        sendResponse({ success: false, error: 'שגיאה: ' + e.message });
+      }
+    })();
     return true;
   }
 });
@@ -378,6 +390,35 @@ async function saveTransactions(transactions, userId, accessToken, provider, car
       body: JSON.stringify({ added, duplicates, status: 'done' }),
     });
   }
+
+  const now = new Date().toISOString();
+
+  // עדכן max_last_sync בטבלת clients
+  await fetch(SUPABASE_URL + '/rest/v1/clients?id=eq.' + userId, {
+    method: 'PATCH',
+    headers: {
+      'apikey': SUPABASE_KEY, 'Authorization': authHeader,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ max_last_sync: now }),
+  }).catch(() => {});
+
+  // הוסף שורה ל-sync_log
+  await fetch(SUPABASE_URL + '/rest/v1/sync_log', {
+    method: 'POST',
+    headers: {
+      'apikey': SUPABASE_KEY, 'Authorization': authHeader,
+      'Content-Type': 'application/json',
+      'Prefer': 'return=minimal',
+    },
+    body: JSON.stringify({
+      client_id: userId,
+      synced_at: now,
+      transactions_count: added,
+      status: 'success',
+      source: 'extension',
+    }),
+  }).catch(() => {});
 
   return { success: true, added, duplicates, billingMonthKey };
 }
