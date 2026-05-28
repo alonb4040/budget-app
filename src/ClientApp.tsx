@@ -6150,6 +6150,52 @@ function OnboardingChecklist({
 
   const markLoansDone = async () => {
     setSaving("loans_section");
+
+    // Save all individual loan data first (in case user didn't click שמור per card)
+    for (const cat of activeLoanTypes) {
+      const lt = getLoanType(cat);
+      if (!lt) continue;
+      const existingLoan = getDoc(cat);
+      const loanLabel = existingLoan?.label || lt.label;
+
+      if (lt.type === "fields" || lt.type === "both") {
+        const fields = loanFields[cat] || {};
+        const pending = pendingFiles[cat] || [];
+        const uploaded = pending.length > 0
+          ? await Promise.all(pending.map((f) => uploadToStorage(f, cat)))
+          : [];
+        const allFiles = [...(existingLoan?.files || []), ...uploaded];
+        if (existingLoan) {
+          await supabase.from("client_documents")
+            .update({ extra_data: fields, files: allFiles, marked_done: true })
+            .eq("id", existingLoan.id);
+        } else if (Object.values(fields).some((v) => !!v)) {
+          await supabase.from("client_documents").insert([{
+            client_id: session.id, category: cat, label: loanLabel,
+            files: allFiles, extra_data: fields, marked_done: true,
+          }]);
+        }
+      } else {
+        // file-type: save pending files if any
+        const pending = pendingFiles[cat] || [];
+        if (pending.length > 0 && existingLoan) {
+          const uploaded = await Promise.all(pending.map((f) => uploadToStorage(f, cat)));
+          const allFiles = [...(existingLoan.files || []), ...uploaded];
+          await supabase.from("client_documents")
+            .update({ files: allFiles, extra_data: loanFileExtra[cat] || {} })
+            .eq("id", existingLoan.id);
+        }
+      }
+    }
+
+    // Clear pending files for all loan types
+    setPendingFiles((prev) => {
+      const n = { ...prev };
+      activeLoanTypes.forEach((cat) => delete n[cat]);
+      return n;
+    });
+
+    // Mark section as done
     const existing = getDoc("loans_section");
     if (existing) {
       await supabase
@@ -6159,15 +6205,13 @@ function OnboardingChecklist({
     } else {
       await supabase
         .from("client_documents")
-        .insert([
-          {
-            client_id: session.id,
-            category: "loans_section",
-            label: "מסמכי הלוואות",
-            files: [],
-            marked_done: true,
-          },
-        ]);
+        .insert([{
+          client_id: session.id,
+          category: "loans_section",
+          label: "מסמכי הלוואות",
+          files: [],
+          marked_done: true,
+        }]);
     }
     setExpanded(null);
     await onDocsChange();
