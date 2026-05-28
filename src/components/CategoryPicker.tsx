@@ -54,6 +54,7 @@ export function CategoryPicker({
   const [saving, setSaving] = useState(false);
   const [addError, setAddError] = useState("");
   const [selectedType, setSelectedType] = useState<BudgetType | null>(null);
+  const [showOnlyStar, setShowOnlyStar] = useState(false);
   const [managing, setManaging] = useState(false);
   const [manageTab, setManageTab] = useState<"builtin"|"personal">("builtin");
   const [showHidden, setShowHidden] = useState(false);
@@ -95,6 +96,17 @@ export function CategoryPicker({
     (rows || []).forEach(r => { m[r.name] = r.budget_type; });
     return m;
   }, [rows]);
+
+  // קטגוריות אישיות מחולקות לפי סוג (לתצוגת ⭐)
+  const personalCatsByType = useMemo(() => {
+    const map: Record<string, string[]> = { 'הכנסה': [], 'קבוע': [], 'משתנה': [] };
+    clientCats.filter(c => !hiddenSet.has(c)).forEach(c => {
+      const t = budgetTypeMap[c] || 'משתנה';
+      if (!map[t]) map[t] = [];
+      map[t].push(c);
+    });
+    return map;
+  }, [clientCats, budgetTypeMap, hiddenSet]);
 
   // חיפוש — תמיד על כל הקטגוריות (ללא תלות בסוג נבחר), ובלי המוסתרות
   const allCatsFlat = useMemo(() => {
@@ -197,9 +209,9 @@ export function CategoryPicker({
   };
 
   const btnStyle = (cat: string, isClient = false, isHiding = false) => ({
-    padding: "4px 11px",
+    padding: "3px 10px",
     borderRadius: 14,
-    fontSize: 15,
+    fontSize: 13,
     cursor: "pointer" as const,
     fontFamily: "inherit",
     border: `1px solid ${current === cat ? (isClient ? "var(--gold)" : "var(--green-mid)") : isHiding ? "var(--red)" : "var(--border)"}`,
@@ -217,8 +229,10 @@ export function CategoryPicker({
 
   const canManage = !!onHiddenCatsChange;
 
+  const checkSvg = <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}><polyline points="20 6 9 17 4 12"/></svg>;
+
   return (
-    <div style={{ marginTop: 8 }} onClick={e => e.stopPropagation()}>
+    <div style={{ marginTop: 8, background:"var(--surface)", border:"1px solid var(--border)", borderRadius:12, padding:"12px 14px", boxShadow:"0 2px 8px rgba(0,0,0,0.06)" }} onClick={e => e.stopPropagation()}>
       {/* ── מודל מחיקת קטגוריה אישית ── */}
       {deleteCheck && (
         <>
@@ -307,16 +321,16 @@ export function CategoryPicker({
         </>
       )}
 
-      {/* ── כותרת עם כפתור ניהול ── */}
+      {/* ── כותרת: נהל קטגוריות (ימין) + הוסף קטגוריה (שמאל) ── */}
       {canManage && (
-        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 4 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
           <button
             type="button"
             onClick={() => { setManaging(m => !m); setShowHidden(false); setManageTab("builtin"); }}
             style={{
               background: managing ? "var(--red-light)" : "transparent",
               border: `1px solid ${managing ? "var(--red)" : "var(--border)"}`,
-              borderRadius: 8, padding: "3px 10px", fontSize: 13,
+              borderRadius: 8, padding: "3px 10px", fontSize: 12,
               color: managing ? "var(--red)" : "var(--text-dim)",
               cursor: "pointer", fontFamily: "inherit", fontWeight: managing ? 700 : 400,
               display: "inline-flex", alignItems: "center", gap: 5,
@@ -327,31 +341,61 @@ export function CategoryPicker({
             : <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> נהל קטגוריות</>
           }
           </button>
+          {clientId && !managing && !adding && (
+            <button
+              type="button"
+              onClick={e => { e.stopPropagation(); setAdding(true); setAddError(""); setSelectedType(null); setNewName(""); }}
+              style={{ background:"var(--green-mint)", border:"1px solid var(--green-soft)", borderRadius:8, color:"var(--green-deep)", fontSize:12, cursor:"pointer", fontFamily:"inherit", padding:"3px 10px", display:"inline-flex", alignItems:"center", gap:4, fontWeight:600 }}
+            >
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              הוסף קטגוריה אישית
+            </button>
+          )}
         </div>
       )}
 
       {/* ── בחירת סוג ── */}
       {rows && !adding && (!managing || manageTab === "builtin") && (
         <>
-          <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 5, fontWeight: 600 }}>בחר סוג קטגוריה</div>
-          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+          <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 10, fontWeight: 600, textAlign: "center" }}>בחר סוג קטגוריה</div>
+          <div style={{ display: "flex", gap: 0, marginBottom: 10, borderBottom: "1px solid var(--border)" }}>
             {typeLabels.map(({ type, label, color }) => (
               <button
                 type="button"
                 key={type}
-                onClick={() => setSelectedType(prev => prev === type ? null : type)}
+                onClick={() => { setSelectedType(prev => prev === type ? null : type); setShowOnlyStar(false); }}
                 style={{
-                  flex: 1, padding: "6px 4px", fontSize: 14, fontFamily: "inherit",
-                  border: `1px solid ${selectedType === type ? color : "var(--border)"}`,
-                  borderRadius: 8, cursor: "pointer",
-                  background: selectedType === type ? `color-mix(in srgb, ${color} 15%, transparent)` : "var(--surface2)",
+                  flex: 1, padding: "5px 6px", fontSize: 12, fontFamily: "inherit",
+                  border: "none",
+                  borderBottom: `2px solid ${selectedType === type ? color : "transparent"}`,
+                  marginBottom: -1,
+                  background: "transparent",
                   color: selectedType === type ? color : "var(--text-dim)",
                   fontWeight: selectedType === type ? 700 : 400,
+                  cursor: "pointer",
                 }}
               >
                 {label}
               </button>
             ))}
+            {clientCats.length > 0 && (
+              <button
+                type="button"
+                onClick={() => { setShowOnlyStar(s => !s); setSelectedType(null); }}
+                style={{
+                  padding: "5px 10px", fontSize: 12, fontFamily: "inherit",
+                  border: "none",
+                  borderBottom: `2px solid ${showOnlyStar ? "var(--gold)" : "transparent"}`,
+                  marginBottom: -1,
+                  background: "transparent",
+                  color: showOnlyStar ? "var(--gold)" : "var(--text-dim)",
+                  fontWeight: showOnlyStar ? 700 : 400,
+                  cursor: "pointer", flexShrink: 0, display:"inline-flex", alignItems:"center", gap:4,
+                }}
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="none" style={{ flexShrink:0 }}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg> שלי
+              </button>
+            )}
           </div>
         </>
       )}
@@ -364,30 +408,16 @@ export function CategoryPicker({
           placeholder="חפש סעיף..."
           style={{
             width: "100%", background: "var(--surface)", border: "1px solid var(--border)",
-            borderRadius: 8, padding: "7px 12px", color: "var(--text)", fontSize: 16,
+            borderRadius: 8, padding: "6px 12px", color: "var(--text)", fontSize: 14,
             fontFamily: "inherit", outline: "none", marginBottom: 8, boxSizing: "border-box",
           }}
         />
       )}
 
-      {/* ── הוסף קטגוריה אישית — תמיד מוצג ── */}
-      {clientId && !managing && (
+      {/* ── הוסף קטגוריה אישית — טופס בלבד כשפתוח ── */}
+      {clientId && !managing && adding && (
         <div style={{ marginBottom: 8 }}>
-          {!adding ? (
-            <button
-              type="button"
-              onClick={e => { e.stopPropagation(); setAdding(true); setAddError(""); setSelectedType(null); setNewName(""); }}
-              style={{
-                background: "var(--gold-light)", border: "1px dashed var(--gold)", borderRadius: 8,
-                padding: "7px 14px", fontSize: 14, color: "var(--gold)", cursor: "pointer",
-                fontFamily: "inherit", width: "100%", fontWeight: 600,
-                display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
-              }}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" style={{ flexShrink:0 }}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-              הוסף קטגוריה אישית
-            </button>
-          ) : (
+          {true && (
             <div style={{ background: "var(--gold-light)", border: "1px solid var(--gold)", borderRadius: 10, padding: "12px 12px 10px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                 <span style={{ fontSize: 14, fontWeight: 700, color: "var(--gold)", display:"inline-flex", alignItems:"center", gap:5 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" style={{ flexShrink:0 }}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>קטגוריה אישית חדשה</span>
@@ -479,112 +509,180 @@ export function CategoryPicker({
 
       {/* ── חיפוש חופשי ── */}
       {filtered ? (
-        <div style={{ maxHeight: 220, overflowY: "auto" }}>
-          {filtered.length === 0 && (
-            <span style={{ fontSize: 14, color: "var(--text-dim)" }}>לא נמצאו תוצאות</span>
-          )}
-          {filtered.length > 0 && (() => {
-            const groups: { label: string; color: string; cats: string[] }[] = [
-              { label: 'הכנסות',        color: 'var(--green-mid)', cats: filtered.filter(c => budgetTypeMap[c] === 'הכנסה') },
-              { label: 'הוצאות קבועות', color: 'var(--gold)',      cats: filtered.filter(c => budgetTypeMap[c] === 'קבוע') },
-              { label: 'הוצאות משתנות', color: 'var(--red)',       cats: filtered.filter(c => budgetTypeMap[c] === 'משתנה') },
-              { label: 'הקטגוריות שלי', color: 'var(--gold)',      cats: filtered.filter(c => clientCats.includes(c)) },
-            ];
-            return groups.filter(g => g.cats.length > 0).map(g => (
-              <div key={g.label} style={{ marginBottom: 10 }}>
-                <div style={{ fontSize: 13, color: g.color, fontWeight: 700, marginBottom: 5, padding: "0 2px" }}>{g.label}</div>
+        <div style={{ position:"relative" }}>
+          <div style={{ maxHeight: 220, overflowY: "auto" }}>
+            {filtered.length === 0 && (
+              <span style={{ fontSize: 13, color: "var(--text-dim)" }}>לא נמצאו תוצאות</span>
+            )}
+            {filtered.length > 0 && (() => {
+              const clientSet = new Set(clientCats);
+              const groups: { label: string; color: string; cats: string[] }[] = [
+                { label: 'הכנסות',        color: 'var(--green-mid)', cats: filtered.filter(c => budgetTypeMap[c] === 'הכנסה') },
+                { label: 'הוצאות קבועות', color: 'var(--gold)',      cats: filtered.filter(c => budgetTypeMap[c] === 'קבוע') },
+                { label: 'הוצאות משתנות', color: 'var(--red)',       cats: filtered.filter(c => budgetTypeMap[c] === 'משתנה') },
+              ];
+              const untyped = filtered.filter(c => clientSet.has(c) && !budgetTypeMap[c]);
+              untyped.forEach(c => { if (!groups[2].cats.includes(c)) groups[2].cats.push(c); });
+              return groups.filter(g => g.cats.length > 0).map(g => (
+                <div key={g.label} style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, color: g.color, fontWeight: 700, marginBottom: 5, paddingBottom: 3, borderBottom: `1px solid var(--border)` }}>
+                    {g.label}
+                  </div>
+                  <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                    {g.cats.map(cat => {
+                      const isStar = clientSet.has(cat);
+                      return (
+                        <button type="button" key={cat}
+                          onClick={e => { e.stopPropagation(); managing ? hideCategory(cat) : onSelect(cat); }}
+                          style={{ ...btnStyle(cat, isStar, managing), display:"inline-flex", alignItems:"center", gap:4 }}>
+                          {!managing && current === cat && checkSvg}
+                          {managing ? `× ${cat}` : cat}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ));
+            })()}
+          </div>
+          <div style={{ position:"absolute", bottom:0, left:0, right:0, height:28, background:"linear-gradient(to bottom, transparent, var(--surface))", pointerEvents:"none" }} />
+        </div>
+      ) : showOnlyStar ? (
+        /* ── תצוגת שלי בלבד ── */
+        <div style={{ position:"relative" }}>
+          <div style={{ maxHeight: 300, overflowY: "auto" }}>
+            {clientCats.length === 0 && (
+              <span style={{ fontSize: 13, color: "var(--text-dim)" }}>אין קטגוריות אישיות עדיין</span>
+            )}
+            {(['הכנסה', 'קבוע', 'משתנה'] as BudgetType[]).map(type => {
+              const typeCats = personalCatsByType[type] || [];
+              if (typeCats.length === 0) return null;
+              const tl = typeLabels.find(t => t.type === type)!;
+              return (
+                <div key={type} style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, color: tl.color, fontWeight: 700, marginBottom: 5, paddingBottom: 3, borderBottom: "1px solid var(--border)" }}>
+                    {tl.label}
+                  </div>
+                  <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                    {typeCats.map(cat => (
+                      <button type="button" key={cat}
+                        onClick={e => { e.stopPropagation(); onSelect(cat); }}
+                        style={{ ...btnStyle(cat, true, false), display:"inline-flex", alignItems:"center", gap:4 }}>
+                        {current === cat && checkSvg}
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ position:"absolute", bottom:0, left:0, right:0, height:28, background:"linear-gradient(to bottom, transparent, var(--surface))", pointerEvents:"none" }} />
+        </div>
+      ) : (
+        /* ── תצוגה לפי סקציות ── */
+        <div style={{ position:"relative" }}>
+          <div style={{ maxHeight: 300, overflowY: "auto" }}>
+            {(!managing || manageTab === "builtin") && Object.entries(visibleCats).map(([group, groupCats]) => (
+              <div key={group} style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 11, color: "var(--text-dim)", fontWeight: 700, marginBottom: 5, paddingBottom: 3, borderBottom: "1px solid var(--border)" }}>
+                  {group}
+                </div>
                 <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                  {g.cats.map(cat => (
+                  {groupCats.map(cat => {
+                    const isHidden = hiddenSet.has(cat);
+                    if (managing) {
+                      return (
+                        <button type="button" key={cat}
+                          onClick={e => { e.stopPropagation(); isHidden ? restoreCategory(cat) : hideCategory(cat); }}
+                          title={isHidden ? "לחץ להחזיר לתצוגה" : "לחץ להסתיר"}
+                          style={{
+                            padding: "3px 10px", borderRadius: 14, fontSize: 13, cursor: "pointer", fontFamily: "inherit",
+                            border: `1px solid ${isHidden ? "var(--border)" : "var(--green-soft)"}`,
+                            background: isHidden ? "var(--surface2)" : "var(--green-mint)",
+                            color: isHidden ? "var(--text-dim)" : "var(--green-deep)",
+                            textDecoration: isHidden ? "line-through" : "none",
+                            opacity: isHidden ? 0.6 : 1,
+                          }}>
+                          {isHidden ? `× ${cat}` : cat}
+                        </button>
+                      );
+                    }
+                    return (
+                      <button type="button" key={cat}
+                        onClick={e => { e.stopPropagation(); onSelect(cat); }}
+                        style={{ ...btnStyle(cat, false, false), display:"inline-flex", alignItems:"center", gap:4 }}>
+                        {current === cat && checkSvg}
+                        {cat}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+
+            {selectedType && !managing && (personalCatsByType[selectedType]?.length ?? 0) > 0 && (
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 11, color: "var(--gold)", fontWeight: 700, marginBottom: 5, paddingBottom: 3, borderBottom: "1px solid var(--border)" }}>
+                  הקטגוריות שלי
+                </div>
+                <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                  {(personalCatsByType[selectedType] || []).map(cat => (
                     <button type="button" key={cat}
-                      onClick={e => { e.stopPropagation(); managing ? hideCategory(cat) : onSelect(cat); }}
-                      style={btnStyle(cat, clientCats.includes(cat), managing)}>
-                      {managing ? `× ${cat}` : cat}
+                      onClick={e => { e.stopPropagation(); onSelect(cat); }}
+                      style={{ ...btnStyle(cat, true, false), display:"inline-flex", alignItems:"center", gap:4 }}>
+                      {current === cat && checkSvg}
+                      {cat}
                     </button>
                   ))}
                 </div>
               </div>
-            ));
-          })()}
-        </div>
-      ) : (
-        /* ── תצוגה לפי סקציות ── */
-        <div style={{ maxHeight: 300, overflowY: "auto" }}>
-          {/* גלובליות — תמיד כשלא מנהל, או כשמנהל + טאב מובנות */}
-          {(!managing || manageTab === "builtin") && Object.entries(visibleCats).map(([group, groupCats]) => (
-            <div key={group} style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 14, color: "var(--text-dim)", fontWeight: 700, marginBottom: 5, padding: "0 2px" }}>
-                {SECTION_ICONS[group] ? `${SECTION_ICONS[group]} ${group}` : group}
-              </div>
-              <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                {groupCats.map(cat => {
-                  const isHidden = hiddenSet.has(cat);
-                  if (managing) {
-                    return (
-                      <button type="button" key={cat}
-                        onClick={e => { e.stopPropagation(); isHidden ? restoreCategory(cat) : hideCategory(cat); }}
-                        title={isHidden ? "לחץ להחזיר לתצוגה" : "לחץ להסתיר"}
-                        style={{
-                          padding: "4px 11px", borderRadius: 14, fontSize: 15, cursor: "pointer", fontFamily: "inherit",
-                          border: `1px solid ${isHidden ? "var(--border)" : "var(--green-soft)"}`,
-                          background: isHidden ? "var(--surface2)" : "var(--green-mint)",
-                          color: isHidden ? "var(--text-dim)" : "var(--green-deep)",
-                          textDecoration: isHidden ? "line-through" : "none",
-                          opacity: isHidden ? 0.6 : 1,
-                        }}>
-                        {isHidden ? `× ${cat}` : cat}
-                      </button>
-                    );
-                  }
-                  return (
-                    <button type="button" key={cat}
-                      onClick={e => { e.stopPropagation(); onSelect(cat); }}
-                      style={btnStyle(cat, false, false)}>
-                      {cat}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+            )}
 
-          {/* ── קטגוריות אישיות — תמיד כשלא מנהל, או כשמנהל + טאב אישיות ── */}
-          {clientCats.length > 0 && (!managing || manageTab === "personal") && (
-            <div style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 14, color: "var(--gold)", fontWeight: 700, marginBottom: 5, padding: "0 2px", display:"flex", alignItems:"center", gap:5 }}>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" style={{ flexShrink:0 }}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-                הקטגוריות שלי
-              </div>
-              <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                {clientCats.map(cat => {
-                  if (managing) {
+            {clientCats.length > 0 && (!managing || manageTab === "personal") && !selectedType && (
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 11, color: "var(--gold)", fontWeight: 700, marginBottom: 5, paddingBottom: 3, borderBottom: "1px solid var(--border)" }}>
+                  הקטגוריות שלי
+                </div>
+                <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                  {clientCats.map(cat => {
+                    if (managing) {
+                      const isHidden = hiddenSet.has(cat);
+                      return (
+                        <button type="button" key={cat}
+                          onClick={e => { e.stopPropagation(); isHidden ? restoreCategory(cat) : hideCategory(cat); }}
+                          title={isHidden ? "לחץ להחזיר לתצוגה" : "לחץ להסתיר"}
+                          style={{
+                            padding: "3px 10px", borderRadius: 14, fontSize: 13, cursor: "pointer", fontFamily: "inherit",
+                            border: `1px solid ${isHidden ? "var(--border)" : "var(--gold)"}`,
+                            background: isHidden ? "var(--surface2)" : "rgba(247,194,56,0.12)",
+                            color: isHidden ? "var(--text-dim)" : "var(--gold)",
+                            textDecoration: isHidden ? "line-through" : "none",
+                            opacity: isHidden ? 0.6 : 1,
+                          }}>
+                          {isHidden ? `× ${cat}` : cat}
+                        </button>
+                      );
+                    }
+                    if (hiddenSet.has(cat)) return null;
                     return (
                       <button type="button" key={cat}
-                        onClick={e => { e.stopPropagation(); handleDeletePersonalCat(cat); }}
-                        title="מחק קטגוריה"
-                        style={{
-                          padding: "4px 11px", borderRadius: 14, fontSize: 15, cursor: deleteChecking ? "wait" : "pointer",
-                          fontFamily: "inherit", border: "1px solid var(--red)",
-                          background: "var(--red-light)", color: "var(--red)",
-                          display: "inline-flex", alignItems: "center", gap: 5,
-                        }}>
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>{cat}
+                        onClick={e => { e.stopPropagation(); onSelect(cat); }}
+                        style={{ ...btnStyle(cat, true, false), display:"inline-flex", alignItems:"center", gap:4 }}>
+                        {current === cat && checkSvg}
+                        {cat}
                       </button>
                     );
-                  }
-                  if (hiddenSet.has(cat)) return null;
-                  return (
-                    <button type="button" key={cat}
-                      onClick={e => { e.stopPropagation(); onSelect(cat); }}
-                      style={btnStyle(cat, true, false)}>
-                      {cat}
-                    </button>
-                  );
-                })}
+                  })}
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
+          <div style={{ position:"absolute", bottom:0, left:0, right:0, height:28, background:"linear-gradient(to bottom, transparent, var(--surface))", pointerEvents:"none" }} />
         </div>
       )}
+
+      {/* ── הוסף קטגוריה אישית — כפתור inline קטן בתחתית ── */}
 
       {/* ── קטגוריות מוסתרות (רק כשלא במצב ניהול) ── */}
       {canManage && !managing && hiddenCats.length > 0 && (

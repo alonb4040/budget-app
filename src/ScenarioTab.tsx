@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { supabase } from "./supabase";
-import { Card, Btn, Input, C } from "./ui";
+import { Card, Btn, Input } from "./ui";
+import { C } from "./colors";
 import type { Client } from "./types";
 
 interface ScenarioTabProps {

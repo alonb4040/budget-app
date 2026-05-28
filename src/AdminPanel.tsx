@@ -1,5 +1,15 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import ReactDOM from "react-dom";
 import ScenarioTab from "./ScenarioTab";
+import { supabase } from "./supabase";
+import { Card, Btn, Input, CustomSelect } from "./ui";
+import { C } from "./colors";
+import CategoryManager from "./components/CategoryManager";
+import LeadsPanel from "./components/LeadsPanel";
+import TransactionSummaryTab from "./components/TransactionSummaryTab";
+import DataCenterTab from "./components/DataCenterTab";
+import ScenarioPlanTab from "./components/ScenarioPlanTab";
+import MachsanotTab from "./components/MachsanotTab";
 
 // ── URL routing helpers ───────────────────────────────────────────────────────
 function parseAdminUrl() {
@@ -13,13 +23,6 @@ function pushClientUrl(clientId: number, tab: string, subTab?: string | null) {
 function goListUrl() {
   window.history.pushState(null, "", "/");
 }
-import { supabase } from "./supabase";
-import { Card, Btn, Input, C, CustomSelect } from "./ui";
-import CategoryManager from "./components/CategoryManager";
-import LeadsPanel from "./components/LeadsPanel";
-import TransactionSummaryTab from "./components/TransactionSummaryTab";
-import ScenarioPlanTab from "./components/ScenarioPlanTab";
-import MachsanotTab from "./components/MachsanotTab";
 
 // ── SVG Icons ─────────────────────────────────────────────────────────────────
 function IcoUser({ size = 16 }: { size?: number }) {
@@ -114,7 +117,7 @@ function ClientActionModal({ name, onArchive, onDelete, onCancel }: {
                 העבר לארכיון — שמור נתונים לשחזור עתידי
               </button>
               <button onClick={() => setStep("delete_confirm")} style={{ width: "100%", padding: "12px 20px", borderRadius: 10, border: "1.5px solid var(--red)", background: "rgba(192,57,43,0.06)", color: "var(--red)", fontFamily: "inherit", fontSize: 14, fontWeight: 700, cursor: "pointer", textAlign: "right" }}>
-                מחק לצמיתות — אי הפיך
+                מחק לצמיתות — לא ניתן לשחזר
               </button>
               <button onClick={onCancel} style={{ width: "100%", padding: "11px 20px", borderRadius: 10, border: "1px solid var(--border)", background: "none", color: "var(--text-mid)", fontFamily: "inherit", fontSize: 14, cursor: "pointer" }}>
                 ביטול
@@ -366,35 +369,147 @@ const EMAILJS_KEY  = process.env.REACT_APP_EMAILJS_PUBLIC_KEY  || "";
 
 const INACTIVITY_DAYS = 5;
 
-// ── Reminder email button ─────────────────────────────────────────────────────
-function ReminderEmailBtn({ client }: { client: any }) {
-  const [status, setStatus] = useState<"idle"|"sending"|"sent"|"error">("idle");
+// ── Mail dropdown button ──────────────────────────────────────────────────────
+function MailDropdownBtn({ client }: { client: any }) {
+  const [open, setOpen] = useState(false);
+  const [dropPos, setDropPos] = useState({ top: 0, left: 0 });
+  const [welcomeStep, setWelcomeStep] = useState(false);
+  const [reminderStatus, setReminderStatus] = useState<"idle"|"sending"|"sent"|"error">("idle");
+  const [welcomeStatus, setWelcomeStatus]   = useState<"idle"|"sending"|"sent"|"error">("idle");
+  const btnRef = useRef<HTMLDivElement>(null);
+  const dropRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (dropRef.current && !dropRef.current.contains(e.target as Node) &&
+          btnRef.current && !btnRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setWelcomeStep(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const handleOpen = () => {
+    if (!btnRef.current) return;
+    const r = btnRef.current.getBoundingClientRect();
+    setDropPos({ top: r.bottom + 6, left: r.left });
+    setOpen(p => !p);
+    setWelcomeStep(false);
+  };
+
   if (!client.email) return null;
 
   const sendReminder = async () => {
-    setStatus("sending");
+    setReminderStatus("sending");
+    setOpen(false);
     try {
       const res = await supabase.functions.invoke("manage-auth", {
         body: { action: "send_reminder", clientId: client.id },
       });
-      if (res.error || !res.data?.ok) throw new Error(res.data?.error || "שגיאה");
-      setStatus("sent");
-      setTimeout(() => setStatus("idle"), 3000);
+      if (res.error || !res.data?.ok) throw new Error();
+      setReminderStatus("sent");
     } catch {
-      setStatus("error");
-      setTimeout(() => setStatus("idle"), 3000);
+      setReminderStatus("error");
     }
+    setTimeout(() => setReminderStatus("idle"), 3000);
+  };
+
+  const sendWelcome = async () => {
+    if (!EMAILJS_SVC || !EMAILJS_WELCOME_TPL || !EMAILJS_KEY) return;
+    setWelcomeStatus("sending");
+    setOpen(false);
+    setWelcomeStep(false);
+    const last_name = client.last_name || "";
+    const family_greeting = last_name ? `ברוכים הבאים משפחת ${last_name}!` : `היי ${client.name}!`;
+    const subject_family  = last_name ? ` משפחת ${last_name}` : "";
+    try {
+      const { data: cdata } = await supabase.from("clients").select("password,password_changed").eq("id", client.id).maybeSingle();
+      const passwordLine = (cdata?.password && !cdata?.password_changed)
+        ? cdata.password
+        : "כבר החלפת סיסמה — אם שכחת, פנה ליועץ לאיפוס";
+      await (window as any).emailjs.send(
+        EMAILJS_SVC, EMAILJS_WELCOME_TPL,
+        { to_email: client.email, to_name: client.name, last_name, family_greeting, subject_family, username: client.username, password: passwordLine, site_url: "https://sheket-calcali.com/" },
+        EMAILJS_KEY,
+      );
+      await supabase.from("clients").update({ welcome_sent_at: new Date().toISOString() }).eq("id", client.id);
+      setWelcomeStatus("sent");
+    } catch {
+      setWelcomeStatus("error");
+    }
+    setTimeout(() => setWelcomeStatus("idle"), 3000);
+  };
+
+  const busy = reminderStatus === "sending" || welcomeStatus === "sending";
+  const anysent = reminderStatus === "sent" || welcomeStatus === "sent";
+  const anyError = reminderStatus === "error" || welcomeStatus === "error";
+
+  const label = busy ? "שולח..." : anyError ? "שגיאה" : anysent ? "נשלח ✓" : (
+    <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+      <IcoMail size={13} /> שליחת מיילים
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+    </span>
+  );
+
+  const itemStyle: React.CSSProperties = {
+    width: "100%", textAlign: "right", background: "none", border: "none",
+    borderRadius: 8, padding: "9px 12px", fontSize: 14, cursor: "pointer",
+    display: "flex", alignItems: "center", gap: 8, color: "var(--text)",
+    fontFamily: "inherit",
   };
 
   return (
-    <Btn
-      size="sm"
-      variant="ghost"
-      onClick={sendReminder}
-      disabled={status === "sending" || status === "sent"}
-    >
-      {status === "sending" ? "שולח..." : status === "sent" ? "נשלח" : status === "error" ? "שגיאה" : <span style={{ display: "flex", alignItems: "center", gap: 5 }}><IcoBell /> שלח תזכורת</span>}
-    </Btn>
+    <div ref={btnRef} style={{ position: "relative" }}>
+      <Btn size="sm" variant="ghost" onClick={() => !busy && handleOpen()} disabled={busy}>
+        {label}
+      </Btn>
+      {open && ReactDOM.createPortal(
+        <div ref={dropRef} style={{
+          position: "fixed", top: dropPos.top, left: dropPos.left,
+          background: "var(--surface)", border: "1px solid var(--border)",
+          borderRadius: 12, padding: 6, minWidth: 220,
+          boxShadow: "0 8px 24px rgba(0,0,0,0.12)", zIndex: 9999,
+        }}>
+          {!welcomeStep ? (
+            <>
+              <button onClick={sendReminder} style={itemStyle}
+                onMouseEnter={e => (e.currentTarget.style.background = "var(--surface2)")}
+                onMouseLeave={e => (e.currentTarget.style.background = "none")}
+              >
+                <IcoBell size={14} /> תזכורת
+              </button>
+              <button onClick={() => setWelcomeStep(true)} style={itemStyle}
+                onMouseEnter={e => (e.currentTarget.style.background = "var(--surface2)")}
+                onMouseLeave={e => (e.currentTarget.style.background = "none")}
+              >
+                <IcoMail size={14} /> הוראות כניסה
+              </button>
+            </>
+          ) : (
+            <div style={{ padding: "4px 6px" }}>
+              <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 10 }}>
+                לשלוח הוראות כניסה אל<br />
+                <strong style={{ color: "var(--text)" }}>{client.email}</strong>?
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={sendWelcome} style={{
+                  flex: 1, background: "var(--green-mid)", color: "#fff", border: "none",
+                  borderRadius: 8, padding: "7px 0", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 600,
+                }}>שלח</button>
+                <button onClick={() => setWelcomeStep(false)} style={{
+                  flex: 1, background: "var(--surface2)", color: "var(--text-dim)", border: "1px solid var(--border)",
+                  borderRadius: 8, padding: "7px 0", fontSize: 13, cursor: "pointer", fontFamily: "inherit",
+                }}>ביטול</button>
+              </div>
+            </div>
+          )}
+        </div>,
+        document.body
+      )}
+    </div>
   );
 }
 
@@ -416,7 +531,7 @@ function WelcomeEmailCard({ name, last_name, username, password, email, clientId
     try {
       await (window as any).emailjs.send(
         EMAILJS_SVC, EMAILJS_WELCOME_TPL,
-        { to_email: email, to_name: name, last_name: last_name || "", family_greeting, subject_family, username, password: password || "", site_url: "https://www.alonb.com" },
+        { to_email: email, to_name: name, last_name: last_name || "", family_greeting, subject_family, username, password: password || "", site_url: "https://sheket-calcali.com/" },
         EMAILJS_KEY,
       );
       if (clientId) {
@@ -466,8 +581,9 @@ export default function AdminPanel({ onLogout }) {
   const [sortAsc, setSortAsc] = useState(false);
   const [mainView, setMainView] = useState<"clients" | "leads" | "categories">("clients");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [view, setView] = useState("list"); // list | new | detail | categories
-  const [urlTarget, setUrlTarget] = useState(parseAdminUrl);
+  const initialUrlTarget = parseAdminUrl();
+  const [view, setView] = useState(initialUrlTarget ? "loading_url" : "list"); // list | new | detail | categories | loading_url
+  const [urlTarget, setUrlTarget] = useState(initialUrlTarget);
   const [visitedAdminViews, setVisitedAdminViews] = useState<Set<string>>(() => new Set(["list", "leads"]));
   const [pendingLeadId, setPendingLeadId] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
@@ -535,7 +651,7 @@ export default function AdminPanel({ onLogout }) {
     // 1. Insert the client row (without password — credentials are managed by Supabase Auth only)
     const { data: newClient, error } = await supabase
       .from("clients")
-      .insert([{ name: form.name, last_name: form.last_name || null, username: form.username, email: form.email || null, phone: form.phone || null, created_at: new Date().toISOString() }])
+      .insert([{ name: form.name, last_name: form.last_name || null, username: form.username, email: form.email || null, phone: form.phone || null, created_at: new Date().toISOString(), password: form.password || null, password_changed: false }])
       .select("id")
       .single();
     if (error) { setMsg("err: " + (error.message.includes("unique") ? "שם משתמש תפוס" : error.message)); return; }
@@ -624,7 +740,7 @@ export default function AdminPanel({ onLogout }) {
     const [{ data: subs }, { data: maps }, { data: freshClient }, { data: estimates }] = await Promise.all([
       supabase.from("submissions").select("*").eq("client_id", client.id).order("created_at", { ascending: false }),
       supabase.from("remembered_mappings").select("*").eq("client_id", client.id),
-      supabase.from("clients").select("name,last_name,email,phone,username,last_active,required_docs,questionnaire_spouses,is_blocked,submission_notes,no_payslip_reason_s1,no_payslip_reason_s2").eq("id", client.id).maybeSingle(),
+      supabase.from("clients").select("name,last_name,email,phone,username,last_active,required_docs,questionnaire_spouses,is_blocked,submission_notes,no_payslip_reason_s1,no_payslip_reason_s2,custom_docs,doc_notes").eq("id", client.id).maybeSingle(),
       supabase.from("category_estimates").select("*").eq("client_id", client.id).order("created_at", { ascending: true }),
     ]);
     const resolvedTab = startTab || sessionStorage.getItem(`admin_tab_${client.id}`) || "intake";
@@ -646,20 +762,21 @@ export default function AdminPanel({ onLogout }) {
 
   // URL-driven navigation: open client from URL on page load
   useEffect(() => {
-    if (!urlTarget || clients.length === 0) return;
+    if (!urlTarget || loading) return; // wait for loadClients to finish
     const target = (clients as any[]).find(c => c.id === urlTarget.clientId);
     setUrlTarget(null);
-    if (!target) { window.history.replaceState(null, "", "/"); return; }
+    if (!target) { window.history.replaceState(null, "", "/"); setView("list"); return; }
     // Restore sub-tab from URL into sessionStorage so ClientDetail picks it up
     if (urlTarget.subTab) {
       const subTabKey = urlTarget.tab === "intake" ? `intake_tab_${urlTarget.clientId}`
         : urlTarget.tab === "workflow" ? `workflow_tab_${urlTarget.clientId}`
         : urlTarget.tab === "portfolio" ? `portfolio_tab_${urlTarget.clientId}`
+        : urlTarget.tab === "data_center" ? `dc_view_${urlTarget.clientId}`
         : null;
       if (subTabKey) sessionStorage.setItem(subTabKey, urlTarget.subTab);
     }
     openClient(target, { pushUrl: false, startTab: urlTarget.tab });
-  }, [urlTarget, clients]); // eslint-disable-line
+  }, [urlTarget, clients, loading]); // eslint-disable-line
 
   // Popstate: handle browser back/forward
   useEffect(() => {
@@ -702,7 +819,6 @@ export default function AdminPanel({ onLogout }) {
         setMainView={(v) => {
           setMainView(v);
           setSidebarOpen(false);
-          if (v === "clients") { setView("list"); setMsg(""); setSelected(null); setJustCreated(null); setSearch(""); setClientFilter("all"); goListUrl(); }
           setVisitedAdminViews(prev => { const next = new Set(prev); next.add(v); return next; });
         }}
         onLogout={onLogout}
@@ -752,13 +868,20 @@ export default function AdminPanel({ onLogout }) {
           </div>
         )}
 
-        {/* CLIENTS section */}
-        {mainView === "clients" && (<>
+        {/* CLIENTS section — always mounted, hidden via CSS (same pattern as leads/categories) */}
+        <div style={{ display: mainView === "clients" ? "block" : "none" }}>
 
         {/* Back button — only for new-client form; detail view has breadcrumb in its own header */}
-        {view === "new" && (
+        {view === "new" && !justCreated && (
           <div style={{ marginBottom: 20 }}>
             <Btn variant="ghost" size="sm" onClick={() => { goListUrl(); setView("list"); setMsg(""); setSelected(null); setJustCreated(null); setPendingLeadId(null); }}>← חזור ללקוחות</Btn>
+          </div>
+        )}
+
+        {/* LOADING from URL */}
+        {view === "loading_url" && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh", color: "var(--text-dim)", fontSize: 15 }}>
+            טוען...
           </div>
         )}
 
@@ -937,16 +1060,23 @@ export default function AdminPanel({ onLogout }) {
           </Card>
         )}
 
-        {/* NEW CLIENT SUCCESS + WHATSAPP */}
+        {/* NEW CLIENT SUCCESS */}
         {view === "new" && justCreated && (
-          <div style={{ maxWidth: 480 }}>
-            <Card style={{ textAlign: "center", padding: "24px 24px 20px", marginBottom: 16 }}>
-              <div style={{ display: "flex", justifyContent: "center", marginBottom: 10, color: "var(--green-mid)" }}><IcoCheck size={40} /></div>
-              <div style={{ fontWeight: 700, fontSize: 19, marginBottom: 4 }}>הלקוח נוצר בהצלחה!</div>
-              <div style={{ fontSize: 15, color: "var(--text-dim)" }}>{justCreated.name} · @{justCreated.username}</div>
+          <div style={{ maxWidth: 480, margin: "0 auto" }}>
+            <Card style={{ textAlign: "center", padding: "36px 28px 28px", marginBottom: 16 }}>
+              <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
+                <div style={{ width: 64, height: 64, borderRadius: "50%", background: "rgba(46,125,82,0.12)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--green-mid)" }}>
+                  <IcoCheck size={32} />
+                </div>
+              </div>
+              <div style={{ fontWeight: 700, fontSize: 22, marginBottom: 6 }}>הלקוח נוצר בהצלחה!</div>
+              <div style={{ fontSize: 15, color: "var(--text-dim)" }}>
+                {justCreated.name}{justCreated.last_name ? ` ${justCreated.last_name}` : ""}
+                {justCreated.email && <> · <span>{justCreated.email}</span></>}
+              </div>
             </Card>
             <WelcomeEmailCard name={justCreated.name} last_name={justCreated.last_name} username={justCreated.username} password={justCreated.password} email={justCreated.email} clientId={justCreated.id} onSent={loadClients} />
-            <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+            <div style={{ display: "flex", gap: 10, marginTop: 16, justifyContent: "center" }}>
               <Btn onClick={() => setJustCreated(null)}>+ לקוח נוסף</Btn>
               <Btn variant="ghost" onClick={() => { goListUrl(); setView("list"); setJustCreated(null); loadClients(); }}>חזור לרשימה</Btn>
             </div>
@@ -957,7 +1087,7 @@ export default function AdminPanel({ onLogout }) {
         {view === "detail" && selected && (
           <ClientDetail client={selected} readyForPortfolio={readyMap[selected.id] ?? false} onDelete={deleteClient} onDirectDelete={deleteClientDirect} onArchive={archiveClient} onRestore={restoreClient} onBack={() => { goListUrl(); setView("list"); setMsg(""); setSelected(null); setJustCreated(null); setPendingLeadId(null); }} onRefresh={async () => { await loadClients(); const fresh = clients.find(c => c.id === selected.id) || selected; await openClient(fresh); }} />
         )}
-        </>)}
+        </div>
       </div>
     </div>
 
@@ -991,72 +1121,87 @@ function ClientRow({ client, subCount, readyForPortfolio, onOpen, onDelete, onRe
   const isArchived = !!client.archived_at;
 
   return (
-    <div className="client-row" onClick={() => !isArchived && onOpen(client)} style={{ marginBottom: 2, opacity: isArchived ? 0.85 : 1 }}>
-    <Card style={{ display: "flex", alignItems: "center", gap: 14, padding: "16px 20px", flexWrap: "wrap", borderRight: isArchived ? "3px solid #92400e" : showInactiveWarning ? "3px solid var(--red)" : undefined }}>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
-          {client.name}
-          {isArchived && (
-            <span style={{ fontSize: 11, fontWeight: 600, color: "#92400e", background: "#fef3c7", padding: "2px 8px", borderRadius: 4 }}>ארכיון</span>
-          )}
-          {!isArchived && showInactiveWarning && (
-            <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--red)", background: "rgba(192,57,43,0.1)", borderRadius: 20, padding: "2px 8px", fontWeight: 600 }}>
-              <IcoWarn size={11} /> לא פעיל {daysSinceActivity >= 999 ? `${daysSinceWelcome}+` : daysSinceActivity} ימים
-            </span>
-          )}
-        </div>
-        <div style={{ fontSize: 13, color: "var(--text-dim)", display: "flex", flexWrap: "wrap", gap: "0 14px", marginTop: 3 }}>
-          {client.username && <span style={{ color: "var(--text-dim)", fontWeight: 500 }}>@{client.username}</span>}
-          {!isArchived && client.last_active && <span style={{ color: "var(--text-mid)", display: "flex", alignItems: "center", gap: 4 }}><IcoClock /> פעיל {formatRelativeTime(client.last_active)}</span>}
-          {isArchived && <span style={{ color: "#92400e" }}>הועבר לארכיון: {new Date(client.archived_at).toLocaleDateString("he-IL")}</span>}
-          {!isArchived && (client.welcome_sent_at
-            ? <span style={{ color: "var(--green-soft)", display: "flex", alignItems: "center", gap: 4 }}><IcoMail /> מייל נשלח {new Date(client.welcome_sent_at).toLocaleDateString("he-IL")}</span>
-            : client.email ? <span style={{ display: "flex", alignItems: "center", gap: 4 }}><IcoMail /> טרם נשלח</span> : null)}
-          {!isBlocked && !isArchived && !client.portfolio_open && (
-            <span style={{ color: "var(--text-dim)", display: "flex", alignItems: "center", gap: 4 }}>
-              <IcoClock size={12} /> {subCount} הגשות
-            </span>
-          )}
-        </div>
-      </div>
-      <div onClick={e => e.stopPropagation()} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-        {isArchived ? (
-          <>
-            <Btn size="sm" onClick={() => onRestore(client.id)} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-              שחזר לקוח
-            </Btn>
-            <Btn variant="ghost" size="sm" onClick={() => onOpen(client)} style={{ display: "flex", alignItems: "center", gap: 5 }}><IcoEye /> פרטים</Btn>
-          </>
-        ) : (
-          <>
-            {client.portfolio_open && (
-              <span style={{ padding: "4px 12px", borderRadius: 20, fontSize: 13, fontWeight: 600, background: "rgba(46,125,82,0.12)", color: "var(--green-mid)", display: "flex", alignItems: "center", gap: 4 }}>
-                <IcoFolder size={13} /> תיק פעיל
+    <div className="client-row" style={{ display: "flex", alignItems: "stretch", gap: 8, marginBottom: 2, opacity: isArchived ? 0.85 : 1 }}>
+
+      {/* Main card */}
+      <Card onClick={() => !isArchived && onOpen(client)} style={{ flex: 1, display: "flex", alignItems: "center", gap: 14, padding: "16px 20px", flexWrap: "wrap", cursor: isArchived ? "default" : "pointer", borderRight: isArchived ? "3px solid #92400e" : showInactiveWarning ? "3px solid var(--red)" : undefined }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
+            {client.name}
+            {isArchived && (
+              <span style={{ fontSize: 11, fontWeight: 600, color: "#92400e", background: "#fef3c7", padding: "2px 8px", borderRadius: 4 }}>ארכיון</span>
+            )}
+            {!isArchived && showInactiveWarning && (
+              <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--red)", background: "rgba(192,57,43,0.1)", borderRadius: 20, padding: "2px 8px", fontWeight: 600 }}>
+                <IcoWarn size={11} /> לא פעיל {daysSinceActivity >= 999 ? `${daysSinceWelcome}+` : daysSinceActivity} ימים
               </span>
             )}
-            <span style={{
-              padding: "4px 12px", borderRadius: 20, fontSize: 13, fontWeight: 600,
-              background: isBlocked ? "rgba(192,57,43,0.12)" : "rgba(46,125,82,0.12)",
-              color: isBlocked ? "var(--red)" : "var(--green-mid)",
-              display: "flex", alignItems: "center", gap: 4,
-            }}>
-              {isBlocked ? <><IcoLock size={12} /> חסום</> : <><IcoCheck size={12} /> פעיל</>}
-            </span>
-            <Btn variant="ghost" size="sm" onClick={() => onOpen(client)} style={{ display: "flex", alignItems: "center", gap: 5 }}><IcoEye /> פרטים</Btn>
-            {!client.portfolio_open && <ReminderEmailBtn client={client} />}
-            {client.submitted_at && !client.portfolio_open && !isBlocked && (
-              <Btn variant="success" size="sm" onClick={async () => {
-                await supabase.from("clients").update({ portfolio_open: true }).eq("id", client.id);
-                onOpen(client);
-              }} style={{ display: "flex", alignItems: "center", gap: 5 }}><IcoFolder /> פתח תיק כלכלי</Btn>
+          </div>
+          <div style={{ fontSize: 13, color: "var(--text-dim)", display: "flex", flexWrap: "wrap", gap: "0 14px", marginTop: 3 }}>
+            {client.username && <span style={{ color: "var(--text-dim)", fontWeight: 500 }}>@{client.username}</span>}
+            {!isArchived && client.last_active && <span style={{ color: "var(--text-mid)", display: "flex", alignItems: "center", gap: 4 }}><IcoClock /> פעיל {formatRelativeTime(client.last_active)}</span>}
+            {isArchived && <span style={{ color: "#92400e" }}>הועבר לארכיון: {new Date(client.archived_at).toLocaleDateString("he-IL")}</span>}
+            {!isArchived && (client.welcome_sent_at
+              ? <span style={{ color: "var(--green-soft)", display: "flex", alignItems: "center", gap: 4 }}><IcoMail /> מייל נשלח {new Date(client.welcome_sent_at).toLocaleDateString("he-IL")}</span>
+              : client.email ? <span style={{ display: "flex", alignItems: "center", gap: 4 }}><IcoMail /> טרם נשלח</span> : null)}
+            {!isBlocked && !isArchived && !client.portfolio_open && (
+              <span style={{ color: "var(--text-dim)", display: "flex", alignItems: "center", gap: 4 }}>
+                <IcoClock size={12} /> {subCount} הגשות
+              </span>
             )}
-            <span className="client-row-delete">
-              <Btn variant="danger" size="sm" onClick={() => onDelete(client.id, client.name)} style={{ display: "flex", alignItems: "center", gap: 5 }}><IcoTrash /> מחק</Btn>
-            </span>
-          </>
-        )}
-      </div>
-    </Card>
+          </div>
+        </div>
+        <div onClick={e => e.stopPropagation()} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {isArchived ? (
+            <>
+              <Btn size="sm" onClick={() => onRestore(client.id)} style={{ display: "flex", alignItems: "center", gap: 5 }}>שחזר לקוח</Btn>
+              <Btn variant="ghost" size="sm" onClick={() => onOpen(client)} style={{ display: "flex", alignItems: "center", gap: 5 }}><IcoEye /> פרטים</Btn>
+            </>
+          ) : (
+            <>
+              {client.portfolio_open && (
+                <span style={{ padding: "4px 12px", borderRadius: 20, fontSize: 13, fontWeight: 600, background: "rgba(46,125,82,0.12)", color: "var(--green-mid)", display: "flex", alignItems: "center", gap: 4 }}>
+                  <IcoFolder size={13} /> תיק פעיל
+                </span>
+              )}
+              <span style={{
+                padding: "4px 12px", borderRadius: 20, fontSize: 13, fontWeight: 600,
+                background: isBlocked ? "rgba(192,57,43,0.12)" : "rgba(46,125,82,0.12)",
+                color: isBlocked ? "var(--red)" : "var(--green-mid)",
+                display: "flex", alignItems: "center", gap: 4,
+              }}>
+                {isBlocked ? <><IcoLock size={12} /> חסום</> : <><IcoCheck size={12} /> פעיל</>}
+              </span>
+              <Btn variant="ghost" size="sm" onClick={() => onOpen(client)} style={{ display: "flex", alignItems: "center", gap: 5 }}><IcoEye /> פרטים</Btn>
+              {client.submitted_at && !client.portfolio_open && !isBlocked && (
+                <Btn variant="success" size="sm" onClick={async () => {
+                  await supabase.from("clients").update({ portfolio_open: true }).eq("id", client.id);
+                  onOpen(client);
+                }} style={{ display: "flex", alignItems: "center", gap: 5 }}><IcoFolder /> פתח תיק כלכלי</Btn>
+              )}
+              <span className="client-row-delete">
+                <Btn variant="danger" size="sm" onClick={() => onDelete(client.id, client.name)} style={{ display: "flex", alignItems: "center", gap: 5 }}><IcoTrash /> מחק</Btn>
+              </span>
+            </>
+          )}
+        </div>
+      </Card>
+
+      {/* Mail button — outside card, left side */}
+      {!isArchived && (
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "center",
+          background: "var(--surface)", border: "1px solid var(--border)",
+          borderRadius: 12, padding: "0 12px", minWidth: 44,
+          boxShadow: "0 1px 4px rgba(0,0,0,0.04)",
+        }}>
+          {client.email
+            ? <MailDropdownBtn client={client} />
+            : <span style={{ fontSize: 12, color: "var(--text-dim)", whiteSpace: "nowrap" }}>טרם הוזן מייל</span>
+          }
+        </div>
+      )}
+
     </div>
   );
 }
@@ -1065,8 +1210,12 @@ function ClientRow({ client, subCount, readyForPortfolio, onOpen, onDelete, onRe
 async function downloadStorageFile(path, filename) {
   const { data, error } = await supabase.storage.from("client-documents").createSignedUrl(path, 3600);
   if (error || !data?.signedUrl) { alert("שגיאה ביצירת קישור הורדה"); return; }
+  const res = await fetch(data.signedUrl);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = data.signedUrl; a.download = filename; a.target = "_blank"; a.click();
+  a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 // ── AllFilesSection — כל הקבצים עם בחירה מרובה ───────────────────────────────
@@ -1084,19 +1233,38 @@ function AllFilesSection({ clientId }) {
     ]).then(([{ data: d }, { data: p }]) => {
       setDocs(d || []); setPayslips(p || []); setLoading(false);
     });
+
+    const channel = supabase
+      .channel(`client_docs_rt_${clientId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "client_documents", filter: `client_id=eq.${clientId}` }, (payload) => {
+        if (payload.eventType === "INSERT") setDocs(prev => [...prev, payload.new]);
+        else if (payload.eventType === "UPDATE") setDocs(prev => prev.map(d => d.id === payload.new.id ? payload.new : d));
+        else if (payload.eventType === "DELETE") setDocs(prev => prev.filter(d => d.id !== (payload.old as any).id));
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "payslips", filter: `client_id=eq.${clientId}` }, (payload) => {
+        if (payload.eventType === "INSERT") setPayslips(prev => [...prev, payload.new].sort((a, b) => (b.month_key || "").localeCompare(a.month_key || "")));
+        else if (payload.eventType === "UPDATE") setPayslips(prev => prev.map(p => p.id === payload.new.id ? payload.new : p));
+        else if (payload.eventType === "DELETE") setPayslips(prev => prev.filter(p => p.id !== (payload.old as any).id));
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [clientId]);
 
   // Build flat list of all downloadable items
   const items = [
     ...payslips.filter(p => p.path).map(p => ({
       key: `p_${p.id}`, label: `${monthKeyToLabel(p.month_key) || p.label || "תלוש"}`,
-      sub: p.filename, path: p.path, filename: p.filename,
+      sub: p.filename, path: p.path,
+      filename: `תלוש ${p.label || monthKeyToLabel(p.month_key) || "שכר"}.${(p.filename||'pdf').split('.').pop()}`,
     })),
     ...docs.flatMap(doc =>
+      doc.category === "mortgage" ? [] :  // exclude mortgage from flat list
       (doc.files || []).filter(f => f.path).map((f, i) => ({
         key: `d_${doc.id}_${i}`, label: `${doc.label}`,
         sub: f.filename, path: f.path, filename: f.filename,
         extra: doc.extra_data,
+        ownerName: f.owner_name || "",
       }))
     ),
   ];
@@ -1137,12 +1305,42 @@ function AllFilesSection({ clientId }) {
         <div key={item.key} onClick={() => toggleItem(item.key)} style={{ display:"flex", alignItems:"center", gap:12, padding:"10px 14px", marginBottom:6, background: selected.has(item.key) ? "rgba(46,183,124,0.06)" : "var(--surface2)", border:`1px solid ${selected.has(item.key) ? "rgba(46,183,124,0.3)" : "var(--border)"}`, borderRadius:10, cursor:"pointer" }}>
           <input type="checkbox" checked={selected.has(item.key)} onChange={() => {}} style={{ accentColor:"var(--green-mid)", width:16, height:16, flexShrink:0 }} />
           <div style={{ flex:1, minWidth: 0 }}>
-            <div style={{ fontSize: 15, fontWeight:600 }}>{item.label}</div>
+            <div style={{ fontSize: 15, fontWeight:600, display:"flex", alignItems:"center", gap:7 }}>
+              {item.label}
+              {item.ownerName && <span style={{ fontSize:12, fontWeight:600, color:"var(--green-deep)", background:"var(--green-pale)", border:"1px solid var(--green-mint)", borderRadius:99, padding:"2px 8px" }}>{item.ownerName}</span>}
+            </div>
             <div style={{ fontSize: 13, color:"var(--text-dim)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }} title={item.sub}>{item.sub}</div>
           </div>
           <Btn size="sm" variant="secondary" onClick={e => { e.stopPropagation(); downloadStorageFile(item.path, item.filename); }}><IcoDownload size={13} /> הורד</Btn>
         </div>
       ))}
+      {/* Mortgage — grouped by property */}
+      {(() => {
+        const mortgageDoc = docs.find(d => d.category === "mortgage");
+        if (!mortgageDoc || !(mortgageDoc.files || []).length) return null;
+        return (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontWeight:700, fontSize:14, marginBottom:8, display:"flex", alignItems:"center", gap:6 }}>
+              <IcoFolder size={14} /> משכנתה
+            </div>
+            {[...new Set((mortgageDoc.files || []).map((f: any) => f.property_name))].map((propName: any) => (
+              <div key={propName} style={{ marginBottom:10 }}>
+                <div style={{ fontSize:13, fontWeight:600, color:"var(--text)", marginBottom:4, paddingRight:4 }}>{propName}</div>
+                {(mortgageDoc.files || []).filter((f: any) => f.property_name === propName && f.path).map((f: any, i: number) => (
+                  <div key={i} style={{ display:"flex", alignItems:"center", gap:12, padding:"8px 14px", marginBottom:4, background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8 }}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-mid)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontSize:14, fontWeight:600 }}>{f.bank_name}</div>
+                      <div style={{ fontSize:12, color:"var(--text-dim)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{f.filename}</div>
+                    </div>
+                    <Btn size="sm" variant="secondary" onClick={() => downloadStorageFile(f.path, f.filename)}><IcoDownload size={13} /> הורד</Btn>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1259,10 +1457,12 @@ function ClientDetail({ client, readyForPortfolio, onDelete, onDirectDelete, onA
   const initialTab = client.startTab || sessionStorage.getItem(`admin_tab_${client.id}`) || "intake";
   const [activeTab, setActiveTab] = useState(initialTab);
   const [visitedAdminTabs, setVisitedAdminTabs] = useState<Set<string>>(() => new Set([initialTab]));
+  const [dcRefreshKey, setDcRefreshKey] = useState(0);
   const switchAdminTab = (id) => {
     sessionStorage.setItem(`admin_tab_${client.id}`, id);
     setActiveTab(id);
     setVisitedAdminTabs(prev => { const next = new Set(prev); next.add(id); return next; });
+    if (id === "data_center") setDcRefreshKey(k => k + 1);
     if (id === "intake")    setIntakeTabRaw("initial");
     if (id === "workflow")  setWorkflowTabRaw("data");
     if (id === "portfolio") setPortfolioTabRaw("scenario_plan");
@@ -1301,6 +1501,7 @@ function ClientDetail({ client, readyForPortfolio, onDelete, onDirectDelete, onA
 
   const tabs = [
     { id: "intake", label: "פגישה ראשונה" },
+    { id: "data_center", label: "מרכז נתונים" },
     ...(client.portfolio_open ? [{ id: "workflow", label: "תהליך עבודה" }] : []),
     ...(client.portfolio_open ? [{ id: "portfolio", label: "תיק כלכלי" }] : []),
     { id: "log", label: "לוג שינויים", badge: newCatCount },
@@ -1459,6 +1660,13 @@ function ClientDetail({ client, readyForPortfolio, onDelete, onDirectDelete, onA
         </div>
       )}
 
+      {/* DATA CENTER TAB */}
+      {visitedAdminTabs.has("data_center") && (
+        <div style={{ display: activeTab === "data_center" ? "block" : "none" }}>
+          <DataCenterTab client={client} refreshKey={dcRefreshKey} />
+        </div>
+      )}
+
       {/* WORKFLOW TAB — with sub-tabs */}
       {visitedAdminTabs.has("workflow") && (
         <div style={{ display: activeTab === "workflow" ? "block" : "none" }}>
@@ -1586,9 +1794,11 @@ function ClientDetail({ client, readyForPortfolio, onDelete, onDirectDelete, onA
         </div>
       )}
 
-      {/* PERSONAL TAB */}
-      {activeTab === "personal" && (
-        <PersonalTab client={client} onDelete={onDelete} onDirectDelete={onDirectDelete} onArchive={onArchive} onRestore={onRestore} onRefresh={onRefresh} />
+      {/* PERSONAL TAB (lazy mount) */}
+      {visitedAdminTabs.has("personal") && (
+        <div style={{ display: activeTab === "personal" ? "block" : "none" }}>
+          <PersonalTab client={client} onDelete={onDelete} onDirectDelete={onDirectDelete} onArchive={onArchive} onRestore={onRestore} onRefresh={onRefresh} />
+        </div>
       )}
     </div>
   );
@@ -2061,6 +2271,33 @@ function ExportSection({ submissions, clientName }) {
 }
 
 // ── לוג שינויים ──────────────────────────────────────────────────────────────
+const EVENT_LABELS = {
+  remap_business:   "שינוי שיוך",
+  add_category:     "הוספת סעיף",
+  edit_budget:      "שינוי יעד",
+  reset_balance:    "איפוס יתרה",
+  manual_entry:     "הזנה ידנית",
+  category_created: "קטגוריה חדשה (לקוח)",
+};
+
+const EVENT_ICON: Record<string, string> = {
+  remap_business:   "↔",
+  add_category:     "+",
+  edit_budget:      "✎",
+  reset_balance:    "↺",
+  manual_entry:     "✍",
+  category_created: "◈",
+};
+
+const EVENT_BADGE: Record<string, { bg: string; color: string; border: string; dot: string }> = {
+  remap_business:   { bg: "var(--green-pale)",          color: "var(--green-deep)", border: "var(--green-mint)",          dot: "var(--green-mid)"  },
+  add_category:     { bg: "rgba(245,158,11,0.1)",        color: "#92400e",           border: "rgba(245,158,11,0.25)",      dot: "#f59e0b"           },
+  edit_budget:      { bg: "rgba(79,142,247,0.1)",        color: "#1e3a8a",           border: "rgba(79,142,247,0.25)",      dot: "#3b82f6"           },
+  reset_balance:    { bg: "var(--red-light)",            color: "var(--red)",        border: "rgba(192,57,43,0.2)",        dot: "var(--red)"        },
+  manual_entry:     { bg: "var(--surface2)",             color: "var(--text-mid)",   border: "var(--border)",              dot: "var(--text-dim)"   },
+  category_created: { bg: "rgba(251,191,36,0.12)",       color: "#78350f",           border: "rgba(251,191,36,0.3)",       dot: "#f59e0b"           },
+};
+
 function ChangeLogTab({ clientId, clientName, clientLastName }) {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -2081,42 +2318,34 @@ function ChangeLogTab({ clientId, clientName, clientLastName }) {
       });
   }, [clientId]);
 
-  const EVENT_LABELS = {
-    remap_business:    "שינוי שיוך",
-    add_category:      "הוספת סעיף",
-    edit_budget:       "שינוי יעד",
-    reset_balance:     "איפוס יתרה",
-    manual_entry:      "הזנה ידנית",
-    category_created:  "קטגוריה חדשה (לקוח)",
-  };
-
-  const EVENT_COLORS = {
-    remap_business:    "var(--green-mint)",
-    add_category:      "var(--gold-light)",
-    edit_budget:       "rgba(79,142,247,0.1)",
-    reset_balance:     "var(--red-light)",
-    manual_entry:      "var(--surface2)",
-    category_created:  "rgba(251,191,36,0.15)",
-  };
-
-  const filtered = logs.filter(l => {
+  const filtered = useMemo(() => logs.filter(l => {
     if (filter !== "all" && l.event_type !== filter) return false;
     if (!l.created_at) return true;
     if (dateFrom && new Date(l.created_at) < new Date(dateFrom)) return false;
     if (dateTo && new Date(l.created_at) > new Date(dateTo + "T23:59:59")) return false;
     return true;
-  });
+  }), [logs, filter, dateFrom, dateTo]);
+
+  const groupedByDate = useMemo(() => {
+    const groups: Record<string, typeof filtered> = {};
+    filtered.forEach(log => {
+      const key = new Date(log.created_at).toLocaleDateString("he-IL", { day: "numeric", month: "long", year: "numeric" });
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(log);
+    });
+    return Object.entries(groups).map(([date, items]) => ({ date, items }));
+  }, [filtered]);
 
   const detailsToText = (log) => {
     const d = log.details || {};
     switch (log.event_type) {
-      case "remap_business": return `בית עסק: ${d.business_name} | ${d.from_cat || "?"} → ${d.to_cat}`;
-      case "add_category":   return `סעיף חדש: ${d.category_name} | יעד: ₪${d.amount}`;
-      case "edit_budget":    return `סעיף: ${d.category_name} | ₪${d.old_amount} → ₪${d.new_amount}`;
-      case "reset_balance":  return `סעיף: ${d.category_name || "כלל"} | יתרה שאופסה: ₪${d.balance} | ${d.note || ""}`;
-      case "manual_entry":      return `סעיף: ${d.category_name} | ₪${d.amount} | ${d.description}`;
-      case "category_created":  return `קטגוריה: ${d.category_name} | סוג: ${d.budget_type || "משתנה"}`;
-      default:               return JSON.stringify(d);
+      case "remap_business":   return `בית עסק: ${d.business_name} | ${d.from_cat || "?"} → ${d.to_cat}`;
+      case "add_category":     return `סעיף חדש: ${d.category_name} | יעד: ₪${d.amount}`;
+      case "edit_budget":      return `סעיף: ${d.category_name} | ₪${d.old_amount} → ₪${d.new_amount}`;
+      case "reset_balance":    return `סעיף: ${d.category_name || "כלל"} | יתרה שאופסה: ₪${d.balance} | ${d.note || ""}`;
+      case "manual_entry":     return `סעיף: ${d.category_name} | ₪${d.amount} | ${d.description}`;
+      case "category_created": return `קטגוריה: ${d.category_name} | סוג: ${d.budget_type || "משתנה"}`;
+      default:                 return JSON.stringify(d);
     }
   };
 
@@ -2127,24 +2356,24 @@ function ChangeLogTab({ clientId, clientName, clientLastName }) {
         return (
           <span>
             בית עסק: <strong>{d.business_name}</strong>
-            {" | סיווג אוטומטי: "}
+            <span style={{ color: "var(--text-dim)", margin: "0 6px" }}>|</span>
             <span style={{ color: "var(--text-dim)" }}>{d.from_cat || "לא ידוע"}</span>
-            {" → סיווג חדש: "}
+            <span style={{ margin: "0 5px", color: "var(--text-dim)" }}>←</span>
             <strong style={{ color: "var(--green-deep)" }}>{d.to_cat}</strong>
           </span>
         );
       case "add_category":
-        return <span>סעיף חדש: <strong>{d.category_name}</strong> | יעד: ₪{d.amount}</span>;
+        return <span>סעיף חדש: <strong>{d.category_name}</strong><span style={{ color: "var(--text-dim)", margin: "0 6px" }}>|</span>יעד: <strong>₪{d.amount}</strong></span>;
       case "edit_budget":
-        return <span>סעיף: <strong>{d.category_name}</strong> | ₪{d.old_amount} → <strong>₪{d.new_amount}</strong></span>;
+        return <span>סעיף: <strong>{d.category_name}</strong><span style={{ color: "var(--text-dim)", margin: "0 6px" }}>|</span><span style={{ color: "var(--text-dim)" }}>₪{d.old_amount}</span><span style={{ margin: "0 5px", color: "var(--text-dim)" }}>←</span><strong>₪{d.new_amount}</strong></span>;
       case "reset_balance":
-        return <span>סעיף: <strong>{d.category_name || "כלל"}</strong> | יתרה שאופסה: ₪{d.balance} | {d.note}</span>;
+        return <span>סעיף: <strong>{d.category_name || "כלל"}</strong><span style={{ color: "var(--text-dim)", margin: "0 6px" }}>|</span>יתרה: <strong style={{ color: "var(--red)" }}>₪{d.balance}</strong>{d.note && <span style={{ color: "var(--text-dim)", marginRight: 6 }}>{d.note}</span>}</span>;
       case "manual_entry":
-        return <span>סעיף: <strong>{d.category_name}</strong> | ₪{d.amount} | {d.description}</span>;
+        return <span>סעיף: <strong>{d.category_name}</strong><span style={{ color: "var(--text-dim)", margin: "0 6px" }}>|</span><strong>₪{d.amount}</strong>{d.description && <span style={{ color: "var(--text-dim)", marginRight: 6 }}>{d.description}</span>}</span>;
       case "category_created":
-        return <span>קטגוריה חדשה: <strong>{d.category_name}</strong> | סוג: {d.budget_type || "משתנה"}</span>;
+        return <span>קטגוריה חדשה: <strong>{d.category_name}</strong><span style={{ color: "var(--text-dim)", margin: "0 6px" }}>|</span>סוג: {d.budget_type || "משתנה"}</span>;
       default:
-        return <span>{JSON.stringify(d)}</span>;
+        return <span style={{ color: "var(--text-dim)", fontSize: 13 }}>{JSON.stringify(d)}</span>;
     }
   };
 
@@ -2168,62 +2397,138 @@ function ChangeLogTab({ clientId, clientName, clientLastName }) {
     XLSX.writeFile(wb, `לוג_שינויים_${clientName || clientId}.xlsx`);
   };
 
-  if (loading) return <div style={{ color: "var(--text-dim)", padding: 32 }}>טוען...</div>;
+  if (loading) return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: 64, color: "var(--text-dim)" }}>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginLeft: 10, animation: "spin 1s linear infinite" }}>
+        <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+      </svg>
+      טוען היסטוריה...
+    </div>
+  );
+
+  const countByType = (k: string) => k === "all" ? logs.length : logs.filter(l => l.event_type === k).length;
 
   return (
-    <div>
-      {/* שורת כלים */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
-        {[["all", "הכל"], ...Object.entries(EVENT_LABELS)].map(([k, v]) => (
-          <button key={k} onClick={() => setFilter(k)}
-            style={{ padding: "5px 14px", borderRadius: 20, fontSize: 15, cursor: "pointer", fontFamily: "inherit",
-              border: `1px solid ${filter === k ? "var(--green-mid)" : "var(--border)"}`,
-              background: filter === k ? "var(--green-mint)" : "transparent",
-              color: filter === k ? "var(--green-deep)" : "var(--text-mid)", fontWeight: filter === k ? 600 : 400 }}>
-            {v}
-          </button>
-        ))}
-      </div>
+    <div style={{ direction: "rtl" }}>
 
-      {/* סינון תאריך + ייצוא */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
-        <label style={{ fontSize: 14, color: "var(--text-dim)" }}>מתאריך</label>
+      {/* ── toolbar: פילטרים + תאריך + ייצוא ── */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+
+        {/* chips */}
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {([["all", "הכל"], ...Object.entries(EVENT_LABELS)] as [string, string][]).map(([k, v]) => {
+            const n = countByType(k);
+            if (k !== "all" && n === 0) return null;
+            const active = filter === k;
+            return (
+              <button key={k} onClick={() => setFilter(k)} style={{
+                padding: "4px 12px", borderRadius: 20, fontSize: 13, cursor: "pointer",
+                fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4,
+                border: `1px solid ${active ? "var(--green-mid)" : "var(--border)"}`,
+                background: active ? "var(--green-mid)" : "var(--surface)",
+                color: active ? "#fff" : "var(--text-mid)",
+                fontWeight: active ? 600 : 400,
+              }}>
+                {v}
+                <span style={{
+                  fontSize: 11, borderRadius: 10, padding: "0 5px",
+                  background: active ? "rgba(255,255,255,0.2)" : "var(--surface2)",
+                  color: active ? "rgba(255,255,255,0.85)" : "var(--text-dim)",
+                }}>
+                  {n}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* מפריד */}
+        <div style={{ width: 1, height: 20, background: "var(--border)", flexShrink: 0 }} />
+
+        {/* תאריכים */}
         <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-          style={{ fontSize: 15, padding: "4px 8px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontFamily: "inherit" }} />
-        <label style={{ fontSize: 14, color: "var(--text-dim)" }}>עד תאריך</label>
+          title="מתאריך"
+          style={{ fontSize: 13, padding: "4px 8px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontFamily: "inherit" }} />
+        <span style={{ fontSize: 12, color: "var(--text-dim)" }}>—</span>
         <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-          style={{ fontSize: 15, padding: "4px 8px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontFamily: "inherit" }} />
+          title="עד תאריך"
+          style={{ fontSize: 13, padding: "4px 8px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontFamily: "inherit" }} />
         {(dateFrom || dateTo) && (
-          <button onClick={() => { setDateFrom(""); setDateTo(""); }}
-            style={{ fontSize: 14, padding: "4px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--text-dim)", cursor: "pointer", fontFamily: "inherit" }}>
-            נקה
-          </button>
+          <button onClick={() => { setDateFrom(""); setDateTo(""); }} style={{
+            fontSize: 12, padding: "4px 8px", borderRadius: 8, cursor: "pointer",
+            border: "1px solid var(--border)", background: "transparent",
+            color: "var(--text-dim)", fontFamily: "inherit",
+          }}>✕</button>
         )}
+
         <div style={{ marginRight: "auto" }}>
-          <button onClick={exportToExcel} disabled={filtered.length === 0}
-            style={{ fontSize: 15, padding: "5px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", cursor: filtered.length === 0 ? "default" : "pointer", fontFamily: "inherit", opacity: filtered.length === 0 ? 0.5 : 1 }}>
-            ייצוא Excel ({filtered.length})
-          </button>
+          <Btn variant="secondary" size="sm" onClick={exportToExcel} disabled={filtered.length === 0}>
+            <IcoDownload size={13} /> Excel
+          </Btn>
         </div>
       </div>
 
+      {/* ── רשימה ── */}
       {filtered.length === 0 ? (
-        <div style={{ color: "var(--text-dim)", padding: 32, textAlign: "center" }}>אין שינויים</div>
-      ) : filtered.map(log => (
-        <div key={log.id} style={{ marginBottom: 8, padding: "12px 16px", borderRadius: 12, background: EVENT_COLORS[log.event_type] || "var(--surface2)", border: "1px solid var(--border)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
-            <div>
-              <span style={{ fontSize: 14, fontWeight: 700, color: "var(--green-deep)", marginLeft: 8 }}>
-                {EVENT_LABELS[log.event_type] || log.event_type}
-              </span>
-              <span style={{ fontSize: 15, color: "var(--text)" }}>{renderDetails(log)}</span>
-            </div>
-            <div style={{ fontSize: 13, color: "var(--text-dim)", whiteSpace: "nowrap" }}>
-              {new Date(log.created_at).toLocaleString("he-IL", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
-            </div>
-          </div>
+        <div style={{ textAlign: "center", padding: "56px 0", color: "var(--text-dim)", fontSize: 15 }}>
+          אין שינויים להצגה
         </div>
-      ))}
+      ) : (
+        <div style={{
+          border: "1px solid var(--border)",
+          borderRadius: 12,
+          overflow: "hidden",
+          background: "var(--surface)",
+        }}>
+          {filtered.map((log, i) => {
+            const badge = EVENT_BADGE[log.event_type] || EVENT_BADGE.manual_entry;
+            const dt = new Date(log.created_at);
+            const dateStr = dt.toLocaleDateString("he-IL", { day: "numeric", month: "short" });
+            const timeStr = dt.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" });
+            const isLast = i === filtered.length - 1;
+            return (
+              <div key={log.id} style={{
+                display: "flex", alignItems: "center", gap: 12,
+                padding: "11px 16px",
+                borderBottom: isLast ? "none" : "1px solid var(--border)",
+                transition: "background 0.1s",
+              }}
+                onMouseEnter={e => (e.currentTarget.style.background = "var(--surface2)")}
+                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+              >
+                {/* נקודת צבע */}
+                <div style={{
+                  width: 8, height: 8, borderRadius: "50%",
+                  background: badge.dot, flexShrink: 0,
+                  boxShadow: `0 0 0 2px ${badge.dot}33`,
+                }} />
+
+                {/* סוג פעולה */}
+                <span style={{
+                  fontSize: 12, color: badge.color, fontWeight: 600,
+                  flexShrink: 0, minWidth: 100,
+                }}>
+                  {EVENT_LABELS[log.event_type] || log.event_type}
+                </span>
+
+                {/* תוכן */}
+                <div style={{ flex: 1, fontSize: 14, color: "var(--text)", lineHeight: 1.4 }}>
+                  {renderDetails(log)}
+                </div>
+
+                {/* תאריך + שעה */}
+                <div style={{
+                  flexShrink: 0, fontSize: 12, color: "var(--text-dim)",
+                  textAlign: "left", lineHeight: 1.3,
+                }}>
+                  <div>{dateStr}</div>
+                  <div style={{ opacity: 0.75 }}>{timeStr}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -2233,25 +2538,35 @@ function ChangeLogTab({ clientId, clientName, clientLastName }) {
 // ════════════════════════════════════════════════════════════════
 // maps required_doc id → client_documents.category value
 const DOC_ID_MAP: Record<string, string> = {
-  loans: "loans_section", provident: "provident_fund", pl: "profit_loss",
-  savings: "savings_pension", retirement: "retirement_forecast",
-  checks: "deferred_checks", debts_other: "debts_other",
-  bank_stmt: "bank_stmt_meta",
+  loans:        "loans_section",
+  mortgage:     "mortgage",
+  provident:    "provident_fund",
+  pl:           "profit_loss",
+  pension:      "pension_fund",
+  savings_cash: "savings_cash_section",
+  assets:       "assets_section",
+  retirement:   "retirement_forecast",
+  bank_stmt:    "bank_stmt_meta",
 };
 
 const ALL_REQUIRED_DOC_OPTIONS = [
   { id: "bank_stmt",    label: 'פירוט עו"ש' },
   { id: "loans",        label: "מסמכי הלוואות" },
+  { id: "mortgage",     label: "משכנתה" },
   { id: "provident",    label: "יתרת קרן השתלמות" },
+  { id: "pension",      label: "קרנות פנסיה" },
+  { id: "savings_cash", label: "חסכונות כספיים" },
+  { id: "assets",       label: "נכסים פיזיים" },
   { id: "pl",           label: "דוח רווח והפסד (לעצמאיים)" },
-  { id: "savings",      label: "פירוט חסכונות ופנסיה" },
   { id: "retirement",   label: "דוח תחזית פרישה (מעל גיל 55)" },
-  { id: "checks",       label: "שיקים דחויים" },
-  { id: "debts_other",  label: "פיגורי תשלומים וחובות אחרים" },
 ];
 
 function RequiredDocsTab({ client, onRefresh }) {
-  const [selected, setSelected]         = useState(client.required_docs || null);
+  const [selected, setSelected]         = useState(
+    client.required_docs
+      ? client.required_docs.filter((id: string) => ALL_REQUIRED_DOC_OPTIONS.some(o => o.id === id) || id === "questionnaire")
+      : null
+  );
   const [spouses, setSpouses]           = useState(client.questionnaire_spouses || null);
   const [showSpouseModal, setShowSpouseModal] = useState(false);
   const [saving, setSaving]             = useState(false);
@@ -2260,18 +2575,38 @@ function RequiredDocsTab({ client, onRefresh }) {
   const [customDocs, setCustomDocs]     = useState<{id:string;label:string}[]>(client.custom_docs || []);
   const [newCustom, setNewCustom]       = useState("");
   const [showCustomInput, setShowCustomInput] = useState(false);
-  const [docProgress, setDocProgress]   = useState<{done: string[]; partial: string[]}>({ done: [], partial: [] });
+  const [docProgress, setDocProgress]   = useState<{done: string[]; partial: string[]; filesByCategory: Record<string,any[]>; assetDocs: any[]}>({ done: [], partial: [], filesByCategory: {}, assetDocs: [] });
   const [intakeEmpTypes, setIntakeEmpTypes] = useState<{s1:string|null,s2:string|null}>({s1:null,s2:null});
+  const [intakeSpouseNames, setIntakeSpouseNames] = useState<{s1:string|null,s2:string|null}>({s1:null,s2:null});
+  const [showMissingNamesModal, setShowMissingNamesModal] = useState(false);
+  const [finalizedMonths, setFinalizedMonths] = useState<any[]>([]);
+  const [payslipsList, setPayslipsList]   = useState<any[]>([]);
 
   useEffect(() => {
-    supabase.from("client_documents").select("category, marked_done, files")
+    supabase.from("client_documents").select("category, marked_done, files, extra_data, label")
       .eq("client_id", client.id)
       .then(({ data }) => {
         if (!data) return;
         const done = data.filter(d => d.marked_done).map(d => d.category);
         const partial = data.filter(d => !d.marked_done && d.files?.length > 0).map(d => d.category);
-        setDocProgress({ done, partial });
+        const filesByCategory: Record<string,any[]> = {};
+        const assetDocs: any[] = [];
+        data.forEach(d => {
+          if (d.files?.length > 0) filesByCategory[d.category] = d.files;
+          if (d.category.startsWith("asset_") && d.category !== "assets_section" && d.extra_data) assetDocs.push({ category: d.category, label: d.label, ...d.extra_data });
+        });
+        setDocProgress({ done, partial, filesByCategory, assetDocs });
       });
+  }, [client.id]);
+
+  useEffect(() => {
+    Promise.all([
+      supabase.from("month_entries").select("month_key, label, is_finalized").eq("client_id", client.id).order("month_key", { ascending: false }),
+      supabase.from("payslips").select("id, month_key, label, filename, path").eq("client_id", client.id).order("month_key", { ascending: false }),
+    ]).then(([{ data: months }, { data: pays }]) => {
+      setFinalizedMonths((months || []).filter((m: any) => m.is_finalized));
+      setPayslipsList(pays || []);
+    });
   }, [client.id]);
 
   useEffect(() => {
@@ -2281,6 +2616,10 @@ function RequiredDocsTab({ client, onRefresh }) {
           setIntakeEmpTypes({
             s1: row.data.spouse1_employment_type || null,
             s2: row.data.spouse2_employment_type || null,
+          });
+          setIntakeSpouseNames({
+            s1: row.data.spouse1_first_name || row.data.spouse1_name || null,
+            s2: row.data.spouse2_name || null,
           });
         }
       });
@@ -2314,6 +2653,11 @@ function RequiredDocsTab({ client, onRefresh }) {
   };
 
   const selectSpouses = (n) => {
+    if (n === 2 && (!intakeSpouseNames.s1 || !intakeSpouseNames.s2)) {
+      setShowSpouseModal(false);
+      setShowMissingNamesModal(true);
+      return;
+    }
     setSpouses(n);
     setSelected(prev => [...(prev || []), "questionnaire"]);
     setShowSpouseModal(false);
@@ -2376,6 +2720,23 @@ function RequiredDocsTab({ client, onRefresh }) {
 
   return (
     <div>
+      {/* Missing spouse names modal */}
+      {showMissingNamesModal && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.4)", zIndex:"var(--z-back)", display:"flex", alignItems:"center", justifyContent:"center" }}>
+          <div style={{ background:"var(--surface)", borderRadius:16, padding:32, maxWidth:380, width:"90%", textAlign:"center" }}>
+            <div style={{ fontWeight:700, fontSize: 19, marginBottom:10 }}>חסרים שמות</div>
+            <div style={{ fontSize: 15, color:"var(--text-dim)", marginBottom:8, lineHeight:1.6 }}>
+              כדי לבחור שני בני זוג, יש להזין שם פרטי לשני בני הזוג בשאלון האישי.
+            </div>
+            <div style={{ fontSize: 14, color:"var(--text-dim)", marginBottom:24 }}>
+              {!intakeSpouseNames.s1 && <div>· חסר שם פרטי לבן/בת זוג ראשון/ה</div>}
+              {!intakeSpouseNames.s2 && <div>· חסר שם לבן/בת זוג שני/ה</div>}
+            </div>
+            <button onClick={() => setShowMissingNamesModal(false)} style={{ padding:"12px 28px", borderRadius:12, border:"2px solid var(--green-mid)", background:"var(--green-mid)", color:"white", fontWeight:700, fontSize: 16, cursor:"pointer", fontFamily:"inherit" }}>הבנתי</button>
+          </div>
+        </div>
+      )}
+
       {/* Spouse count modal */}
       {showSpouseModal && (
         <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.4)", zIndex:"var(--z-back)", display:"flex", alignItems:"center", justifyContent:"center" }}>
@@ -2426,6 +2787,76 @@ function RequiredDocsTab({ client, onRefresh }) {
         </div>
       )}
 
+      {/* מסמכי חובה — פירוט תנועות + תלושי שכר */}
+      {(() => {
+        const txsDone = finalizedMonths.length >= 3;
+        const txsPartial = finalizedMonths.length > 0 && !txsDone;
+        const paysDone = payslipsList.length >= 3;
+        const paysPartial = payslipsList.length > 0 && !paysDone;
+        const statusBadge = (done: boolean, partial: boolean, count: number, total: number) => (
+          <span style={{ fontSize: 13, fontWeight: 600, padding: "2px 10px", borderRadius: 20,
+            background: done ? "rgba(46,204,138,0.12)" : partial ? "rgba(255,193,7,0.15)" : "var(--surface2)",
+            color: done ? "var(--green-mid)" : partial ? "var(--gold)" : "var(--text-dim)" }}>
+            {done ? "הושלם" : partial ? `${count}/${total}` : "טרם הוגש"}
+          </span>
+        );
+        return (
+          <Card style={{ marginBottom: 12 }}>
+            <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text-dim)", letterSpacing: "0.03em", marginBottom: 10, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>
+              מסמכי חובה (אוטומטיים)
+            </div>
+
+            {/* פירוט תנועות */}
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                <span style={{ fontWeight: 600, fontSize: 15 }}>פירוט תנועות — 3 חודשים</span>
+                {statusBadge(txsDone, txsPartial, finalizedMonths.length, 3)}
+              </div>
+              {finalizedMonths.length > 0 ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  {finalizedMonths.map((m: any) => {
+                    const subs = (client.submissions || []).filter((s: any) => s.month_key === m.month_key);
+                    const txCount = subs.reduce((n: number, s: any) => n + (s.transactions || []).length, 0);
+                    return (
+                      <div key={m.month_key} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, color: "var(--text-mid)", padding: "2px 0" }}>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--green-mid)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                        <span>{m.label}</span>
+                        {txCount > 0 && <span style={{ color: "var(--text-dim)", fontSize: 13 }}>· {txCount} תנועות</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div style={{ fontSize: 13, color: "var(--text-dim)" }}>לא הועלו חודשים עדיין</div>
+              )}
+            </div>
+
+            <div style={{ height: 1, background: "rgba(0,0,0,0.05)", marginBottom: 12 }} />
+
+            {/* תלושי שכר */}
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                <span style={{ fontWeight: 600, fontSize: 15 }}>תלושי שכר — 3 חודשים</span>
+                {statusBadge(paysDone, paysPartial, payslipsList.length, 3)}
+              </div>
+              {payslipsList.length > 0 ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  {payslipsList.map((p: any) => (
+                    <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, color: "var(--text-mid)", padding: "2px 0" }}>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--green-mid)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                      <span>{p.label || monthKeyToLabel(p.month_key)}</span>
+                      {p.filename && <span style={{ color: "var(--text-dim)", fontSize: 13 }}>· {p.filename}</span>}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ fontSize: 13, color: "var(--text-dim)" }}>לא הועלו תלושים עדיין</div>
+              )}
+            </div>
+          </Card>
+        );
+      })()}
+
       <Card>
         {allOptions.map((opt, i) => {
           const cat = DOC_ID_MAP[opt.id] || opt.id;
@@ -2470,6 +2901,40 @@ function RequiredDocsTab({ client, onRefresh }) {
                     placeholder="הוסף הנחיה ללקוח (אופציונלי) — למשל: 3 חודשים אחרונים מבנק מזרחי"
                     style={{ width:"100%", boxSizing:"border-box", fontSize: 14, padding:"6px 10px", borderRadius:6, border:"1px dashed var(--border)", background:"var(--surface2)", color:"var(--text)", fontFamily:"inherit", outline:"none" }}
                   />
+                  {(isDone || isPartial) && (() => {
+                    const cat = DOC_ID_MAP[opt.id] || opt.id;
+                    const files = (docProgress.filesByCategory[cat] || []).filter((f: any) => f.path);
+                    if (!files.length && opt.id !== "assets") return null;
+                    return (
+                      <>
+                        {files.length > 0 && (
+                          <div style={{ marginTop:6, display:"flex", flexDirection:"column", gap:3 }}>
+                            {files.map((f: any, i: number) => (
+                              <div key={i} style={{ display:"flex", alignItems:"center", gap:6, fontSize:13, color:"var(--text-mid)" }}>
+                                <IcoDownload size={12} />
+                                <button onClick={() => downloadStorageFile(f.path, f.filename)}
+                                  style={{ background:"none", border:"none", color:"var(--green-mid)", cursor:"pointer", fontSize:13, fontFamily:"inherit", padding:0, textDecoration:"underline", textAlign:"right" }}>
+                                  {f.filename}
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {opt.id === "assets" && docProgress.assetDocs.length > 0 && (
+                          <div style={{ marginTop:6, display:"flex", flexDirection:"column", gap:4 }}>
+                            {docProgress.assetDocs.map((a: any, i: number) => (
+                              <div key={i} style={{ fontSize:13, color:"var(--text-mid)", display:"flex", alignItems:"center", gap:6 }}>
+                                <span style={{ fontWeight:600, color:"var(--text)" }}>{a.label || a.category}</span>
+                                {a.description && <span>— {a.description}</span>}
+                                {a.year && <span style={{ color:"var(--text-dim)" }}>({a.year})</span>}
+                                {a.value && <span style={{ color:"var(--green-deep)", fontWeight:600 }}>₪{Number(a.value).toLocaleString()}</span>}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               )}
               {isPlBlocked && (
@@ -2506,7 +2971,7 @@ function RequiredDocsTab({ client, onRefresh }) {
       </Card>
 
       <div style={{ marginTop:12, fontSize: 14, color:"var(--text-dim)" }}>
-        הלקוח יראה <strong>רק</strong> את הסעיפים שסומנו. פירוט תנועות, תלושי שכר וחשבון חשמל תמיד מוצגים אוטומטית.
+        הלקוח יראה <strong>רק</strong> את הסעיפים שסומנו בנוסף למסמכי החובה האוטומטיים.
       </div>
     </div>
   );
@@ -2771,8 +3236,10 @@ function IntakeForm({ client }) {
 
   const saveData = async (newData: Record<string,any>) => {
     setSaving(true);
+    const { data: existing } = await supabase.from("client_intake").select("data").eq("client_id", client.id).maybeSingle();
+    const merged = { ...(existing?.data || {}), ...newData };
     const { error } = await supabase.from("client_intake").upsert(
-      [{ client_id: client.id, data: newData, updated_at: new Date().toISOString() }],
+      [{ client_id: client.id, data: merged, updated_at: new Date().toISOString() }],
       { onConflict: "client_id" }
     );
     setSaving(false);

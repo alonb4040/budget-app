@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "./supabase";
-import { Card, Btn, C } from "./ui";
+import { Card, Btn } from "./ui";
+import { C } from "./colors";
 import type { Session } from "./types";
 
 interface ConnectCardScreenProps {

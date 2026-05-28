@@ -169,9 +169,22 @@ function getInitialState(): { session: Session | null; ready: boolean } {
 export default function App() {
   const [session, setSession] = useState<Session | null>(() => getInitialState().session);
   const [ready, setReady] = useState(() => getInitialState().ready);
-  // מונע פלאש של מסך ההתחברות בזמן login פעיל:
-  // כש-LoginScreen מתחיל login הוא מעלה את הדגל — ה-SIGNED_OUT האמצעי של Supabase לא יאפס את הסשן
   const loginInProgress = React.useRef(false);
+  // ref למעקב אחר הסשן הנוכחי בתוך ה-closure של onAuthStateChange — בלי צורך ב-buildSession בכל TOKEN_REFRESHED
+  const sessionRef = React.useRef<Session | null>(getInitialState().session);
+  // מגן על הסשן למשך שתי שניות אחרי חזרה לטאב — מונע flash של מסך login בגלל SIGNED_OUT מ-Supabase
+  const tabReactivating = React.useRef(false);
+
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && sessionRef.current) {
+        tabReactivating.current = true;
+        setTimeout(() => { tabReactivating.current = false; }, 2000);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, []);
 
   useEffect(() => {
     loadXLSX().catch(() => {});
@@ -233,18 +246,20 @@ export default function App() {
       }
 
       if (event === "SIGNED_OUT" || !authSession) {
-        console.log('[Auth] SIGNED_OUT loginInProgress:', loginInProgress.current);
-        // דלג על setSession(null) אם login פעיל, או אם הסשן הנוכחי מצריך איפוס סיסמה
-        // (stray SIGNED_OUTs מגיעים מSupabase בזמן מעבר בין sessions)
-        if (!loginInProgress.current) {
+        console.log('[Auth] SIGNED_OUT loginInProgress:', loginInProgress.current, 'tabReactivating:', tabReactivating.current);
+        // דלג על setSession(null) אם login פעיל, טאב חזר לפוקוס, או אם הסשן מצריך איפוס סיסמה
+        // (stray SIGNED_OUTs מגיעים מSupabase בזמן מעבר בין טאבי דפדפן או בזמן מעבר בין sessions)
+        if (!loginInProgress.current && !tabReactivating.current) {
           setSession(prev => {
-            // אל תמחק סשן של must_reset_password — המשתמש צריך לאפס סיסמה, לא להתנתק
             if (prev?.must_reset_password) {
               console.log('[Auth] SIGNED_OUT — protecting must_reset_password session');
               return prev;
             }
+            sessionRef.current = null;
             return null;
           });
+        } else if (tabReactivating.current) {
+          console.log('[Auth] SIGNED_OUT — ignored (tab reactivation window)');
         }
         if (!awaitingRefresh) {
           console.log('[Auth] SIGNED_OUT — show login');
@@ -258,10 +273,33 @@ export default function App() {
 
       if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
         awaitingRefresh = false;
-        // Reset fallback as a safety net — even if everything below hangs, the app won't
-        // stay on the loading screen forever.
         clearTimeout(fallback);
         fallback = setTimeout(markReady, 15000);
+
+        // TOKEN_REFRESHED = רק ה-JWT התחדש, לא הזהות. אם כבר יש סשן פעיל — אין צורך ב-buildSession.
+        // זה מונע את ה-re-render שנגרם ממעבר בין טאבים.
+        if (event === "TOKEN_REFRESHED" && sessionRef.current) {
+          if (!loginInProgress.current) {
+            loginInProgress.current = true;
+            setTimeout(() => { loginInProgress.current = false; }, 3000);
+          }
+          if (!cancelled) { markReady(); clearTimeout(fallback); }
+          return;
+        }
+
+        // Guard: אם יש לנו סשן פעיל ומגיע SIGNED_IN עם משתמש אחר — זה BroadcastChannel מטאב אחר, מתעלמים
+        if (event === "SIGNED_IN" && sessionRef.current) {
+          try {
+            const stored = JSON.parse(sessionStorage.getItem('sb-fygffuihotnkjmxmveyt-auth-token') || '{}');
+            const myUserId = stored?.user?.id;
+            if (myUserId && authSession.user.id !== myUserId) {
+              console.log('[Auth] SIGNED_IN — ignoring cross-tab BroadcastChannel event (different user)');
+              if (!cancelled) { markReady(); clearTimeout(fallback); }
+              return;
+            }
+          } catch {}
+        }
+
         console.log(`[Auth] ${event} — calling buildSession loginInProgress=${loginInProgress.current}`);
         try {
           const appSession = await Promise.race([
@@ -271,23 +309,21 @@ export default function App() {
           console.log('[Auth] buildSession:', appSession ? appSession.role : 'null');
           if (cancelled) return;
           if (appSession) {
-            setSession(appSession);
-            // הגן 3 שניות על SIGNED_OUT אחרי כל SIGNED_IN מוצלח —
-            // Supabase לפעמים מעיף SIGNED_OUT cleanup מיד אחרי SIGNED_IN (גם ב-restore, לא רק login)
+            sessionRef.current = appSession;
+            setSession(prev => {
+              if (prev && prev.role === appSession.role && prev.id === appSession.id && prev.username === appSession.username) return prev;
+              return appSession;
+            });
             if (!loginInProgress.current) {
               loginInProgress.current = true;
               setTimeout(() => { loginInProgress.current = false; }, 3000);
             }
           } else if (!loginInProgress.current) {
-            // buildSession returned null — auth_id not linked. Sign out only when NOT in active login flow
-            // (if login is in progress, the session was already set by onLogin() — don't destroy the auth session)
+            sessionRef.current = null;
             await supabase.auth.signOut({ scope: 'local' });
           }
         } catch (e: any) {
           console.error('[Auth] SIGNED_IN error:', e.message);
-          // Do NOT await signOut here — the background buildSession query may still be running
-          // and could be holding the Supabase auth lock, causing signOut to hang indefinitely.
-          // Just fall through to markReady and show the login screen.
         }
         if (!cancelled) { markReady(); clearTimeout(fallback); }
       }
@@ -317,6 +353,7 @@ export default function App() {
     window.history.replaceState(null, "", "/");
     sessionStorage.clear();
     await supabase.auth.signOut();
+    sessionRef.current = null;
     setSession(null);
   };
 

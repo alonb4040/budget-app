@@ -92,7 +92,7 @@ export function classifyTx(
       }
     }
   }
-  return { cat: "הוצאות לא מתוכננות", conf: "low" };
+  return { cat: "דרוש סיווג", conf: "low" };
 }
 
 export function parseExcelData(
@@ -338,9 +338,26 @@ export async function parseBankPDF(
     // Classify
     const hint = isCredit ? 'הכנסות' : '';
     const cl = classifyTx(name, hint, rememberedMappings, rules);
-    // Income with no matching rule → "הכנסות מזדמנות" (not "הוצאות לא מתוכננות")
-    const cat = (isCredit && cl.cat === 'הוצאות לא מתוכננות') ? 'הכנסות מזדמנות' : cl.cat;
-    const conf = (isCredit && cl.cat === 'הוצאות לא מתוכננות') ? 'med' as const : cl.conf;
+
+    let cat: string;
+    let conf: 'high' | 'med' | 'low';
+    if (!isCredit) {
+      cat = cl.cat;
+      conf = cl.conf;
+    } else if (rememberedMappings[name]) {
+      // User explicitly mapped this business — respect it
+      cat = cl.cat;
+      conf = cl.conf;
+    } else if (cl.cat === 'הוצאות לא מתוכננות') {
+      // No rule matched → income default
+      cat = 'הכנסות מזדמנות';
+      conf = 'low';
+    } else {
+      // Keyword rule matched but rules are calibrated for expenses —
+      // income transaction with an expense-rule hit → needs human review
+      cat = 'הוצאות לא מתוכננות';
+      conf = 'low';
+    }
 
     const flow_type = (!isCredit && CREDIT_TRANSFER_RE.test(name))
       ? "credit_transfer" as const

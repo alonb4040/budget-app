@@ -633,6 +633,7 @@ export default function ScenarioPlanTab({ client }: { client: any }) {
   const [addSaving, setAddSaving] = useState(false);
   const [addingScenario, setAddingScenario] = useState(false);
   const [hiddenScenarios, setHiddenScenarios] = useState<Set<string>>(new Set());
+  const [selectedCats, setSelectedCats] = useState<Set<string>>(new Set());
   const [collapsedSections, setCollapsedSections] = useState<Set<BudgetType>>(new Set());
   const [dateOrderError, setDateOrderError] = useState<string | null>(null);
   const [addBetweenModal, setAddBetweenModal] = useState<{ curr: Scenario; next: Scenario | undefined } | null>(null);
@@ -838,6 +839,32 @@ export default function ScenarioPlanTab({ client }: { client: any }) {
     if (rebudgetTimer.current[cat]) clearTimeout(rebudgetTimer.current[cat]);
     rebudgetTimer.current[cat] = setTimeout(() => saveRebudgetEntry(cat, val), 800);
   }, [saveRebudgetEntry]);
+
+  const handleToggleSelect = useCallback((cat: string) => {
+    setSelectedCats(prev => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat); else next.add(cat);
+      return next;
+    });
+  }, []);
+
+  const handleCopySelectedToRebudget = useCallback(() => {
+    selectedCats.forEach(cat => {
+      const row = avgRows.find(r => r.category === cat);
+      if (!row || row.avg === 0) return;
+      const val = String(Math.round(row.avg));
+      handleRebudgetChange(cat, val);
+    });
+    setSelectedCats(new Set());
+  }, [selectedCats, avgRows, handleRebudgetChange]);
+
+  const handleCopyAllToRebudget = useCallback(() => {
+    avgRows.forEach(row => {
+      if (row.avg === 0) return;
+      const val = String(Math.round(row.avg));
+      handleRebudgetChange(row.category, val);
+    });
+  }, [avgRows, handleRebudgetChange]);
 
   // ── Grouped rows ──────────────────────────────────────────────────────────────
   const grouped = (() => {
@@ -1241,14 +1268,27 @@ export default function ScenarioPlanTab({ client }: { client: any }) {
             <tr style={{ background: "transparent" }}>
               <th style={{
                 position: "sticky", right: 0, zIndex: 5, background: "var(--green-mid)",
-                color: "#fff", textAlign: "center",
-                padding: "14px 22px",
+                color: "#fff", textAlign: "right",
+                padding: "14px 16px",
                 fontSize: 15, fontWeight: 600,
                 boxShadow: "-8px 0 16px -10px rgba(0,0,0,0.18)",
                 borderRadius: "14px 0 0 0",
                 height: 118, verticalAlign: "top",
               }}>
-                <span style={{ fontSize: 18, fontWeight: 700 }}>קטגוריה</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <input
+                    type="checkbox"
+                    title="בחר הכל"
+                    checked={avgRows.length > 0 && selectedCats.size === avgRows.length}
+                    ref={el => { if (el) el.indeterminate = selectedCats.size > 0 && selectedCats.size < avgRows.length; }}
+                    onChange={e => {
+                      if (e.target.checked) setSelectedCats(new Set(avgRows.map(r => r.category)));
+                      else setSelectedCats(new Set());
+                    }}
+                    style={{ width: 16, height: 16, cursor: "pointer", accentColor: "#fff", flexShrink: 0 }}
+                  />
+                  <span style={{ fontSize: 18, fontWeight: 700 }}>קטגוריה</span>
+                </div>
               </th>
               <th style={{
                 padding: "14px 12px", fontSize: 15, fontWeight: 700, color: "var(--text-dim)",
@@ -1261,13 +1301,39 @@ export default function ScenarioPlanTab({ client }: { client: any }) {
                 ממוצע חודשי
               </th>
               <th style={{
-                padding: "14px 12px", fontSize: 15, fontWeight: 700, color: "var(--text-mid)",
+                padding: "10px 12px", fontSize: 15, fontWeight: 700, color: "var(--text-mid)",
                 textAlign: "center", background: "#f8f9f7",
                 height: 118, verticalAlign: "top",
                 borderRadius: "12px 12px 0 0",
                 border: "1px solid rgba(45,106,79,0.18)", borderBottom: "none",
               }}>
-                תקצוב מחדש
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+                  <span>תקצוב מחדש</span>
+                  {selectedCats.size > 0 && (
+                    <button
+                      onClick={handleCopySelectedToRebudget}
+                      title={`העתק ממוצע של ${selectedCats.size} שורות נבחרות`}
+                      style={{
+                        fontSize: 12, padding: "3px 8px", borderRadius: 6, fontFamily: "inherit", fontWeight: 600,
+                        border: "1px solid var(--green-mid)", background: "var(--green-pale)", color: "var(--green-deep)",
+                        cursor: "pointer", whiteSpace: "nowrap",
+                      }}
+                    >
+                      ↓ העתק נבחרים ({selectedCats.size})
+                    </button>
+                  )}
+                  <button
+                    onClick={handleCopyAllToRebudget}
+                    title="העתק את כל ממוצעי החודשי לתקצוב מחדש"
+                    style={{
+                      fontSize: 12, padding: "3px 8px", borderRadius: 6, fontFamily: "inherit", fontWeight: 600,
+                      border: "1px solid var(--border)", background: "none", color: "var(--text-dim)",
+                      cursor: "pointer", whiteSpace: "nowrap",
+                    }}
+                  >
+                    ↓ העתק הכל
+                  </button>
+                </div>
               </th>
               {scenarios.map((s, idx) => {
                 const isHidden = hiddenScenarios.has(s.id);
@@ -1487,6 +1553,8 @@ export default function ScenarioPlanTab({ client }: { client: any }) {
                       entries={entries}
                       savingEntry={savingEntry}
                       activeScenarioId={activeScenarioId}
+                      isSelected={selectedCats.has(row.category)}
+                      onToggleSelect={() => handleToggleSelect(row.category)}
                       onRebudgetChange={handleRebudgetChange}
                       onCopyAvg={() => handleRebudgetChange(row.category, String(Math.round(row.avg)))}
                       onSaveEntry={saveEntry}
@@ -1739,7 +1807,7 @@ export default function ScenarioPlanTab({ client }: { client: any }) {
 // ── Category row ──────────────────────────────────────────────────────────────
 function CategoryRow({
   row, rebudgetVal, scenarios, hiddenScenarios, entries, savingEntry,
-  activeScenarioId, onRebudgetChange, onCopyAvg, onSaveEntry, onDelete,
+  activeScenarioId, isSelected, onToggleSelect, onRebudgetChange, onCopyAvg, onSaveEntry, onDelete,
 }: {
   row: AvgRow;
   rebudgetVal: string;
@@ -1748,6 +1816,8 @@ function CategoryRow({
   entries: EntryMap;
   savingEntry: string | null;
   activeScenarioId: string | null;
+  isSelected: boolean;
+  onToggleSelect: () => void;
   onRebudgetChange: (cat: string, val: string) => void;
   onCopyAvg: () => void;
   onSaveEntry: (scenarioId: string, category: string, val: string) => void;
@@ -1785,14 +1855,21 @@ function CategoryRow({
       {/* Category name — sticky */}
       <td style={{
         position: "sticky", right: 0, zIndex: 2,
-        background: "#f7f2e9",
+        background: isSelected ? "#e6f4ee" : "#f7f2e9",
         color: "#3a2f1f",
-        padding: "13px 22px", fontSize: 15, fontWeight: 500,
+        padding: "13px 16px", fontSize: 15, fontWeight: 500,
         whiteSpace: "nowrap",
         boxShadow: "-8px 0 16px -10px rgba(0,0,0,0.18)",
         borderBottom: rowBorder,
+        transition: "background 0.12s",
       }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={onToggleSelect}
+            style={{ width: 15, height: 15, cursor: "pointer", accentColor: "var(--green-mid)", flexShrink: 0 }}
+          />
           <span>{row.category}</span>
           {row.isEstimate && hovered && (
             <button onClick={() => onDelete(row.category)} aria-label="מחק קטגוריה"

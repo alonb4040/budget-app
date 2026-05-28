@@ -3,33 +3,6 @@ import { createPortal } from 'react-dom';
 import type { CSSProperties, ReactNode, MouseEventHandler } from 'react';
 import type { Conf } from './types';
 
-export const C: Record<string, string> = {
-  // Greens
-  greenDeep:  "var(--green-deep)",
-  greenMid:   "var(--green-mid)",
-  greenSoft:  "var(--green-soft)",
-  greenMint:  "var(--green-mint)",
-  greenPale:  "var(--green-pale)",
-  // Gold
-  gold:       "var(--gold)",
-  goldLight:  "var(--gold-light)",
-  // Surfaces
-  bg:         "var(--bg)",
-  surface:    "var(--surface)",
-  surface2:   "var(--surface2)",
-  border:     "var(--border)",
-  // Text
-  text:       "var(--text)",
-  textMid:    "var(--text-mid)",
-  dim:        "var(--text-dim)",
-  // Status
-  green:      "var(--green-soft)",
-  red:        "var(--red)",
-  yellow:     "var(--gold)",
-  // Legacy aliases for existing code
-  accent:     "var(--green-mid)",
-  accent2:    "var(--green-soft)",
-};
 
 interface CardProps {
   children: ReactNode;
@@ -327,7 +300,7 @@ export const CustomSelect = ({
           position: "fixed", top: pos.top, left: pos.left, width: pos.width,
           background: "var(--surface)", border: "1px solid var(--border)",
           borderRadius: 10, boxShadow: "0 8px 24px rgba(30,77,53,0.15)",
-          zIndex: "var(--z-drop)", maxHeight: 240, overflowY: "auto",
+          zIndex: dropdownZIndex, maxHeight: 240, overflowY: "auto",
         }}>
           {groups ? groups.map(g => (
             <div key={g.label}>

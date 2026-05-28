@@ -11,7 +11,6 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { gsap } from "gsap";
-import confetti from "canvas-confetti";
 
 // ─── prefers-reduced-motion ───────────────────────────────────────────────────
 const prefersReduced = typeof window !== "undefined"
@@ -190,9 +189,9 @@ const GLOBAL_CSS = `
   from { opacity: 0; transform: translateY(10px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-@keyframes pulse-border {
-  0%, 100% { box-shadow: 0 0 0 4px rgba(245,158,11,0.15); }
-  50%       { box-shadow: 0 0 0 8px rgba(245,158,11,0.30); }
+@keyframes pulse-border-indigo {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(99,102,241,0.15); }
+  50%       { box-shadow: 0 0 0 8px rgba(99,102,241,0.30); }
 }
 .tut-btn:focus-visible {
   outline: 2px solid var(--green-mid);
@@ -276,15 +275,9 @@ export default function BankTutorial({ onDone }: { onDone: () => void }) {
     }
   }, [phase]); // eslint-disable-line
 
-  // ── Phase 3 success: confetti + fade-in ──
+  // ── Phase 3 success: fade-in ──
   useEffect(() => {
     if (phase !== 3 || !ignored) return;
-    if (!prefersReduced) {
-      const fire = (opts: confetti.Options) => confetti({ ...opts, disableForReducedMotion: true });
-      fire({ particleCount: 100, spread: 70, origin: { y: 0.55 } });
-      setTimeout(() => fire({ particleCount: 50, spread: 120, origin: { y: 0.6, x: 0.2 } }), 220);
-      setTimeout(() => fire({ particleCount: 50, spread: 120, origin: { y: 0.6, x: 0.8 } }), 420);
-    }
     if (doneRef.current) {
       gsap.fromTo(doneRef.current,
         { opacity: 0, y: 30 },
@@ -420,50 +413,75 @@ export default function BankTutorial({ onDone }: { onDone: () => void }) {
         {!ignored ? (
           <>
             <h1 style={{ ...S.title, fontSize: "clamp(19px,4vw,24px)", marginBottom: 6 }}>
-              מסמנים את שורת ישראכרט כ"להתעלם"
+              מסמנים את שורת ישראכרט כ"כלול בכרטיס"
             </h1>
-            <p style={{ ...S.sub, marginBottom: 24, fontSize: 14 }}>
-              כך המערכת לא תספור אותה — ותראה את הסכום האמיתי
+            <p style={{ ...S.sub, marginBottom: 20, fontSize: 14 }}>
+              כך המערכת יודעת שהסכום כבר נספר — ולא תספור אותו שוב
             </p>
 
-            <div style={{ ...S.card, display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24, border: "2px dashed #FDE68A", background: "#FFFBEB" }}>
-              <button
-                onClick={() => setIgnored(true)}
-                style={{
-                  padding: "10px 20px",
-                  background: "#fff",
-                  border: "2px solid #F59E0B",
-                  borderRadius: 10,
-                  cursor: "pointer",
-                  fontSize: 15, fontWeight: 700, color: "#B45309",
-                  animation: prefersReduced ? "none" : "pulse-border 1.5s ease-in-out infinite",
-                  boxShadow: "0 0 0 4px rgba(245,158,11,0.2)",
-                  flexShrink: 0,
-                }}
-              >
-                להתעלם
-              </button>
-              <div style={{ textAlign: "right" as const }}>
-                <div style={{ fontSize: 13, color: "#B45309", fontWeight: 600, marginBottom: 2 }}>ישראכרט</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: "#92400E" }}>₪6,200</div>
+            {/* Mock transaction card — styled like the real UI */}
+            <div style={{ ...S.card, marginBottom: 10, padding: "12px 16px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" as const }}>
+                {/* Right: name + date */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 15, fontWeight: 600, color: "#111827", marginBottom: 2 }}>ישראכרט</div>
+                  <div style={{ fontSize: 12, color: "#9CA3AF" }}>15/05/2025 · עו"ש</div>
+                </div>
+                {/* Left: amount + buttons */}
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, flexWrap: "wrap" as const }}>
+                  <span style={{ fontWeight: 700, fontSize: 14, color: "#DC2626" }}>₪6,200</span>
+                  <span style={{ background: "var(--green-mint,#d1fae5)", border: "1px solid var(--green-soft,#6ee7b7)", borderRadius: 16, padding: "3px 10px", fontSize: 12, color: "var(--green-deep,#1e4d35)", fontWeight: 600 }}>
+                    העברה
+                  </span>
+                  {/* The real כלול בכרטיס button */}
+                  <button
+                      onClick={() => setIgnored(true)}
+                      style={{
+                        background: "transparent",
+                        border: "1px solid var(--border,#e2e8f0)",
+                        borderRadius: 6,
+                        padding: "3px 8px",
+                        fontSize: 12,
+                        color: "var(--text-dim,#6B7280)",
+                        cursor: "pointer",
+                        fontFamily: "inherit",
+                        whiteSpace: "nowrap" as const,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        fontWeight: 600,
+                        animation: prefersReduced ? "none" : "pulse-border-indigo 1.5s ease-in-out infinite",
+                      }}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/>
+                      </svg>
+                      כלול בכרטיס
+                  </button>
+                </div>
               </div>
             </div>
 
-            <div style={{ fontSize: 13, color: "#9CA3AF", textAlign: "center" as const, lineHeight: 1.5 }}>
+            <div style={{ fontSize: 13, color: "#6366F1", fontWeight: 700, textAlign: "center" as const, lineHeight: 1.5 }}>
               לחץ על הכפתור כדי לראות איך זה עובד
             </div>
           </>
         ) : (
           <div ref={doneRef} style={{ opacity: 0, display: "flex", flexDirection: "column" as const, alignItems: "center" }}>
-            {/* Strikethrough bank row */}
-            <div style={{ ...S.card, display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 28, opacity: 0.4, background: "#F9FAFB", border: "1.5px solid #E5E7EB" }}>
-              <div style={{ padding: "8px 18px", background: "#DCFCE7", borderRadius: 10, fontSize: 14, fontWeight: 700, color: "#166534", flexShrink: 0, display: "flex", alignItems: "center", gap: 5 }}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#166534" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                להתעלם
-              </div>
-              <div style={{ textAlign: "right" as const }}>
-                <div style={{ fontSize: 13, color: "#9CA3AF", fontWeight: 600, marginBottom: 2, textDecoration: "line-through" }}>ישראכרט</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: "#9CA3AF", textDecoration: "line-through" }}>₪6,200</div>
+            {/* After state — dimmed card with ✓ badge */}
+            <div style={{ ...S.card, marginBottom: 28, padding: "12px 16px", opacity: 0.5 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" as const }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 15, fontWeight: 600, color: "#9CA3AF", textDecoration: "line-through" }}>ישראכרט</div>
+                  <div style={{ fontSize: 12, color: "#9CA3AF" }}>15/05/2025 · עו"ש</div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                  <span style={{ fontWeight: 700, fontSize: 14, color: "#9CA3AF", textDecoration: "line-through" }}>₪6,200</span>
+                  <span style={{ background: "var(--green-mint,#d1fae5)", border: "1px solid var(--green-soft,#6ee7b7)", borderRadius: 6, padding: "3px 8px", fontSize: 12, color: "var(--green-deep,#1e4d35)", fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    כלול בכרטיס
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -472,7 +490,7 @@ export default function BankTutorial({ onDone }: { onDone: () => void }) {
             <h1 style={{ ...S.title, marginTop: 20, marginBottom: 6 }}>מצוין!</h1>
             <p style={{ ...S.sub, marginBottom: 28, fontSize: 15 }}>
               עכשיו המערכת תספור רק ₪6,200 — בדיוק כמו שצריך.<br/>
-              כשתעלה את פירוט העו"ש, תמצא שם שורת ישראכרט — <strong>סמן אותה כ"להתעלם"</strong>.
+              כשתעלה את פירוט העו"ש, תמצא שם שורת ישראכרט — <strong>סמן אותה כ"כלול בכרטיס"</strong>.
             </p>
 
             <button

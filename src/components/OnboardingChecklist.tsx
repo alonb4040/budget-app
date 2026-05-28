@@ -41,6 +41,7 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
   const [showLoanPicker, setShowLoanPicker]   = useState(false);
   const [loanFields, setLoanFields]   = useState({});
   const [pendingFiles, setPendingFiles] = useState({});
+  const [pendingFileNames, setPendingFileNames] = useState<Record<string, string[]>>({});
   const [saving, setSaving]           = useState(null);
   const [submitting, setSubmitting]   = useState(false);
   const [questDoneMap, setQuestDoneMap] = useState({ 1: false, 2: false });
@@ -49,6 +50,10 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
   const [editMonthErr, setEditMonthErr]     = useState("");
   const [editMonthSaving, setEditMonthSaving] = useState(false);
   const fileRefs                      = useRef({});
+  const [retirementCount, setRetirementCount] = useState<number | null>(null);
+  const [retirementNames, setRetirementNames] = useState<string[]>(["", ""]);
+  const [retirementPendingFiles, setRetirementPendingFiles] = useState<(File | null)[]>([null, null]);
+  const retirementFileRefs = useRef<Record<number, HTMLInputElement | null>>({});
 
   // load questionnaire done status
   useEffect(() => {
@@ -63,6 +68,15 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
     })();
   }, [session.id, requiredDocs]);
 
+  // load retirement doc state
+  useEffect(() => {
+    const doc = docs.find((d: any) => d.category === "retirement_forecast");
+    if (doc?.extra_data?.spouse_count) setRetirementCount(doc.extra_data.spouse_count);
+    if (doc?.files?.length) {
+      setRetirementNames([doc.files[0]?.owner_name || "", doc.files[1]?.owner_name || ""]);
+    }
+  }, [docs]);
+
   const txsDone      = finalizedMonths.length >= 3;
   const payslipsDone = payslips.length >= 3;
 
@@ -74,10 +88,10 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
   const isDone    = cat => !!getDoc(cat)?.marked_done;
   const hasFiles  = cat => (getDoc(cat)?.files || []).length > 0 || (pendingFiles[cat] || []).length > 0;
 
-  const ALL_OPTIONAL = ["loans","provident","pl","savings","retirement","checks","debts_other"];
+  const ALL_OPTIONAL = ["loans","provident","pension","pl","savings","savings_cash","assets","retirement","checks","debts_other"];
   const visibleOptional = requiredDocs ? ALL_OPTIONAL.filter(s => requiredDocs.includes(s)) : ALL_OPTIONAL;
 
-  const optDoneMap = { loans: isDone("loans_section"), provident: isDone("provident_fund"), pl: isDone("profit_loss"), savings: isDone("savings_pension"), retirement: isDone("retirement_forecast"), checks: isDone("deferred_checks"), debts_other: isDone("debts_other") };
+  const optDoneMap = { loans: isDone("loans_section"), provident: isDone("provident_fund"), pension: isDone("pension_fund"), pl: isDone("profit_loss"), savings: isDone("savings_pension"), savings_cash: isDone("savings_cash_section"), assets: isDone("assets_section"), retirement: isDone("retirement_forecast"), checks: isDone("deferred_checks"), debts_other: isDone("debts_other") };
   const allOptDone    = visibleOptional.every(s => optDoneMap[s]);
   const requiredDone  = txsDone && payslipsDone && allOptDone && questDone;
 
@@ -140,6 +154,26 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
     setPendingFiles(prev => ({ ...prev, [cat]: [...(prev[cat]||[]), ...files] }));
   };
 
+  const removePendingFile = (cat, idx) => {
+    setPendingFiles(prev => ({ ...prev, [cat]: (prev[cat]||[]).filter((_,i) => i !== idx) }));
+    setPendingFileNames(prev => ({ ...prev, [cat]: (prev[cat]||[]).filter((_,i) => i !== idx) }));
+  };
+
+  const setPendingFileName = (cat, idx, name) => {
+    setPendingFileNames(prev => {
+      const arr = [...(prev[cat] || [])];
+      arr[idx] = name;
+      return { ...prev, [cat]: arr };
+    });
+  };
+
+  const pendingNamesComplete = (cat) => {
+    const pend = pendingFiles[cat] || [];
+    if (!pend.length) return true;
+    const names = pendingFileNames[cat] || [];
+    return pend.every((_, i) => (names[i] || "").trim());
+  };
+
   const uploadToStorage = async (file, cat) => {
     const path = `${session.id}/${cat}/${Date.now()}_${file.name}`;
     const { error } = await supabase.storage.from("client-documents").upload(path, file, { upsert: false });
@@ -151,7 +185,8 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
     setSaving(cat);
     const existing = getDoc(cat);
     const pending  = pendingFiles[cat] || [];
-    const uploaded = await Promise.all(pending.map(f => uploadToStorage(f, cat)));
+    const names    = pendingFileNames[cat] || [];
+    const uploaded = await Promise.all(pending.map(async (f, i) => ({ ...await uploadToStorage(f, cat), owner_name: (names[i] || "").trim() })));
     const allFiles = [...(existing?.files || []), ...uploaded];
     if (existing) {
       await supabase.from("client_documents").update({ files: allFiles, marked_done: true }).eq("id", existing.id);
@@ -159,6 +194,7 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
       await supabase.from("client_documents").insert([{ client_id: session.id, category: cat, label, files: allFiles, marked_done: true }]);
     }
     setPendingFiles(prev => { const n={...prev}; delete n[cat]; return n; });
+    setPendingFileNames(prev => { const n={...prev}; delete n[cat]; return n; });
     setExpanded(null);
     await onDocsChange();
     setSaving(null);
@@ -168,7 +204,8 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
     setSaving(cat);
     const existing = getDoc(cat);
     const pending  = pendingFiles[cat] || [];
-    const uploaded = await Promise.all(pending.map(f => uploadToStorage(f, cat)));
+    const names    = pendingFileNames[cat] || [];
+    const uploaded = await Promise.all(pending.map(async (f, i) => ({ ...await uploadToStorage(f, cat), owner_name: (names[i] || "").trim() })));
     const allFiles = [...(existing?.files || []), ...uploaded];
     if (existing) {
       await supabase.from("client_documents").update({ files: allFiles }).eq("id", existing.id);
@@ -176,6 +213,7 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
       await supabase.from("client_documents").insert([{ client_id: session.id, category: cat, label, files: allFiles, marked_done: false }]);
     }
     setPendingFiles(prev => { const n={...prev}; delete n[cat]; return n; });
+    setPendingFileNames(prev => { const n={...prev}; delete n[cat]; return n; });
     await onDocsChange();
     setSaving(null);
   };
@@ -185,7 +223,8 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
     const existing = getDoc(cat);
     const fields   = loanFields[cat] || {};
     const pending  = pendingFiles[cat] || [];
-    const uploaded = await Promise.all(pending.map(f => uploadToStorage(f, cat)));
+    const names    = pendingFileNames[cat] || [];
+    const uploaded = await Promise.all(pending.map(async (f, i) => ({ ...await uploadToStorage(f, cat), owner_name: (names[i] || "").trim() })));
     const allFiles = [...(existing?.files || []), ...uploaded];
     if (existing) {
       await supabase.from("client_documents").update({ extra_data: fields, files: allFiles, marked_done: true }).eq("id", existing.id);
@@ -193,6 +232,70 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
       await supabase.from("client_documents").insert([{ client_id: session.id, category: cat, label, files: allFiles, extra_data: fields, marked_done: true }]);
     }
     setPendingFiles(prev => { const n={...prev}; delete n[cat]; return n; });
+    setPendingFileNames(prev => { const n={...prev}; delete n[cat]; return n; });
+    setExpanded(null);
+    await onDocsChange();
+    setSaving(null);
+  };
+
+  const handleRetirementCountSelect = async (count: number) => {
+    setRetirementCount(count);
+    const existing = getDoc("retirement_forecast");
+    if (existing) {
+      await supabase.from("client_documents").update({ extra_data: { ...(existing.extra_data || {}), spouse_count: count } }).eq("id", existing.id);
+    } else {
+      await supabase.from("client_documents").insert([{ client_id: session.id, category: "retirement_forecast", label: "דוח תחזית פרישה", files: [], extra_data: { spouse_count: count }, marked_done: false }]);
+    }
+    await onDocsChange();
+  };
+
+  const handleRetirementFileChange = (idx: number, e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setRetirementPendingFiles(prev => { const a = [...prev]; a[idx] = file; return a; });
+    if (retirementFileRefs.current[idx]) retirementFileRefs.current[idx]!.value = "";
+  };
+
+  const handleRetirementRemoveSaved = async (idx: number) => {
+    const existing = getDoc("retirement_forecast");
+    if (!existing) return;
+    const file = existing.files?.[idx];
+    if (file?.path) await supabase.storage.from("client-documents").remove([file.path]);
+    const newFiles = (existing.files || []).filter((_: any, i: number) => i !== idx);
+    await supabase.from("client_documents").update({ files: newFiles, marked_done: false }).eq("id", existing.id);
+    await onDocsChange();
+  };
+
+  const retirementReadyToSave = () => {
+    if (!retirementCount) return false;
+    for (let i = 0; i < retirementCount; i++) {
+      if (!(retirementNames[i] || "").trim()) return false;
+      if (!getDoc("retirement_forecast")?.files?.[i] && !retirementPendingFiles[i]) return false;
+    }
+    return true;
+  };
+
+  const saveRetirementDone = async () => {
+    setSaving("retirement_forecast");
+    const existing = getDoc("retirement_forecast");
+    const currentFiles = existing?.files || [];
+    const newFiles: any[] = [];
+    for (let i = 0; i < (retirementCount || 0); i++) {
+      const pending = retirementPendingFiles[i];
+      if (pending) {
+        const uploaded = await uploadToStorage(pending, "retirement_forecast");
+        newFiles.push({ ...uploaded, owner_name: (retirementNames[i] || "").trim() });
+      } else if (currentFiles[i]) {
+        newFiles.push({ ...currentFiles[i], owner_name: (retirementNames[i] || "").trim() });
+      }
+    }
+    const extraData = { spouse_count: retirementCount };
+    if (existing) {
+      await supabase.from("client_documents").update({ files: newFiles, extra_data: extraData, marked_done: true }).eq("id", existing.id);
+    } else {
+      await supabase.from("client_documents").insert([{ client_id: session.id, category: "retirement_forecast", label: "דוח תחזית פרישה", files: newFiles, extra_data: extraData, marked_done: true }]);
+    }
+    setRetirementPendingFiles([null, null]);
     setExpanded(null);
     await onDocsChange();
     setSaving(null);
@@ -240,7 +343,7 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
     background: done?"var(--green-mid)":"var(--text-dim)", opacity: done?1:0.5,
     flexShrink:0, display:"inline-block" as const,
   });
-  const optLabels: Record<string,string> = { loans:"הלוואות", provident:"קרן השתלמות", pl:"רווח והפסד", savings:"חסכונות ופנסיה", retirement:"תחזית פרישה", checks:"שיקים דחויים", debts_other:"פיגורים וחובות" };
+  const optLabels: Record<string,string> = { loans:"הלוואות", provident:"קרן השתלמות", pension:"קרנות פנסיה", pl:"רווח והפסד", savings:"חסכונות ופנסיה", savings_cash:"חסכונות כספיים", assets:"נכסים פיזיים", retirement:"תחזית פרישה", checks:"שיקים דחויים", debts_other:"פיגורים וחובות" };
 
   const SectionHeader = ({ id, icon, label, required = false, progressText, done, partial, onClick }: { id:string; icon:any; label:string; required?:boolean; progressText?:string; done:boolean; partial:boolean; onClick:()=>void }) => {
     const isExp = expanded === id;
@@ -286,18 +389,35 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
             <button onClick={() => deleteFile(cat, i)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", padding:"0 2px", display:"flex", alignItems:"center" }} title="מחק"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
           </div>
         ))}
-        {pend.map((f,i) => (
-          <div key={i} style={{ fontSize: 14, color:"var(--green-mid)", padding:"3px 0", display:"flex", alignItems:"center", gap:4 }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>{f.name} <span style={{ color:"var(--text-dim)" }}>(ממתין לשמירה)</span></div>
-        ))}
+        {pend.map((f,i) => {
+          const ownerName = (pendingFileNames[cat] || [])[i] || "";
+          return (
+            <div key={i} style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 14, color:"var(--green-mid)", display:"flex", alignItems:"center", gap:4 }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                <span style={{ flex:1 }}>{f.name} <span style={{ color:"var(--text-dim)" }}>(ממתין לשמירה)</span></span>
+                <button onClick={() => removePendingFile(cat, i)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", padding:"0 2px", display:"flex", alignItems:"center" }} title="הסר"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+              </div>
+              <input
+                type="text"
+                value={ownerName}
+                onChange={e => setPendingFileName(cat, i, e.target.value)}
+                placeholder="שם פרטי *"
+                style={{ marginTop:4, marginRight:16, width:"calc(100% - 16px)", boxSizing:"border-box", padding:"5px 9px", fontSize:13, borderRadius:6, border:`1px solid ${!ownerName.trim() ? "var(--red)" : "var(--border)"}`, background:"var(--surface2)", color:"var(--text)", fontFamily:"inherit", outline:"none" }}
+              />
+              {!ownerName.trim() && <div style={{ fontSize:11, color:"var(--red)", marginRight:16, marginTop:2 }}>שדה חובה</div>}
+            </div>
+          );
+        })}
       </div>
     );
   };
 
-  const UploadArea = ({ cat }) => (
+  const UploadArea = ({ cat, done = false }) => (
     <div>
       <input ref={el => fileRefs.current[cat]=el} type="file" multiple accept=".pdf,.jpg,.jpeg,.png" style={{ display:"none" }} onChange={e => onFileChange(cat, e)} />
       <FileList cat={cat} />
-      <Btn size="sm" variant="secondary" onClick={() => pickFile(cat)} style={{ marginTop:6, display:"inline-flex", alignItems:"center", gap:6 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>הוסף קובץ</Btn>
+      {!done && <Btn size="sm" variant="secondary" onClick={() => pickFile(cat)} style={{ marginTop:6, display:"inline-flex", alignItems:"center", gap:6 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>הוסף קובץ</Btn>}
     </div>
   );
 
@@ -423,16 +543,18 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
                     {!isFields && (
                       <>
                         <input ref={el=>fileRefs.current[cat]=el} type="file" multiple accept=".pdf,.jpg,.jpeg,.png" style={{ display:"none" }} onChange={e=>onFileChange(cat,e)} />
-                        {[...saved.map((f,i)=>({...f,_i:i})), ...pend.map(f=>({filename:f.name,_pending:true}))].map((f,i) => (
+                        {[...saved.map((f,i)=>({...f,_i:i})), ...pend.map((f,i)=>({filename:f.name,_pending:true,_pi:i}))].map((f,i) => (
                           <div key={i} style={{ display:"flex", alignItems:"center", gap:8, fontSize: 14, color:f._pending?"var(--green-mid)":"var(--text)", padding:"2px 0" }}>
-                            <span style={{ display:"inline-flex", alignItems:"center", gap:4 }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>{f.filename}{f._pending&&" (ממתין)"}</span>
+                            <span style={{ display:"inline-flex", alignItems:"center", gap:4, flex:1 }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>{f.filename}{f._pending&&" (ממתין)"}</span>
                             {!f._pending && f.path && <button onClick={()=>openFile(f.path)} style={{ background:"none", border:"none", color:"var(--green-mid)", cursor:"pointer", display:"flex", alignItems:"center" }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>}
-                            {!f._pending && <button onClick={()=>deleteFile(cat,f._i)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", display:"flex", alignItems:"center" }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>}
+                            {f._pending
+                              ? <button onClick={()=>removePendingFile(cat,f._pi)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", display:"flex", alignItems:"center" }} title="הסר"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                              : <button onClick={()=>deleteFile(cat,f._i)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", display:"flex", alignItems:"center" }} title="מחק"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>}
                           </div>
                         ))}
                         <div style={{ display:"flex", gap:8, marginTop:8 }}>
                           <Btn size="sm" variant="secondary" onClick={()=>pickFile(cat)} style={{ display:"inline-flex", alignItems:"center", gap:6 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>{isBoth?"קובץ (לא חובה)":"הוסף קובץ"}</Btn>
-                          {pend.length>0 && <Btn size="sm" onClick={()=>saveLoanFiles(cat,lt.label)} disabled={saving===cat}>{saving===cat?"שומר...":"שמור"}</Btn>}
+                          {pend.length>0 && <Btn size="sm" onClick={()=>saveLoanFiles(cat,lt.label)} disabled={saving===cat||!pendingNamesComplete(cat)}>{saving===cat?"שומר...":"שמור"}</Btn>}
                         </div>
                       </>
                     )}
@@ -466,7 +588,7 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
           <SectionHeader id="provident"
             icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>}
             label="יתרת קרן השתלמות" done={isDone("provident_fund")} partial={hasFiles("provident_fund")&&!isDone("provident_fund")} onClick={()=>toggle("provident")} />
-          {expanded==="provident" && <div style={bodyStyle}><div style={descStyle}>העלה דוח יתרה מחברת הביטוח / קרן הפנסיה</div><UploadArea cat="provident_fund" /><Btn onClick={()=>saveAndDone("provident_fund","קרן השתלמות")} disabled={!hasFiles("provident_fund")||saving==="provident_fund"} style={{ marginTop:14, width:"100%" }}>{saving==="provident_fund"?"שומר...":"✓ סיימתי"}</Btn></div>}
+          {expanded==="provident" && <div style={bodyStyle}><div style={descStyle}>העלה דוח יתרה מחברת הביטוח / קרן הפנסיה</div><UploadArea cat="provident_fund" done={isDone("provident_fund")} /><Btn onClick={()=>saveAndDone("provident_fund","קרן השתלמות")} disabled={!hasFiles("provident_fund")||!pendingNamesComplete("provident_fund")||saving==="provident_fund"} style={{ marginTop:14, width:"100%" }}>{saving==="provident_fund"?"שומר...":"✓ סיימתי"}</Btn></div>}
         </div>
       )}
 
@@ -476,7 +598,7 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
           <SectionHeader id="pl"
             icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>}
             label="דוח רווח והפסד (לעצמאיים)" done={isDone("profit_loss")} partial={hasFiles("profit_loss")&&!isDone("profit_loss")} onClick={()=>toggle("pl")} />
-          {expanded==="pl" && <div style={bodyStyle}><div style={descStyle}>רלוונטי לעצמאיים — העלה דוח רווח והפסד שנתי + מאזן בוחן של שנה קודמת</div><UploadArea cat="profit_loss" /><Btn onClick={()=>saveAndDone("profit_loss","דוח רווח והפסד")} disabled={!hasFiles("profit_loss")||saving==="profit_loss"} style={{ marginTop:14, width:"100%" }}>{saving==="profit_loss"?"שומר...":"✓ סיימתי"}</Btn></div>}
+          {expanded==="pl" && <div style={bodyStyle}><div style={descStyle}>רלוונטי לעצמאיים — העלה דוח רווח והפסד שנתי + מאזן בוחן של שנה קודמת</div><UploadArea cat="profit_loss" done={isDone("profit_loss")} /><Btn onClick={()=>saveAndDone("profit_loss","דוח רווח והפסד")} disabled={!hasFiles("profit_loss")||!pendingNamesComplete("profit_loss")||saving==="profit_loss"} style={{ marginTop:14, width:"100%" }}>{saving==="profit_loss"?"שומר...":"✓ סיימתי"}</Btn></div>}
         </div>
       )}
 
@@ -486,19 +608,98 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
           <SectionHeader id="savings"
             icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>}
             label="פירוט חסכונות ופנסיה" done={isDone("savings_pension")} partial={hasFiles("savings_pension")&&!isDone("savings_pension")} onClick={()=>toggle("savings")} />
-          {expanded==="savings" && <div style={bodyStyle}><div style={descStyle}>כולל: פנסיה, קופות גמל, ביטוח מנהלים, חסכונות בנקאיים, השקעות. ציין גם מועדי נזילות.</div><UploadArea cat="savings_pension" /><Btn onClick={()=>saveAndDone("savings_pension","חסכונות ופנסיה")} disabled={!hasFiles("savings_pension")||saving==="savings_pension"} style={{ marginTop:14, width:"100%" }}>{saving==="savings_pension"?"שומר...":"✓ סיימתי"}</Btn></div>}
+          {expanded==="savings" && <div style={bodyStyle}><div style={descStyle}>כולל: פנסיה, קופות גמל, ביטוח מנהלים, חסכונות בנקאיים, השקעות. ציין גם מועדי נזילות.</div><UploadArea cat="savings_pension" done={isDone("savings_pension")} /><Btn onClick={()=>saveAndDone("savings_pension","חסכונות ופנסיה")} disabled={!hasFiles("savings_pension")||!pendingNamesComplete("savings_pension")||saving==="savings_pension"} style={{ marginTop:14, width:"100%" }}>{saving==="savings_pension"?"שומר...":"✓ סיימתי"}</Btn></div>}
         </div>
       )}
 
       {/* 7. תחזית פרישה */}
-      {visibleOptional.includes("retirement") && (
-        <div style={{ marginBottom: expanded==="retirement" ? 0 : 10 }}>
-          <SectionHeader id="retirement"
-            icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>}
-            label="דוח תחזית פרישה (מעל גיל 55)" done={isDone("retirement_forecast")} partial={hasFiles("retirement_forecast")&&!isDone("retirement_forecast")} onClick={()=>toggle("retirement")} />
-          {expanded==="retirement" && <div style={bodyStyle}><div style={descStyle}>רלוונטי למי שמעל גיל 55 — דוח תחזית פרישה מסוכן הביטוח</div><UploadArea cat="retirement_forecast" /><Btn onClick={()=>saveAndDone("retirement_forecast","דוח תחזית פרישה")} disabled={!hasFiles("retirement_forecast")||saving==="retirement_forecast"} style={{ marginTop:14, width:"100%" }}>{saving==="retirement_forecast"?"שומר...":"✓ סיימתי"}</Btn></div>}
-        </div>
-      )}
+      {visibleOptional.includes("retirement") && (() => {
+        const retDone = isDone("retirement_forecast");
+        const retPartial = !!retirementCount && !retDone;
+        const retClipSvg = <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>;
+        const retEyeSvg = <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>;
+        const retXSvg = <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>;
+        return (
+          <div style={{ marginBottom: expanded==="retirement" ? 0 : 10 }}>
+            <SectionHeader id="retirement"
+              icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>}
+              label="דוח תחזית פרישה (מעל גיל 55)" done={retDone} partial={retPartial} onClick={()=>toggle("retirement")} />
+            {expanded==="retirement" && (
+              <div style={bodyStyle}>
+                <div style={descStyle}>רלוונטי למי שמעל גיל 55 — דוח תחזית פרישה מסוכן הביטוח</div>
+
+                {/* שאלת מספר בני זוג */}
+                <div style={{ marginBottom:16 }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:"var(--text-mid)", marginBottom:8 }}>כמה בני זוג מעל גיל 55?</div>
+                  <div style={{ display:"flex", gap:8 }}>
+                    {[1,2].map(n => (
+                      <button key={n} onClick={() => !retDone && handleRetirementCountSelect(n)}
+                        disabled={retDone}
+                        style={{ padding:"8px 24px", borderRadius:8, border:`1px solid ${retirementCount===n?"var(--green-mid)":"var(--border)"}`, background:retirementCount===n?"var(--green-pale)":"var(--surface)", color:retirementCount===n?"var(--green-deep)":"var(--text)", fontWeight:retirementCount===n?700:400, cursor:retDone?"default":"pointer", fontSize:15, fontFamily:"inherit", transition:"all .15s" }}>{n}</button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* איזורי העלאה */}
+                {retirementCount && (
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(4, 1fr)", gap:12, marginBottom:4 }}>
+                {Array.from({ length: retirementCount }).map((_, zoneIdx) => {
+                  const savedFile = getDoc("retirement_forecast")?.files?.[zoneIdx];
+                  const pendingFile = retirementPendingFiles[zoneIdx];
+                  const name = retirementNames[zoneIdx] || "";
+                  const hasFile = !!(savedFile || pendingFile);
+                  return (
+                    <div key={zoneIdx} style={{ padding:"12px 14px", background:"var(--surface2)", borderRadius:8, border:"1px solid var(--border)" }}>
+                      {retirementCount > 1 && (
+                        <div style={{ fontSize:12, fontWeight:700, color:"var(--text-dim)", marginBottom:10, letterSpacing:"0.04em" }}>בן/בת זוג {zoneIdx+1}</div>
+                      )}
+                      {/* שם פרטי */}
+                      <div style={{ marginBottom:10 }}>
+                        <div style={{ fontSize:12, color:"var(--text-dim)", marginBottom:4 }}>שם פרטי <span style={{ color:"var(--red)" }}>*</span></div>
+                        <input type="text" value={name} disabled={retDone}
+                          onChange={e => setRetirementNames(prev => { const a=[...prev]; a[zoneIdx]=e.target.value; return a; })}
+                          placeholder="הכנס שם..."
+                          style={{ maxWidth:160, width:"100%", boxSizing:"border-box", padding:"6px 10px", fontSize:13, borderRadius:6, border:`1px solid ${!name.trim()&&!retDone?"var(--red)":"var(--border)"}`, background:"var(--surface)", color:"var(--text)", fontFamily:"inherit", outline:"none" }} />
+                        {!name.trim() && !retDone && <div style={{ fontSize:11, color:"var(--red)", marginTop:2 }}>שדה חובה</div>}
+                      </div>
+                      {/* קובץ */}
+                      <input ref={el => retirementFileRefs.current[zoneIdx]=el} type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display:"none" }} onChange={e => handleRetirementFileChange(zoneIdx, e)} />
+                      {savedFile && !pendingFile && (
+                        <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, color:"var(--text)", padding:"4px 0" }}>
+                          {retClipSvg}
+                          <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{savedFile.filename}</span>
+                          {savedFile.path && <button onClick={()=>openFile(savedFile.path)} style={{ background:"none", border:"none", color:"var(--green-mid)", cursor:"pointer", display:"flex", alignItems:"center" }} title="צפה">{retEyeSvg}</button>}
+                          {!retDone && <button onClick={()=>handleRetirementRemoveSaved(zoneIdx)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", display:"flex", alignItems:"center" }} title="הסר">{retXSvg}</button>}
+                        </div>
+                      )}
+                      {pendingFile && (
+                        <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, color:"var(--green-mid)", padding:"4px 0" }}>
+                          {retClipSvg}
+                          <span style={{ flex:1 }}>{pendingFile.name} <span style={{ color:"var(--text-dim)" }}>(ממתין לשמירה)</span></span>
+                          <button onClick={()=>setRetirementPendingFiles(prev=>{const a=[...prev];a[zoneIdx]=null;return a;})} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", display:"flex", alignItems:"center" }} title="הסר">{retXSvg}</button>
+                        </div>
+                      )}
+                      {!hasFile && !retDone && (
+                        <Btn size="sm" variant="secondary" onClick={()=>retirementFileRefs.current[zoneIdx]?.click()} style={{ marginTop:6, display:"inline-flex", alignItems:"center", gap:6 }}>{retClipSvg} הוסף קובץ</Btn>
+                      )}
+                      {hasFile && !retDone && !pendingFile && (
+                        <button onClick={()=>retirementFileRefs.current[zoneIdx]?.click()} style={{ marginTop:6, background:"none", border:"none", color:"var(--text-dim)", cursor:"pointer", fontSize:12, fontFamily:"inherit", padding:0 }}>החלף קובץ</button>
+                      )}
+                      {!hasFile && !retDone && <div style={{ fontSize:11, color:"var(--red)", marginTop:4 }}>יש להעלות קובץ</div>}
+                    </div>
+                  );
+                })}
+                </div>
+                )}
+
+                <Btn onClick={saveRetirementDone} disabled={!retirementReadyToSave()||saving==="retirement_forecast"} style={{ marginTop:14, width:"100%" }}>
+                  {saving==="retirement_forecast"?"שומר...":"✓ סיימתי"}
+                </Btn>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* 8. שיקים דחויים */}
       {visibleOptional.includes("checks") && (
@@ -506,7 +707,7 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
           <SectionHeader id="checks"
             icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>}
             label="שיקים דחויים" done={isDone("deferred_checks")} partial={hasFiles("deferred_checks")&&!isDone("deferred_checks")} onClick={()=>toggle("checks")} />
-          {expanded==="checks" && <div style={bodyStyle}><div style={descStyle}>שיקים דחויים שאינם חלק מהוצאה שוטפת</div><UploadArea cat="deferred_checks" /><Btn onClick={()=>saveAndDone("deferred_checks","שיקים דחויים")} disabled={!hasFiles("deferred_checks")||saving==="deferred_checks"} style={{ marginTop:14, width:"100%" }}>{saving==="deferred_checks"?"שומר...":"✓ סיימתי"}</Btn></div>}
+          {expanded==="checks" && <div style={bodyStyle}><div style={descStyle}>שיקים דחויים שאינם חלק מהוצאה שוטפת</div><UploadArea cat="deferred_checks" done={isDone("deferred_checks")} /><Btn onClick={()=>saveAndDone("deferred_checks","שיקים דחויים")} disabled={!hasFiles("deferred_checks")||!pendingNamesComplete("deferred_checks")||saving==="deferred_checks"} style={{ marginTop:14, width:"100%" }}>{saving==="deferred_checks"?"שומר...":"✓ סיימתי"}</Btn></div>}
         </div>
       )}
 
@@ -516,7 +717,37 @@ export default function OnboardingChecklist({ session, finalizedMonths, payslips
           <SectionHeader id="debts_other"
             icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>}
             label="פיגורי תשלומים וחובות אחרים" done={isDone("debts_other")} partial={hasFiles("debts_other")&&!isDone("debts_other")} onClick={()=>toggle("debts_other")} />
-          {expanded==="debts_other" && <div style={bodyStyle}><div style={descStyle}>חובות לאנשים פרטיים, גמ"ח, מקום עבודה, פיגורים בתשלומים</div><UploadArea cat="debts_other" /><Btn onClick={()=>saveAndDone("debts_other","פיגורי תשלומים וחובות")} disabled={!hasFiles("debts_other")||saving==="debts_other"} style={{ marginTop:14, width:"100%" }}>{saving==="debts_other"?"שומר...":"✓ סיימתי"}</Btn></div>}
+          {expanded==="debts_other" && <div style={bodyStyle}><div style={descStyle}>חובות לאנשים פרטיים, גמ"ח, מקום עבודה, פיגורים בתשלומים</div><UploadArea cat="debts_other" done={isDone("debts_other")} /><Btn onClick={()=>saveAndDone("debts_other","פיגורי תשלומים וחובות")} disabled={!hasFiles("debts_other")||!pendingNamesComplete("debts_other")||saving==="debts_other"} style={{ marginTop:14, width:"100%" }}>{saving==="debts_other"?"שומר...":"✓ סיימתי"}</Btn></div>}
+        </div>
+      )}
+
+      {/* קרנות פנסיה */}
+      {visibleOptional.includes("pension") && (
+        <div style={{ marginBottom: expanded==="pension" ? 0 : 10 }}>
+          <SectionHeader id="pension"
+            icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>}
+            label="קרנות פנסיה" done={isDone("pension_fund")} partial={hasFiles("pension_fund")&&!isDone("pension_fund")} onClick={()=>toggle("pension")} />
+          {expanded==="pension" && <div style={bodyStyle}><div style={descStyle}>העלה דוח יתרות עדכני מכל קרן פנסיה / ביטוח מנהלים</div><UploadArea cat="pension_fund" done={isDone("pension_fund")} /><Btn onClick={()=>saveAndDone("pension_fund","קרנות פנסיה")} disabled={!hasFiles("pension_fund")||!pendingNamesComplete("pension_fund")||saving==="pension_fund"} style={{ marginTop:14, width:"100%" }}>{saving==="pension_fund"?"שומר...":"✓ סיימתי"}</Btn></div>}
+        </div>
+      )}
+
+      {/* חסכונות כספיים */}
+      {visibleOptional.includes("savings_cash") && (
+        <div style={{ marginBottom: expanded==="savings_cash" ? 0 : 10 }}>
+          <SectionHeader id="savings_cash"
+            icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>}
+            label="חסכונות כספיים" done={isDone("savings_cash_section")} partial={hasFiles("savings_cash_section")&&!isDone("savings_cash_section")} onClick={()=>toggle("savings_cash")} />
+          {expanded==="savings_cash" && <div style={bodyStyle}><div style={descStyle}>חסכונות בנקאיים, תוכניות חיסכון, פיקדונות וכספים שמורים</div><UploadArea cat="savings_cash_section" done={isDone("savings_cash_section")} /><Btn onClick={()=>saveAndDone("savings_cash_section","חסכונות כספיים")} disabled={!hasFiles("savings_cash_section")||!pendingNamesComplete("savings_cash_section")||saving==="savings_cash_section"} style={{ marginTop:14, width:"100%" }}>{saving==="savings_cash_section"?"שומר...":"✓ סיימתי"}</Btn></div>}
+        </div>
+      )}
+
+      {/* נכסים פיזיים */}
+      {visibleOptional.includes("assets") && (
+        <div style={{ marginBottom: expanded==="assets" ? 0 : 10 }}>
+          <SectionHeader id="assets"
+            icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>}
+            label="נכסים פיזיים" done={isDone("assets_section")} partial={hasFiles("assets_section")&&!isDone("assets_section")} onClick={()=>toggle("assets")} />
+          {expanded==="assets" && <div style={bodyStyle}><div style={descStyle}>נדל"ן, רכבים, ציוד עסקי — כל נכס שברשותך</div><UploadArea cat="assets_section" done={isDone("assets_section")} /><Btn onClick={()=>saveAndDone("assets_section","נכסים פיזיים")} disabled={!hasFiles("assets_section")||!pendingNamesComplete("assets_section")||saving==="assets_section"} style={{ marginTop:14, width:"100%" }}>{saving==="assets_section"?"שומר...":"✓ סיימתי"}</Btn></div>}
         </div>
       )}
 
