@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         מאזן MAX Sync
 // @namespace    https://github.com/alonb4040/budget-app
-// @version      1.5.1
+// @version      1.5.2
 // @description  סנכרן תנועות MAX ישירות למאזן — ללא הורדת קבצים
 // @author       Mazan
 // @match        https://www.max.co.il/*
@@ -138,7 +138,7 @@
         Authorization: 'Bearer ' + currentUser.accessToken,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ provider: 'max', source_channel: 'userscript', transactions }),
+      body: JSON.stringify({ provider: 'max', source_channel: 'userscript', billingMonthKey, transactions }),
     });
     const d = await r.json();
     if (!r.ok || d.error) throw new Error(d.error || ('שגיאת שרת (' + r.status + ')'));
@@ -234,7 +234,7 @@
       <div id="${PANEL_ID}" class="mz-panel">
         <div class="mz-header">
           <span class="mz-logo">⚡ מאזן</span>
-          <span class="mz-ver">v1.5.1</span>
+          <span class="mz-ver">v1.5.2</span>
         </div>
         <div class="mz-body" id="mz-body"></div>
         <div class="mz-footer" id="mz-footer"></div>
