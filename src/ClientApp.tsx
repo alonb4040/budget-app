@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, Fragment } from "react";
 import { supabase } from "./supabase";
 import {
   CATEGORIES,
@@ -11,7 +11,9 @@ import {
 } from "./data";
 import ConnectCardScreen from "./ConnectCardScreen";
 import { CategoryPicker } from "./components/CategoryPicker";
+import ScenarioPlanTab from "./components/ScenarioPlanTab";
 import { useCategories } from "./hooks/useCategories";
+import { useCategoryOrder } from "./hooks/useCategoryOrder";
 import { Card, Btn, Badge, Spinner, KpiCard, Input, CustomSelect } from "./ui";
 import { C } from "./colors";
 import DebtManager from "./components/DebtManager";
@@ -24,6 +26,7 @@ import ClientScenarioView, {
 import AnalyticsTrends from "./components/AnalyticsTrends";
 import AnalyticsForecast from "./components/AnalyticsForecast";
 import BankTutorial from "./components/BankTutorial";
+import MyCategoriesScreen from "./components/MyCategoriesScreen";
 import {
   BarChart,
   Bar,
@@ -94,6 +97,7 @@ export default function ClientApp({ session, onLogout }) {
   const [payslips, setPayslips] = useState([]);
   const [rememberedMappings, setRememberedMappings] = useState({});
   const [portfolioOpen, setPortfolioOpen] = useState(false);
+  const [isScenarioPublished, setIsScenarioPublished] = useState(false);
   const [portfolioMonths, setPortfolioMonths] = useState([]);
   const [portfolioSubs, setPortfolioSubs] = useState([]);
   const [portfolioOpenedAt, setPortfolioOpenedAt] = useState(null);
@@ -164,6 +168,7 @@ export default function ClientApp({ session, onLogout }) {
   const [importedTxs, setImportedTxs] = useState([]);
   const [importedLoaded, setImportedLoaded] = useState(false);
   const [manualTxs, setManualTxs] = useState([]);
+  const [bankTxs, setBankTxs] = useState([]);
   const [cycleStartDay, setCycleStartDay] = useState(1);
   const [clientPlan, setClientPlan] = useState("free");
   const [clientDocs, setClientDocs] = useState([]);
@@ -301,6 +306,17 @@ export default function ClientApp({ session, onLogout }) {
     };
   }, [session.id]);
 
+  // טעינת מצב פרסום תסריטים
+  useEffect(() => {
+    supabase.from("portfolio_balance_settings")
+      .select("is_scenario_published")
+      .eq("client_id", session.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        setIsScenarioPublished(!!(data as any)?.is_scenario_published);
+      });
+  }, [session.id]);
+
   // פונקציה לרענון scenarioCats — משותפת לטעינה ראשונית ולreal-time
   const reloadScenarioCats = async (portfolioOpen: boolean) => {
     if (!portfolioOpen) {
@@ -395,6 +411,43 @@ export default function ClientApp({ session, onLogout }) {
     };
   }, [session.id]);
 
+  // real-time: תנועות מ-bank_transactions — גם INSERT (סנכרון חדש) וגם UPDATE (למשל
+  // "קליטה" של תנועה מ-pending ל-completed) צריכים לרענן מיד בלי לחכות לרענון ידני
+  useEffect(() => {
+    const channel = supabase
+      .channel("bank_txs_realtime")
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "bank_transactions",
+          filter: `client_id=eq.${session.id}`,
+        },
+        (payload) => {
+          setBankTxs((prev) => [payload.new as any, ...prev]);
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "bank_transactions",
+          filter: `client_id=eq.${session.id}`,
+        },
+        (payload) => {
+          setBankTxs((prev) =>
+            prev.map((t: any) => (t.id === (payload.new as any).id ? (payload.new as any) : t)),
+          );
+        },
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [session.id]);
+
   const loadAllImportedTxs = async (clientId: string) => {
     const PAGE = 1000;
     let all: any[] = [];
@@ -402,6 +455,27 @@ export default function ClientApp({ session, onLogout }) {
     while (true) {
       const { data, error } = await supabase
         .from("imported_transactions")
+        .select("*")
+        .eq("client_id", clientId)
+        .order("created_at", { ascending: false })
+        .range(from, from + PAGE - 1);
+      if (error || !data || data.length === 0) break;
+      all = [...all, ...data];
+      if (data.length < PAGE) break;
+      from += PAGE;
+    }
+    return all;
+  };
+
+  // bank_transactions (v39) — סנכרון MAX חי (תוסף/סקריפט), מחליף את imported_transactions
+  // לתנועות חדשות. יש לה גם status: "pending"/"completed" — טופל בנפרד ב-AllTransactionsTab.
+  const loadAllBankTxs = async (clientId: string) => {
+    const PAGE = 1000;
+    let all: any[] = [];
+    let from = 0;
+    while (true) {
+      const { data, error } = await supabase
+        .from("bank_transactions")
         .select("*")
         .eq("client_id", clientId)
         .order("created_at", { ascending: false })
@@ -428,6 +502,7 @@ export default function ClientApp({ session, onLogout }) {
       iTxs,
       { data: mTxs },
       { data: cDocs },
+      bTxs,
     ] = await Promise.all([
       supabase
         .from("month_entries")
@@ -477,6 +552,7 @@ export default function ClientApp({ session, onLogout }) {
         .eq("client_id", session.id)
         .order("created_at", { ascending: false }),
       supabase.from("client_documents").select("*").eq("client_id", session.id),
+      loadAllBankTxs(session.id),
     ]);
     const isFirst =
       (entries || []).length === 0 &&
@@ -557,6 +633,7 @@ export default function ClientApp({ session, onLogout }) {
     setRememberedMappings(mappingObj);
     setImportedTxs(iTxs);
     setManualTxs(mTxs || []);
+    setBankTxs(bTxs || []);
     setImportedLoaded(true);
   };
 
@@ -944,13 +1021,13 @@ export default function ClientApp({ session, onLogout }) {
       .eq("id", session.id);
   };
 
-  const savePortfolioTxCat = async (submissionId, txIndex, newCat) => {
+  const savePortfolioTxCat = async (submissionId, txIndex, newCat, newBudgetType?: string) => {
     const sub = portfolioSubs.find((s) => s.id === submissionId);
     if (!sub) return;
     const oldCat = sub.transactions?.[txIndex]?.cat || null;
     const businessName = sub.transactions?.[txIndex]?.name || null;
     const newTxs = [...(sub.transactions || [])];
-    newTxs[txIndex] = { ...newTxs[txIndex], cat: newCat, edited: true };
+    newTxs[txIndex] = { ...newTxs[txIndex], cat: newCat, budget_type: newBudgetType, edited: true };
     await supabase
       .from("portfolio_submissions")
       .update({ transactions: newTxs })
@@ -1658,6 +1735,7 @@ export default function ClientApp({ session, onLogout }) {
                             { id: "balance", label: "מאזן מתוכנן" },
                             { id: "debts", label: "מנהל חובות" },
                             { id: "tools", label: "כלים לצמיחה" },
+                            ...(isScenarioPublished ? [{ id: "scenario_plan", label: "מאזן מבוסס תסריטים" }] : []),
                           ] as { id: string; label: string }[]
                         ).map((t) => {
                           const subActive = portfolioSubTab === t.id;
@@ -1820,6 +1898,69 @@ export default function ClientApp({ session, onLogout }) {
               })}
             </>
           )}
+          {completedOnboarding &&
+            (() => {
+              const isActive = activeTab === "categories";
+              return (
+                <button
+                  onClick={() => {
+                    setScreen("dashboard");
+                    switchTab("categories");
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isActive) {
+                      (e.currentTarget as HTMLElement).style.background =
+                        "rgba(255,255,255,0.06)";
+                      (e.currentTarget as HTMLElement).style.color = "#fff";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isActive) {
+                      (e.currentTarget as HTMLElement).style.background =
+                        "transparent";
+                      (e.currentTarget as HTMLElement).style.color =
+                        "rgba(255,255,255,0.78)";
+                    }
+                  }}
+                  style={{
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 11,
+                    padding: "10px 14px",
+                    borderRadius: 10,
+                    border: "none",
+                    borderRight: `3px solid ${isActive ? "var(--green-soft)" : "transparent"}`,
+                    cursor: "pointer",
+                    background: isActive
+                      ? "rgba(255,255,255,0.12)"
+                      : "transparent",
+                    color: isActive ? "#fff" : "rgba(255,255,255,0.78)",
+                    fontFamily: "inherit",
+                    fontSize: 15,
+                    fontWeight: isActive ? 600 : 500,
+                    textAlign: "right",
+                    marginBottom: 2,
+                    transition: "background 0.15s, color 0.15s",
+                  }}
+                >
+                  <svg
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.75"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+                    <line x1="7" y1="7" x2="7.01" y2="7" />
+                  </svg>
+                  הקטגוריות שלי
+                </button>
+              );
+            })()}
           {completedOnboarding &&
             (() => {
               const isActive = activeTab === "personal";
@@ -2116,6 +2257,7 @@ export default function ClientApp({ session, onLogout }) {
                 cycleStartDay={cycleStartDay}
                 importedTxs={importedTxs}
                 manualTxs={manualTxs}
+                bankTxs={bankTxs}
                 onManualTxAdded={(rawRow) =>
                   setManualTxs((prev) => [...prev, rawRow])
                 }
@@ -2143,12 +2285,29 @@ export default function ClientApp({ session, onLogout }) {
               />
             )}
 
+            {/* SCENARIO PLAN TAB — מאזן מבוסס תסריטים (מפורסם ע"י האדמין) */}
+            {activeTab === "portfolio" && portfolioOpen && isScenarioPublished &&
+              visitedPortfolioSubTabs.has("scenario_plan") && (
+              <div style={{ display: portfolioSubTab === "scenario_plan" ? "block" : "none" }}>
+                <ScenarioPlanTab client={{ id: session.id }} dataSource="published" />
+              </div>
+            )}
+
             {/* PERSONAL TAB */}
             {completedOnboarding && activeTab === "personal" && (
               <ClientPersonalTab
                 session={session}
                 onOpenConnectCard={() => setShowConnectCard(true)}
                 maxLastSync={maxLastSync}
+              />
+            )}
+
+            {/* MY CATEGORIES TAB */}
+            {completedOnboarding && activeTab === "categories" && (
+              <MyCategoriesScreen
+                clientId={session.id}
+                hiddenCats={hiddenCats}
+                onHiddenCatsChange={saveHiddenCats}
               />
             )}
 
@@ -3123,7 +3282,7 @@ export default function ClientApp({ session, onLogout }) {
                   onAlways={async () => {
                     const oldCat =
                       rememberedMappings[pendingRemember.name] || null;
-                    const { name, cat } = pendingRemember;
+                    const { name, cat, budgetType } = pendingRemember;
                     await supabase
                       .from("remembered_mappings")
                       .upsert(
@@ -3132,6 +3291,7 @@ export default function ClientApp({ session, onLogout }) {
                             client_id: session.id,
                             business_name: name,
                             category: cat,
+                            budget_type: budgetType,
                           },
                         ],
                         { onConflict: "client_id,business_name" },
@@ -3152,7 +3312,9 @@ export default function ClientApp({ session, onLogout }) {
                     setRememberedMappings((p) => ({ ...p, [name]: cat }));
                     setTransactions((p) =>
                       p.map((t) =>
-                        t.name === name ? { ...t, cat, edited: true } : t,
+                        t.name === name
+                          ? { ...t, cat, budget_type: budgetType, edited: true }
+                          : t,
                       ),
                     );
                     setPendingRemember(null);
@@ -3502,13 +3664,14 @@ export default function ClientApp({ session, onLogout }) {
                               onCategoryAdded={reloadCategories}
                               hiddenCats={hiddenCats}
                               onHiddenCatsChange={saveHiddenCats}
-                              onSelect={(cat) => {
+                              onSelect={(cat, budgetType) => {
                                 setTransactions((prev) =>
                                   prev.map((t) =>
                                     t.id === tx.id
                                       ? {
                                           ...t,
                                           cat,
+                                          budget_type: budgetType,
                                           edited: true,
                                           conf: "high",
                                         }
@@ -3517,7 +3680,7 @@ export default function ClientApp({ session, onLogout }) {
                                 );
                                 setActiveTxId(null);
                                 setCatSearch("");
-                                setPendingRemember({ name: tx.name, cat });
+                                setPendingRemember({ name: tx.name, cat, budgetType });
                               }}
                             />
                           )}
@@ -4800,6 +4963,14 @@ function LoanFieldForm({ cat, fields, onChange }) {
 // type: "file" = קובץ בלבד | "fields" = שדות בלבד | "both" = שדות + קובץ אופציונלי
 const LOAN_TYPES = [
   {
+    id: "loan_mortgage",
+    label: "הלוואת משכנתה",
+    icon: "home",
+    type: "file",
+    fileLabel: "לוח סילוקין / מסמך משכנתה",
+    bankNameField: true,
+  },
+  {
     id: "loan_bank",
     label: "הלוואת בנק",
     icon: "bank",
@@ -4895,7 +5066,8 @@ function OnboardingChecklist({
   const [loanFileReplace, setLoanFileReplace] = useState<{
     [cat: string]: number;
   }>({});
-  const [loanFileExtra, setLoanFileExtra] = useState<Record<string, {balance?: string; year?: string; description?: string}>>({});
+  const [loanFileExtra, setLoanFileExtra] = useState<Record<string, {balance?: string; year?: string; description?: string; bank_name?: string}>>({});
+  const [loanUploading, setLoanUploading] = useState<Set<string>>(new Set());
   type MortgageProperty = { id: string; name: string; banks: { bankName: string; pendingFile: File | null }[] };
   const [mortgageProps, setMortgageProps] = useState<MortgageProperty[]>([]);
   const [saving, setSaving] = useState(null);
@@ -5657,7 +5829,7 @@ function OnboardingChecklist({
 
   // init loanFileExtra (balance/description) for file-type loans
   useEffect(() => {
-    const extra: Record<string, {balance?: string; year?: string; description?: string}> = {};
+    const extra: Record<string, {balance?: string; year?: string; description?: string; bank_name?: string}> = {};
     docs.forEach((d: any) => {
       const lt = LOAN_TYPES.find(t => d.category === t.id || d.category.startsWith(t.id + "_"));
       if (lt && lt.type === "file" && d.extra_data) extra[d.category] = d.extra_data;
@@ -6124,6 +6296,43 @@ function OnboardingChecklist({
     pickFile(cat);
   };
 
+  const autoSaveLoanFile = async (cat: string, file: File) => {
+    const lt = getLoanType(cat);
+    if (!lt) return;
+    setLoanUploading((prev) => new Set(prev).add(cat));
+    const existing = getDoc(cat);
+    const label = existing?.label || lt.label;
+    const replaceIdx = loanFileReplace[cat];
+    let baseFiles = [...(existing?.files || [])];
+    if (replaceIdx !== undefined) {
+      const old = baseFiles[replaceIdx];
+      if (old?.path) await supabase.storage.from("client-documents").remove([old.path]);
+      baseFiles = baseFiles.filter((_, i) => i !== replaceIdx);
+      setLoanFileReplace((p) => { const n = { ...p }; delete n[cat]; return n; });
+    }
+    const uploaded = await uploadToStorage(file, cat);
+    const allFiles = [...baseFiles, uploaded];
+    const extra = loanFileExtra[cat] || {};
+    if (existing) {
+      await supabase.from("client_documents")
+        .update({ files: allFiles, extra_data: extra })
+        .eq("id", existing.id);
+    } else {
+      await supabase.from("client_documents").insert([{
+        client_id: session.id, category: cat, label,
+        files: allFiles, extra_data: extra, marked_done: false,
+      }]);
+    }
+    await onDocsChange();
+    setLoanUploading((prev) => { const s = new Set(prev); s.delete(cat); return s; });
+  };
+
+  const onLoanFileChange = (cat: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    files.forEach((f) => autoSaveLoanFile(cat, f));
+  };
+
   const markBankDone = async () => {
     setSaving("bank_stmt_meta");
     const existing = getDoc("bank_stmt_meta");
@@ -6176,14 +6385,18 @@ function OnboardingChecklist({
           }]);
         }
       } else {
-        // file-type: save pending files if any
-        const pending = pendingFiles[cat] || [];
-        if (pending.length > 0 && existingLoan) {
-          const uploaded = await Promise.all(pending.map((f) => uploadToStorage(f, cat)));
-          const allFiles = [...(existingLoan.files || []), ...uploaded];
+        // file-type: files are auto-saved on upload, just update extra_data + mark done
+        const allFiles = existingLoan?.files || [];
+        const extra = loanFileExtra[cat] || {};
+        if (existingLoan) {
           await supabase.from("client_documents")
-            .update({ files: allFiles, extra_data: loanFileExtra[cat] || {} })
+            .update({ extra_data: extra, marked_done: true })
             .eq("id", existingLoan.id);
+        } else if (allFiles.length > 0 || Object.values(extra).some((v) => !!v)) {
+          await supabase.from("client_documents").insert([{
+            client_id: session.id, category: cat, label: loanLabel,
+            files: allFiles, extra_data: extra, marked_done: true,
+          }]);
         }
       }
     }
@@ -8181,7 +8394,7 @@ function OnboardingChecklist({
                     const lt = getLoanType(cat);
                     if (!lt || lt.type !== "file") return null;
                     const saved = getDoc(cat)?.files || [];
-                    const pend = pendingFiles[cat] || [];
+                    const isUploading = loanUploading.has(cat);
                     return (
                       <div
                         key={cat}
@@ -8224,200 +8437,119 @@ function OnboardingChecklist({
                             ×
                           </button>
                         </div>
-                        {/* balance + year fields */}
-                        <div style={{ marginBottom: 8 }}>
-                          <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 3 }}>
-                            יתרה לתשלום (₪) <span style={{ color: "#E53E3E" }}>*</span>
-                          </div>
-                          <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                        {/* fields: bank name only (mortgage) OR balance + description (other file loans) */}
+                        {lt.bankNameField ? (
+                          <div style={{ marginBottom: 8 }}>
+                            <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 3 }}>
+                              שם בנק / מוסד <span style={{ color: "#E53E3E" }}>*</span>
+                            </div>
                             <input
                               type="text"
-                              dir="ltr"
-                              value={loanFileExtra[cat]?.balance ? Number(loanFileExtra[cat].balance).toLocaleString() : ""}
-                              placeholder="0"
+                              dir="rtl"
+                              value={loanFileExtra[cat]?.bank_name || ""}
+                              placeholder="למשל: בנק לאומי"
                               disabled={loansDone}
-                              style={{ flex:1, padding:"5px 8px", fontSize:12, borderRadius:6,
-                                border: `1px solid ${(!loanFileExtra[cat]?.balance && !loansDone) ? "#E53E3E" : "var(--border)"}`,
+                              style={{ width:"100%", padding:"5px 8px", fontSize:12, borderRadius:6,
+                                border: `1px solid ${(!loanFileExtra[cat]?.bank_name && !loansDone) ? "#E53E3E" : "var(--border)"}`,
                                 background: loansDone ? "var(--surface2)" : "var(--surface)",
                                 color: loansDone ? "var(--text-dim)" : "var(--text)", fontFamily:"inherit",
                                 boxSizing:"border-box" as const, outline:"none" }}
                               onChange={e => {
-                                const raw = e.target.value.replace(/\D/g, "");
-                                setLoanFileExtra(p => ({ ...p, [cat]: { ...p[cat], balance: raw } }));
+                                setLoanFileExtra(p => ({ ...p, [cat]: { ...p[cat], bank_name: e.target.value } }));
                               }}
                             />
-                            <span style={{ fontSize:12, color:"var(--text-dim)", flexShrink:0 }}>₪</span>
                           </div>
-                        </div>
-                        <div style={{ marginBottom: 8 }}>
-                          <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 3 }}>
-                            תיאור <span style={{ color: "#E53E3E" }}>*</span>
-                          </div>
-                          <input
-                            type="text"
-                            dir="rtl"
-                            value={loanFileExtra[cat]?.description || ""}
-                            placeholder="תיאור קצר של ההלוואה"
-                            disabled={loansDone}
-                            style={{ width:"100%", padding:"5px 8px", fontSize:12, borderRadius:6,
-                              border: `1px solid ${(!loanFileExtra[cat]?.description && !loansDone) ? "#E53E3E" : "var(--border)"}`,
-                              background: loansDone ? "var(--surface2)" : "var(--surface)",
-                              color: loansDone ? "var(--text-dim)" : "var(--text)", fontFamily:"inherit",
-                              boxSizing:"border-box" as const, outline:"none" }}
-                            onChange={e => {
-                              setLoanFileExtra(p => ({ ...p, [cat]: { ...p[cat], description: e.target.value } }));
-                            }}
-                          />
-                        </div>
-                        {lt.fileLabel &&
-                          saved.length === 0 &&
-                          pend.length === 0 && (
-                            <div style={{ display:"flex", justifyContent:"center", marginBottom:6 }}>
-                              <span style={{ fontSize:10, fontWeight:600, color:"#C53030", background:"rgba(197,48,48,0.09)", border:"1px solid rgba(197,48,48,0.22)", borderRadius:4, padding:"2px 8px" }}>נדרש קובץ</span>
+                        ) : (
+                          <>
+                            <div style={{ marginBottom: 8 }}>
+                              <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 3 }}>
+                                יתרה לתשלום (₪) <span style={{ color: "#E53E3E" }}>*</span>
+                              </div>
+                              <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                                <input
+                                  type="text"
+                                  dir="ltr"
+                                  value={loanFileExtra[cat]?.balance ? Number(loanFileExtra[cat].balance).toLocaleString() : ""}
+                                  placeholder="0"
+                                  disabled={loansDone}
+                                  style={{ flex:1, padding:"5px 8px", fontSize:12, borderRadius:6,
+                                    border: `1px solid ${(!loanFileExtra[cat]?.balance && !loansDone) ? "#E53E3E" : "var(--border)"}`,
+                                    background: loansDone ? "var(--surface2)" : "var(--surface)",
+                                    color: loansDone ? "var(--text-dim)" : "var(--text)", fontFamily:"inherit",
+                                    boxSizing:"border-box" as const, outline:"none" }}
+                                  onChange={e => {
+                                    const raw = e.target.value.replace(/\D/g, "");
+                                    setLoanFileExtra(p => ({ ...p, [cat]: { ...p[cat], balance: raw } }));
+                                  }}
+                                />
+                                <span style={{ fontSize:12, color:"var(--text-dim)", flexShrink:0 }}>₪</span>
+                              </div>
                             </div>
-                          )}
+                            <div style={{ marginBottom: 8 }}>
+                              <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 3 }}>
+                                תיאור <span style={{ color: "#E53E3E" }}>*</span>
+                              </div>
+                              <input
+                                type="text"
+                                dir="rtl"
+                                value={loanFileExtra[cat]?.description || ""}
+                                placeholder="תיאור קצר של ההלוואה"
+                                disabled={loansDone}
+                                style={{ width:"100%", padding:"5px 8px", fontSize:12, borderRadius:6,
+                                  border: `1px solid ${(!loanFileExtra[cat]?.description && !loansDone) ? "#E53E3E" : "var(--border)"}`,
+                                  background: loansDone ? "var(--surface2)" : "var(--surface)",
+                                  color: loansDone ? "var(--text-dim)" : "var(--text)", fontFamily:"inherit",
+                                  boxSizing:"border-box" as const, outline:"none" }}
+                                onChange={e => {
+                                  setLoanFileExtra(p => ({ ...p, [cat]: { ...p[cat], description: e.target.value } }));
+                                }}
+                              />
+                            </div>
+                          </>
+                        )}
+                        {lt.fileLabel && saved.length === 0 && !isUploading && (
+                          <div style={{ display:"flex", justifyContent:"center", marginBottom:6 }}>
+                            <span style={{ fontSize:10, fontWeight:600, color:"#C53030", background:"rgba(197,48,48,0.09)", border:"1px solid rgba(197,48,48,0.22)", borderRadius:4, padding:"2px 8px" }}>נדרש קובץ</span>
+                          </div>
+                        )}
                         <input
                           ref={(el) => (fileRefs.current[cat] = el)}
                           type="file"
                           multiple
                           accept=".pdf,.jpg,.jpeg,.png"
                           style={{ display: "none" }}
-                          onChange={(e) => onFileChange(cat, e)}
+                          onChange={(e) => onLoanFileChange(cat, e)}
                         />
-                        {[
-                          ...saved
-                            .map((f, i) => ({ ...f, _i: i }))
-                            .filter((f) => f._i !== loanFileReplace[cat]),
-                          ...pend.map((f, pi) => ({
-                            filename: f.name,
-                            _pending: true,
-                            _pi: pi,
-                          })),
-                        ].map((f, i) => (
-                          <div
-                            key={i}
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 6,
-                              fontSize: 12,
-                              color: f._pending
-                                ? "var(--green-mid)"
-                                : "var(--text)",
-                              padding: "2px 0",
-                            }}
-                          >
-                            <span
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 3,
-                                flex: 1,
-                                minWidth: 0,
-                              }}
-                            >
-                              <DocIcon
-                                name="paperclip"
-                                color={
-                                  f._pending
-                                    ? "var(--green-mid)"
-                                    : f.path ? "var(--text-dim)" : "#D97706"
-                                }
-                                size={12}
-                              />
-                              <span
-                                style={{
-                                  overflow: "hidden",
-                                  textOverflow: "ellipsis",
-                                  whiteSpace: "nowrap",
-                                }}
-                              >
-                                {f.filename}
-                                {f._pending && " (ממתין)"}
-                                {!f._pending && !f.path && (
-                                  <span style={{ fontSize: 9, color: "#D97706", fontWeight: 600, background: "rgba(217,119,6,0.1)", borderRadius: 3, padding: "1px 4px", marginRight: 4 }}>יש להעלות מחדש</span>
-                                )}
-                              </span>
+                        {isUploading && (
+                          <div style={{ fontSize: 12, color: "var(--text-dim)", padding: "4px 0" }}>מעלה...</div>
+                        )}
+                        {saved.map((f, i) => (
+                          <div key={i} style={{ display:"flex", alignItems:"center", gap:6, fontSize:12, color:"var(--text)", padding:"2px 0" }}>
+                            <DocIcon name="paperclip" color={f.path ? "var(--text-dim)" : "#D97706"} size={12} />
+                            <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                              {f.filename}
+                              {!f.path && <span style={{ fontSize:9, color:"#D97706", fontWeight:600, background:"rgba(217,119,6,0.1)", borderRadius:3, padding:"1px 4px", marginRight:4 }}>יש להעלות מחדש</span>}
                             </span>
-                            {!f._pending && f.path && (
-                              <button
-                                onClick={() => openFile(f.path)}
-                                style={{
-                                  background: "none",
-                                  border: "none",
-                                  color: "var(--green-mid)",
-                                  cursor: "pointer",
-                                  fontSize: 12,
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  flexShrink: 0,
-                                }}
-                              >
-                                <DocIcon
-                                  name="eye"
-                                  color="var(--green-mid)"
-                                  size={12}
-                                />
+                            {f.path && (
+                              <button onClick={() => openFile(f.path)} style={{ background:"none", border:"none", color:"var(--green-mid)", cursor:"pointer", fontSize:12, display:"inline-flex", alignItems:"center", flexShrink:0 }}>
+                                <DocIcon name="eye" color="var(--green-mid)" size={12} />
                               </button>
                             )}
-                            {f._pending ? (
-                              <button
-                                onClick={() => removePendingFile(cat, f._pi)}
-                                title="הסר"
-                                style={{ background: "none", border: "none", color: "var(--red)", cursor: "pointer", fontSize: 13, flexShrink: 0 }}
-                              >×</button>
-                            ) : (
-                              <button
-                                onClick={() => handleLoanFileEdit(cat, f._i)}
-                                title="החלף קובץ"
-                                style={{
-                                  background: "none",
-                                  border: "none",
-                                  color: "var(--text-dim)",
-                                  cursor: "pointer",
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  flexShrink: 0,
-                                }}
-                              >
-                                <DocIcon
-                                  name="pencil"
-                                  color="var(--text-dim)"
-                                  size={11}
-                                />
+                            {!loansDone && (
+                              <button onClick={() => handleLoanFileEdit(cat, i)} title="החלף קובץ" style={{ background:"none", border:"none", color:"var(--text-dim)", cursor:"pointer", display:"inline-flex", alignItems:"center", flexShrink:0 }}>
+                                <DocIcon name="pencil" color="var(--text-dim)" size={11} />
                               </button>
                             )}
                           </div>
                         ))}
-                        <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                          <Btn
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => pickFile(cat)}
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: 4,
-                              fontSize: 12,
-                            }}
-                          >
-                            <DocIcon
-                              name="paperclip"
-                              color="var(--green-deep)"
-                              size={13}
-                            />
-                            הוסף קובץ
-                          </Btn>
-                          {pend.length > 0 && (
-                            <Btn
-                              size="sm"
-                              onClick={() => saveLoanFiles(cat, lt.label)}
-                              disabled={saving === cat || !loanFileExtra[cat]?.balance || !loanFileExtra[cat]?.description}
-                            >
-                              {saving === cat ? "שומר..." : "שמור"}
+                        {!loansDone && (
+                          <div style={{ marginTop: 8 }}>
+                            <Btn size="sm" variant="secondary" onClick={() => pickFile(cat)} style={{ display:"inline-flex", alignItems:"center", gap:4, fontSize:12 }} disabled={isUploading}>
+                              <DocIcon name="paperclip" color="var(--green-deep)" size={13} />
+                              {saved.length > 0 ? "הוסף קובץ נוסף" : "העלה קובץ"}
                             </Btn>
-                          )}
-                        </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -8442,7 +8574,7 @@ function OnboardingChecklist({
                     const isFields = lt.type === "fields";
                     const isBoth = lt.type === "both";
                     const saved = getDoc(cat)?.files || [];
-                    const pend = pendingFiles[cat] || [];
+                    const isBothUploading = loanUploading.has(cat);
                     return (
                       <div
                         key={cat}
@@ -8502,16 +8634,12 @@ function OnboardingChecklist({
                               multiple
                               accept=".pdf,.jpg,.jpeg,.png"
                               style={{ display: "none" }}
-                              onChange={(e) => onFileChange(cat, e)}
+                              onChange={(e) => onLoanFileChange(cat, e)}
                             />
-                            {[
-                              ...saved.map((f, i) => ({ ...f, _i: i })),
-                              ...pend.map((f, pi) => ({
-                                filename: f.name,
-                                _pending: true,
-                                _pi: pi,
-                              })),
-                            ].map((f, i) => (
+                            {isBothUploading && (
+                              <div style={{ fontSize: 12, color: "var(--text-dim)", padding: "4px 0" }}>מעלה...</div>
+                            )}
+                            {saved.map((f, i) => (
                               <div
                                 key={i}
                                 style={{
@@ -8519,148 +8647,43 @@ function OnboardingChecklist({
                                   alignItems: "center",
                                   gap: 6,
                                   fontSize: 12,
-                                  color: f._pending
-                                    ? "var(--green-mid)"
-                                    : "var(--text)",
+                                  color: "var(--text)",
                                   padding: "2px 0",
                                 }}
                               >
-                                <span
-                                  style={{
-                                    display: "flex",
-                                    alignItems: "center",
-                                    gap: 3,
-                                    flex: 1,
-                                    minWidth: 0,
-                                  }}
-                                >
-                                  <DocIcon
-                                    name="paperclip"
-                                    color={
-                                      f._pending
-                                        ? "var(--green-mid)"
-                                        : f.path ? "var(--text-dim)" : "#D97706"
-                                    }
-                                    size={12}
-                                  />
-                                  <span
-                                    style={{
-                                      overflow: "hidden",
-                                      textOverflow: "ellipsis",
-                                      whiteSpace: "nowrap",
-                                    }}
-                                  >
+                                <span style={{ display: "flex", alignItems: "center", gap: 3, flex: 1, minWidth: 0 }}>
+                                  <DocIcon name="paperclip" color={f.path ? "var(--text-dim)" : "#D97706"} size={12} />
+                                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                     {f.filename}
-                                    {f._pending && " (ממתין)"}
-                                    {!f._pending && !f.path && (
+                                    {!f.path && (
                                       <span style={{ fontSize: 9, color: "#D97706", fontWeight: 600, background: "rgba(217,119,6,0.1)", borderRadius: 3, padding: "1px 4px", marginRight: 4 }}>יש להעלות מחדש</span>
                                     )}
                                   </span>
                                 </span>
-                                {!f._pending && f.path && (
-                                  <button
-                                    onClick={() => openFile(f.path)}
-                                    style={{
-                                      background: "none",
-                                      border: "none",
-                                      color: "var(--green-mid)",
-                                      cursor: "pointer",
-                                      fontSize: 12,
-                                      display: "inline-flex",
-                                      alignItems: "center",
-                                      flexShrink: 0,
-                                    }}
-                                  >
-                                    <DocIcon
-                                      name="eye"
-                                      color="var(--green-mid)"
-                                      size={12}
-                                    />
+                                {f.path && (
+                                  <button onClick={() => openFile(f.path)} style={{ background: "none", border: "none", color: "var(--green-mid)", cursor: "pointer", fontSize: 12, display: "inline-flex", alignItems: "center", flexShrink: 0 }}>
+                                    <DocIcon name="eye" color="var(--green-mid)" size={12} />
                                   </button>
                                 )}
-                                {f._pending ? (
-                                  <button
-                                    onClick={() => removePendingFile(cat, f._pi)}
-                                    title="הסר"
-                                    style={{ background: "none", border: "none", color: "var(--red)", cursor: "pointer", fontSize: 13, flexShrink: 0 }}
-                                  >×</button>
-                                ) : (
-                                  <button
-                                    onClick={() =>
-                                      handleLoanFileEdit(cat, f._i)
-                                    }
-                                    title="החלף קובץ"
-                                    style={{
-                                      background: "none",
-                                      border: "none",
-                                      color: "var(--text-dim)",
-                                      cursor: "pointer",
-                                      display: "inline-flex",
-                                      alignItems: "center",
-                                      flexShrink: 0,
-                                    }}
-                                  >
-                                    <DocIcon
-                                      name="pencil"
-                                      color="var(--text-dim)"
-                                      size={11}
-                                    />
-                                  </button>
-                                )}
+                                <button onClick={() => handleLoanFileEdit(cat, i)} title="החלף קובץ" style={{ background: "none", border: "none", color: "var(--text-dim)", cursor: "pointer", display: "inline-flex", alignItems: "center", flexShrink: 0 }}>
+                                  <DocIcon name="pencil" color="var(--text-dim)" size={11} />
+                                </button>
                               </div>
                             ))}
-                            <div
-                              style={{
-                                display: "flex",
-                                gap: 6,
-                                marginTop: 4,
-                                marginBottom: 8,
-                              }}
-                            >
+                            <div style={{ marginTop: 4, marginBottom: 8 }}>
                               <Btn
                                 size="sm"
                                 variant="secondary"
                                 onClick={() => pickFile(cat)}
-                                style={{
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  gap: 4,
-                                  fontSize: 12,
-                                }}
+                                disabled={isBothUploading}
+                                style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12 }}
                               >
-                                <DocIcon
-                                  name="paperclip"
-                                  color="var(--green-deep)"
-                                  size={13}
-                                />
+                                <DocIcon name="paperclip" color="var(--green-deep)" size={13} />
                                 קובץ (לא חובה)
                               </Btn>
-                              {pend.length > 0 && (
-                                <Btn
-                                  size="sm"
-                                  onClick={() => saveLoanFiles(cat, lt.label)}
-                                  disabled={saving === cat}
-                                >
-                                  {saving === cat ? "שומר..." : "שמור"}
-                                </Btn>
-                              )}
                             </div>
                           </>
                         )}
-                        <Btn
-                          size="sm"
-                          onClick={() => saveLoanFields(cat, lt.label)}
-                          disabled={
-                            saving === cat + "_f" ||
-                            [...REQUIRED_LOAN_FIELDS].some(
-                              (k) =>
-                                !(loanFields[cat]?.[k] || "").toString().trim(),
-                            )
-                          }
-                          style={{ marginTop: 4, fontSize: 12, width: "100%" }}
-                        >
-                          {saving === cat + "_f" ? "שומר..." : "שמור"}
-                        </Btn>
                       </div>
                     );
                   })}
@@ -8864,8 +8887,8 @@ function OnboardingChecklist({
                                     if (file) setMortgageProps(prev => prev.map((p,pi2) => pi2!==pi ? p : { ...p, banks: p.banks.map((b,bi2) => bi2!==bi ? b : {...b, pendingFile: file}) }));
                                   }} />
                                 <button onClick={() => mortFileRefs.current[refKey]?.click()}
-                                  style={{ background:"none", border:"1px solid var(--border)", borderRadius:6, padding:"3px 10px", fontSize:11, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit" }}>
-                                  📎 צרף קובץ
+                                  style={{ background:"none", border:"1px solid var(--border)", borderRadius:6, padding:"3px 10px", fontSize:11, color:"var(--text-dim)", cursor:"pointer", fontFamily:"inherit", display:"inline-flex", alignItems:"center", gap:4 }}>
+                                  <DocIcon name="paperclip" color="var(--text-dim)" size={11} /> צרף קובץ
                                 </button>
                                 <span style={{ fontSize:11, color:"#E53E3E" }}>נדרש קובץ</span>
                               </>
@@ -10935,6 +10958,7 @@ function MonthDetailScreen({
   const [pendingRemember, setPendingRemember] = useState<{
     name: string;
     cat: string;
+    budgetType?: string;
   } | null>(null);
   const [expandedCat, setExpandedCat] = useState<string | null>(null);
 
@@ -10956,11 +10980,11 @@ function MonthDetailScreen({
       <RememberModal
         pendingRemember={pendingRemember}
         onAlways={async () => {
-          const { name, cat } = pendingRemember!;
+          const { name, cat, budgetType } = pendingRemember!;
           await supabase
             .from("remembered_mappings")
             .upsert(
-              [{ client_id: clientId, business_name: name, category: cat }],
+              [{ client_id: clientId, business_name: name, category: cat, budget_type: budgetType }],
               { onConflict: "client_id,business_name" },
             );
           await supabase.from("client_change_log").insert([
@@ -10971,7 +10995,11 @@ function MonthDetailScreen({
             },
           ]);
           setEditTx((p) =>
-            p.map((t) => (t.name === name ? { ...t, cat, edited: true } : t)),
+            p.map((t) =>
+              t.name === name
+                ? { ...t, cat, budget_type: budgetType, edited: true }
+                : t,
+            ),
           );
           setPendingRemember(null);
         }}
@@ -11416,15 +11444,17 @@ function MonthDetailScreen({
                                 hiddenCats={hiddenCats}
                                 onHiddenCatsChange={onHiddenCatsChange}
                                 scenarioCats={scenarioCats}
-                                onSelect={(cat) => {
+                                onSelect={(cat, budgetType) => {
                                   setEditTx((p) =>
                                     p.map((t, j) =>
-                                      j === i ? { ...t, cat, edited: true } : t,
+                                      j === i
+                                        ? { ...t, cat, budget_type: budgetType, edited: true }
+                                        : t,
                                     ),
                                   );
                                   setEditCatOpen(null);
                                   setCatSearch("");
-                                  setPendingRemember({ name: tx.name, cat });
+                                  setPendingRemember({ name: tx.name, cat, budgetType });
                                 }}
                               />
                             </div>
@@ -11867,6 +11897,7 @@ function PortfolioTab({
   cycleStartDay,
   importedTxs,
   manualTxs,
+  bankTxs = [] as any[],
   onManualTxAdded,
   onManualTxDeleted,
   onUpdatePortfolioTxCat,
@@ -11902,6 +11933,7 @@ function PortfolioTab({
             importedTxs={importedTxs || []}
             portfolioSubs={portfolioSubs}
             manualTxs={manualTxs || []}
+            bankTxs={bankTxs || []}
             cycleStartDay={cycleStartDay}
             onCycleStartDayChange={onCycleStartDayChange}
             rememberedMappings={rememberedMappings}
@@ -11971,6 +12003,7 @@ function PortfolioTab({
             cycleStartDay={cycleStartDay || 1}
             importedTxs={importedTxs || []}
             manualTxs={manualTxs || []}
+            bankTxs={bankTxs || []}
             rememberedMappings={rememberedMappings || {}}
             onCycleStartDayChange={onCycleStartDayChange}
             ignoredCats={ignoredCats}
@@ -13325,12 +13358,12 @@ function PortfolioUploadTab({
         <RememberModal
           pendingRemember={pendingRemember}
           onAlways={async () => {
-            const { name, cat } = pendingRemember;
+            const { name, cat, budgetType } = pendingRemember;
             const oldCat = rememberedMappings[name] || null;
             await supabase
               .from("remembered_mappings")
               .upsert(
-                [{ client_id: clientId, business_name: name, category: cat }],
+                [{ client_id: clientId, business_name: name, category: cat, budget_type: budgetType }],
                 { onConflict: "client_id,business_name" },
               );
             await supabase
@@ -13348,7 +13381,11 @@ function PortfolioUploadTab({
               ]);
             onRememberingAdded?.(name, cat);
             setTransactions((p) =>
-              p.map((t) => (t.name === name ? { ...t, cat, edited: true } : t)),
+              p.map((t) =>
+                t.name === name
+                  ? { ...t, cat, budget_type: budgetType, edited: true }
+                  : t,
+              ),
             );
             setPendingRemember(null);
           }}
@@ -13671,17 +13708,17 @@ function PortfolioUploadTab({
                       onCategoryAdded={onCategoryAdded}
                       hiddenCats={hiddenCats}
                       onHiddenCatsChange={onHiddenCatsChange}
-                      onSelect={(cat) => {
+                      onSelect={(cat, budgetType) => {
                         setTransactions((p) =>
                           p.map((t) =>
                             t.id === tx.id
-                              ? { ...t, cat, edited: true, conf: "high" }
+                              ? { ...t, cat, budget_type: budgetType, edited: true, conf: "high" }
                               : t,
                           ),
                         );
                         setActiveTxId(null);
                         setCatSearch("");
-                        setPendingRemember({ name: tx.name, cat });
+                        setPendingRemember({ name: tx.name, cat, budgetType });
                       }}
                     />
                   )}
@@ -13860,9 +13897,9 @@ function PortfolioUploadTab({
                       marginBottom: 10,
                     }}
                   >
-                    ℹ️ תנועות אלו הן תשלומי כרטיס אשראי —{" "}
+                    תנועות אלו הן תשלומי כרטיס אשראי —{" "}
                     <strong>לא נספרות כהוצאה</strong> כדי למנוע כפילות עם נתוני
-                    מקס/ישראכרט. לחץ על ↩️ כדי להעביר להוצאות.
+                    מקס/ישראכרט. לחץ על "הוצאה" כדי להעביר להוצאות.
                   </div>
                   {creditTransferTxs.map((tx) => renderCard(tx, true))}
                 </>
@@ -13904,6 +13941,48 @@ function PortfolioUploadTab({
 // ── assignBillingMonth ────────────────────────────────────────────────────────
 // date: "DD/MM/YYYY" or "YYYY-MM-DD" → "YYYY-MM" based on cycleStartDay
 
+// מחזיר את התסריט שחל על חודש נתון (year, month 1-12).
+// "year" → ינואר של אותה שנה. "month_year" → החודש הספציפי. "free" → מדולג.
+// אם אין תסריט מתאים — מחזיר is_base. אם אין בכלל — null.
+function scenarioCmp(s: any): number | null {
+  if (s.date_type === "month_year") {
+    const val = s.date_value || "";
+    let m: number, y: number;
+    if (val.includes("/")) {
+      const p = val.split("/").map(Number);
+      [m, y] = [p[0], p[1]];
+    } else {
+      const p = val.split("-").map(Number);
+      [y, m] = [p[0], p[1]];
+    }
+    if (!m || !y || isNaN(m) || isNaN(y)) return null;
+    return y * 12 + m;
+  }
+  if (s.date_type === "year") {
+    const y = parseInt(s.date_value);
+    return isNaN(y) ? null : y * 12 + 1;
+  }
+  return null;
+}
+
+function scenarioForMonth(scenarios: any[], year: number, month: number): any | null {
+  if (!scenarios || scenarios.length === 0) return null;
+  const target = year * 12 + month;
+  let best: any = null;
+  let bestCmp = -Infinity;
+  for (const s of scenarios) {
+    const cmp = scenarioCmp(s);
+    if (cmp !== null && cmp <= target && cmp > bestCmp) { best = s; bestCmp = cmp; }
+  }
+  return best ?? scenarios.find((s) => s.is_base) ?? null;
+}
+
+const BT_TO_ITYPE: Record<string, string> = {
+  "הכנסה": "income",
+  "קבוע": "expense_fixed",
+  "משתנה": "expense_variable",
+};
+
 function PortfolioControlTab({
   clientId,
   portfolioMonths,
@@ -13911,6 +13990,7 @@ function PortfolioControlTab({
   cycleStartDay,
   importedTxs,
   manualTxs,
+  bankTxs = [] as any[],
   rememberedMappings,
   onCycleStartDayChange,
   ignoredCats = IGNORED_CATEGORIES,
@@ -13939,10 +14019,9 @@ function PortfolioControlTab({
   };
 
   const [selectedYear, setSelectedYear] = useState(NOW_YEAR);
-  const [allPeriods, setAllPeriods] = useState(null); // null = loading
-  const [scenarioItems, setScenarioItems] = useState(null);
-  const [scenarioName, setScenarioName] = useState("");
-  const [itemsCache, setItemsCache] = useState({}); // { scenarioId: items[] }
+  const [publishedRows, setPublishedRows] = useState<any[] | null>(null);
+  const [publishedScenarios, setPublishedScenarios] = useState<any[] | null>(null);
+  const [publishedEntries, setPublishedEntries] = useState<any[] | null>(null);
   const [sortCol, setSortCol] = useState(null); // null|"name"|"budget"|"avg"|"rem"|mk
   const [sortDir, setSortDir] = useState("desc");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({}); // { income|fixed|variable: bool }
@@ -14015,6 +14094,56 @@ function PortfolioControlTab({
 
   const currentYear = selectedYear;
 
+  // ── Published scenario helpers ────────────────────────────────────────────
+  const entriesLookup = useMemo(() => {
+    const lk: Record<string, Record<string, Record<string, number>>> = {};
+    (publishedEntries || []).forEach((e: any) => {
+      if (!lk[e.scenario_id]) lk[e.scenario_id] = {};
+      if (!lk[e.scenario_id][e.category]) lk[e.scenario_id][e.category] = {};
+      lk[e.scenario_id][e.category][e.budget_type] = Number(e.amount || 0);
+    });
+    return lk;
+  }, [publishedEntries]);
+
+  const getBudgetForMonth = (cat: string, budgetType: string, m: number): number => {
+    if (!publishedScenarios || publishedScenarios.length === 0) return 0;
+    const sc = scenarioForMonth(publishedScenarios, currentYear, m);
+    if (!sc) return 0;
+    return entriesLookup[sc.id]?.[cat]?.[budgetType] ?? 0;
+  };
+
+  const getWeightedBudget = (cat: string, budgetType: string): number => {
+    if (!publishedScenarios || publishedScenarios.length === 0) return 0;
+    return Array.from({ length: 12 }, (_, i) => i + 1)
+      .reduce((s, m) => s + getBudgetForMonth(cat, budgetType, m), 0) / 12;
+  };
+
+  const getCumBudget = (cat: string, budgetType: string): number =>
+    Array.from({ length: Math.max(0, currentMonth - firstScenarioMonth + 1) }, (_, i) => i + firstScenarioMonth)
+      .reduce((s, m) => s + getBudgetForMonth(cat, budgetType, m), 0);
+
+  const { applyOrder } = useCategoryOrder(Number(clientId));
+
+  const scenarioItems = useMemo(() => {
+    if (publishedRows === null) return null;
+    const raw = publishedRows.map((r: any) => ({
+      id: `${r.category}__${r.budget_type}`,
+      category_name: r.category,
+      budget_type: r.budget_type,
+      item_type: BT_TO_ITYPE[r.budget_type] || "expense_variable",
+      amount: 0,
+    }));
+    // החל סדר שמור — אותו סדר כמו בלשונית מאזן מבוסס תסריטים
+    const order = (bt: string) =>
+      applyOrder(
+        raw.filter(r => r.budget_type === bt).map(r => ({ category: r.category_name })),
+        bt as any,
+      ).map(o => o.category);
+    return ["הכנסה", "קבוע", "משתנה"].flatMap(bt =>
+      order(bt).map(cat => raw.find(r => r.category_name === cat && r.budget_type === bt)!)
+    ).filter(Boolean);
+  }, [publishedRows, applyOrder]);
+
   // currentMonth = billing month elapsed (accounts for cycleStartDay)
   // e.g. March 24 + cycleStartDay=15 → billing month = April = 4
   const currentMonth = (() => {
@@ -14039,85 +14168,62 @@ function PortfolioControlTab({
     "דצ׳",
   ];
 
-  // ── Load all periods ─────────────────────────────────────────────────────
-  const loadPeriods = async () => {
-    const { data: per } = await supabase
-      .from("active_scenario")
-      .select("id, scenario_id, active_from, active_until, scenarios(name)")
-      .eq("client_id", clientId)
-      .order("active_from", { ascending: false });
-    // סנן רשומות שהתסריט שלהן נמחק (join החזיר null)
-    setAllPeriods((per || []).filter((p) => p.scenario_id && p.scenarios));
-  };
-
+  // ── Load published scenario data (+ Realtime sync) ───────────────────────
   useEffect(() => {
-    loadPeriods();
-  }, [clientId]); // eslint-disable-line
-
-  // ── Real-time: כשתסריט פעיל משתנה — רענן מיידית ──────────────────────────
-  useEffect(() => {
-    const channel = supabase
-      .channel(`portfolio_control_scenario_${clientId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "active_scenario",
-          filter: `client_id=eq.${clientId}`,
-        },
-        () => {
-          loadPeriods();
-          setItemsCache({});
-        },
-      )
-      .subscribe();
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [clientId]); // eslint-disable-line
-
-  // ── When year changes or periods load → find & load scenario items ────────
-  useEffect(() => {
-    if (allPeriods === null) return;
-    const period = periodForYear(allPeriods, selectedYear);
-    if (!period) {
-      setScenarioItems([]);
-      setScenarioName("");
-      return;
-    }
-    setScenarioName(period.scenarios?.name || "");
-    const cached = itemsCache[period.scenario_id];
-    if (cached) {
-      setScenarioItems(cached);
-      return;
-    }
-    supabase
-      .from("scenario_items")
-      .select("*")
-      .eq("scenario_id", period.scenario_id)
-      .order("sort_order")
-      .then(({ data, error }) => {
-        if (error) {
-          console.error("scenario_items load error:", error);
-          return;
-        }
-        const items = data || [];
-        setScenarioItems(items);
-        setItemsCache((prev) => ({ ...prev, [period.scenario_id]: items }));
+    const fetchPublished = () =>
+      Promise.all([
+        supabase.from("portfolio_scenario_published_rows")
+          .select("category, budget_type")
+          .eq("client_id", clientId),
+        supabase.from("portfolio_scenario_published_scenarios")
+          .select("id, date_type, date_value, is_base, sort_order, title")
+          .eq("client_id", clientId)
+          .order("sort_order"),
+        supabase.from("portfolio_scenario_published_entries")
+          .select("scenario_id, category, budget_type, amount")
+          .eq("client_id", clientId),
+      ]).then(([{ data: rows }, { data: sc }, { data: en }]) => {
+        setPublishedRows(rows || []);
+        setPublishedScenarios(sc || []);
+        setPublishedEntries(en || []);
       });
-  }, [allPeriods, selectedYear]); // eslint-disable-line
+
+    setPublishedRows(null);
+    setPublishedScenarios(null);
+    setPublishedEntries(null);
+    fetchPublished();
+
+    const channel = supabase
+      .channel(`portfolio-published-${clientId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "portfolio_scenario_published_scenarios", filter: `client_id=eq.${clientId}` }, fetchPublished)
+      .on("postgres_changes", { event: "*", schema: "public", table: "portfolio_scenario_published_entries", filter: `client_id=eq.${clientId}` }, fetchPublished)
+      .on("postgres_changes", { event: "*", schema: "public", table: "portfolio_scenario_published_rows", filter: `client_id=eq.${clientId}` }, fetchPublished)
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [clientId]); // eslint-disable-line
 
   // ── Build txMap: שני מפות נפרדות — הכנסות והוצאות ────────────────────────
-  const { incomeMap, expenseMap } = useMemo(() => {
+  const { incomeMap, expenseMap, expenseMapTyped } = useMemo(() => {
     const inc = {};
     const exp = {};
+    const expTyped = {};
     const add = (map, mk, cat, amt) => {
       if (!mk || !cat || !amt) return;
       if (!map[mk]) map[mk] = {};
       map[mk][cat] = (map[mk][cat] || 0) + amt;
     };
-    // From portfolio submissions
+    // הוצאות ידניות עם budget_type ידוע (קבוע/משתנה) — נצברות בנפרד לפי
+    // `${cat}::${budget_type}` כדי שקטגוריה שקיימת גם כקבוע וגם כמשתנה
+    // (אותו שם, שני budget_type) לא "תדלוף" לשתי השורות. ר' v44_manual_tx_budget_type.
+    const addTyped = (mk, cat, bt, amt) => {
+      if (!mk || !cat || !bt || !amt) return;
+      if (!expTyped[mk]) expTyped[mk] = {};
+      const key = `${cat}::${bt}`;
+      expTyped[mk][key] = (expTyped[mk][key] || 0) + amt;
+    };
+    // From portfolio submissions — budget_type ידוע (קבוע/משתנה) הולך ל-bucket
+    // המסווג בלבד, כמו manual, כדי שלא "יידלוף" לשתי השורות (ר' v45).
     portfolioSubs.forEach((sub) => {
       const mk = sub.month_key;
       if (!mk || +mk.split("-")[0] !== currentYear) return;
@@ -14125,11 +14231,16 @@ function PortfolioControlTab({
         if (ignoredCats.has(tx.cat)) return;
         if (tx.flow_type === "credit_transfer") return;
         const cat = tx.cat || "דרוש סיווג";
-        if (incomeCats.has(cat)) add(inc, mk, cat, tx.amount || 0);
-        else add(exp, mk, cat, tx.amount || 0);
+        if (incomeCats.has(cat)) {
+          add(inc, mk, cat, tx.amount || 0);
+        } else if (tx.budget_type === "קבוע" || tx.budget_type === "משתנה") {
+          addTyped(mk, cat, tx.budget_type, tx.amount || 0);
+        } else {
+          add(exp, mk, cat, tx.amount || 0);
+        }
       });
     });
-    // From imported transactions
+    // From imported transactions — אותו עיקרון
     (importedTxs || []).forEach((tx) => {
       if ((tx.amount || 0) <= 0) return;
       const mk =
@@ -14144,23 +14255,61 @@ function PortfolioControlTab({
           categoryRules,
         ).cat;
       if (ignoredCats.has(cat)) return;
-      if (incomeCats.has(cat)) add(inc, mk, cat, tx.amount);
-      else add(exp, mk, cat, tx.amount);
+      if (incomeCats.has(cat)) {
+        add(inc, mk, cat, tx.amount);
+      } else if (tx.budget_type === "קבוע" || tx.budget_type === "משתנה") {
+        addTyped(mk, cat, tx.budget_type, tx.amount);
+      } else {
+        add(exp, mk, cat, tx.amount);
+      }
     });
-    // From manual transactions — type קובע להכנסה או הוצאה
+    // From bank_transactions (סנכרון MAX חי) — אותו עיקרון כמו imported. תנועות
+    // pending (טרם נקלטו סופית) לא נכללות בכלל, כמו ב-AllTransactionsTab — לא
+    // רוצים להציג למשתמש הוצאה שעוד עשויה להתבטל/להשתנות.
+    (bankTxs || []).forEach((tx) => {
+      if (tx.status === "pending") return;
+      if ((tx.amount || 0) <= 0) return;
+      const mk = tx.billing_month;
+      if (!mk || +mk.split("-")[0] !== currentYear) return;
+      const cat =
+        tx.cat ||
+        classifyTx(
+          tx.merchant_name,
+          tx.category_raw,
+          rememberedMappings || {},
+          categoryRules,
+        ).cat;
+      if (ignoredCats.has(cat)) return;
+      if (incomeCats.has(cat)) {
+        add(inc, mk, cat, tx.amount);
+      } else if (tx.budget_type === "קבוע" || tx.budget_type === "משתנה") {
+        addTyped(mk, cat, tx.budget_type, tx.amount);
+      } else {
+        add(exp, mk, cat, tx.amount);
+      }
+    });
+    // From manual transactions — type קובע להכנסה או הוצאה.
+    // הוצאה עם budget_type ידוע (קבוע/משתנה) הולכת ל-bucket המסווג בלבד —
+    // לא גם ל-exp הכללי — כדי שלא תיספר פעמיים כשמצרפים ב-getAct.
     (manualTxs || []).forEach((tx) => {
       if ((tx.amount || 0) <= 0) return;
       const mk = tx.billing_month;
       if (!mk || +mk.split("-")[0] !== currentYear) return;
       if (ignoredCats.has(tx.cat)) return;
-      if (tx.type === "income") add(inc, mk, tx.cat, tx.amount);
-      else add(exp, mk, tx.cat, tx.amount);
+      if (tx.type === "income") {
+        add(inc, mk, tx.cat, tx.amount);
+      } else if (tx.budget_type === "קבוע" || tx.budget_type === "משתנה") {
+        addTyped(mk, tx.cat, tx.budget_type, tx.amount);
+      } else {
+        add(exp, mk, tx.cat, tx.amount);
+      }
     });
-    return { incomeMap: inc, expenseMap: exp };
+    return { incomeMap: inc, expenseMap: exp, expenseMapTyped: expTyped };
   }, [
     portfolioSubs,
     importedTxs,
     manualTxs,
+    bankTxs,
     rememberedMappings,
     cycleStartDay,
     currentYear,
@@ -14179,8 +14328,17 @@ function PortfolioControlTab({
         });
       });
     });
+    // expenseMapTyped מפתח לפי `${cat}::${budget_type}` — כאן מצרפים לפי שם
+    // הקטגוריה בלבד, לתצוגה כללית שלא מבחינה בין קבוע/משתנה (כמו קודם).
+    Object.entries(expenseMapTyped).forEach(([mk, cats]: [string, any]) => {
+      if (!map[mk]) map[mk] = {};
+      Object.entries(cats).forEach(([key, amt]: [string, any]) => {
+        const cat = key.split("::")[0];
+        map[mk][cat] = (map[mk][cat] || 0) + amt;
+      });
+    });
     return map;
-  }, [incomeMap, expenseMap]);
+  }, [incomeMap, expenseMap, expenseMapTyped]);
 
   // Months this year that have any data, up to current month
   const activeMks = useMemo(
@@ -14195,22 +14353,43 @@ function PortfolioControlTab({
   );
 
   const numActive = activeMks.length;
+  // החודש הראשון בשנה הנוכחית שמכוסה על-ידי תסריט עם תאריך מפורש.
+  // תסריטי בסיס ללא תאריך (date_value ריק) לא קובעים את נקודת ההתחלה —
+  // אחרת fallback על הבסיס מצטבר תקציב מינואר גם כשהתסריט מתחיל מאוחר יותר.
+  const firstScenarioMonth = useMemo(() => {
+    if (!publishedScenarios || publishedScenarios.length === 0) return currentMonth + 1;
+    let earliest = Infinity;
+    for (const sc of publishedScenarios) {
+      const cmp = scenarioCmp(sc);
+      if (cmp === null) continue; // תסריט ללא תאריך — לא משפיע על נקודת ההתחלה
+      // חילוץ שנה/חודש מ-cmp = year*12+month (month ∈ 1–12)
+      const scYear = Math.floor((cmp - 1) / 12);
+      const scMonth = cmp - scYear * 12;
+      if (scYear < currentYear) earliest = Math.min(earliest, 1);
+      else if (scYear === currentYear) earliest = Math.min(earliest, scMonth);
+    }
+    return isFinite(earliest) ? earliest : currentMonth + 1;
+  }, [publishedScenarios, currentYear, currentMonth]);
 
   // ── Helpers ──────────────────────────────────────────────────────────────
   // getAct — item_type קובע מאיזו מפה לשלוף
   const getAct = (cat, mk, itemType?: string) => {
     if (itemType === "income") return incomeMap[mk]?.[cat] || 0;
-    if (itemType === "expense_fixed" || itemType === "expense_variable")
-      return expenseMap[mk]?.[cat] || 0;
+    if (itemType === "expense_fixed" || itemType === "expense_variable") {
+      const bt = itemType === "expense_fixed" ? "קבוע" : "משתנה";
+      const untyped = expenseMap[mk]?.[cat] || 0;
+      const typed = expenseMapTyped[mk]?.[`${cat}::${bt}`] || 0;
+      return untyped + typed;
+    }
     return txMap[mk]?.[cat] || 0;
   };
   const getSum = (cat, itemType?: string) =>
     activeMks.reduce((s, mk) => s + getAct(cat, mk, itemType), 0);
   const getAvg = (cat, itemType?: string) =>
     numActive > 0 ? getSum(cat, itemType) / numActive : 0;
-  // remaining = cumulative budget up to current month − total spent
-  const getRem = (cat, bud, itemType?: string) =>
-    currentMonth * (bud || 0) - getSum(cat, itemType);
+  // remaining = cumulative scenario budget up to current month − total spent
+  const getRem = (cat: string, budgetType: string, itemType?: string) =>
+    getCumBudget(cat, budgetType) - getSum(cat, itemType);
 
   const fmtAmt = (n) => (n ? `₪${Math.round(n).toLocaleString()}` : "");
   const fmtZ = (n) => `₪${Math.round(n).toLocaleString()}`;
@@ -14219,12 +14398,12 @@ function PortfolioControlTab({
     grp.reduce((s, x) => s + getAct(x.category_name, mk, x.item_type), 0);
   const groupTotal = (grp) =>
     grp.reduce((s, x) => s + getSum(x.category_name, x.item_type), 0);
-  const groupBud = (grp) => grp.reduce((s, x) => s + (x.amount || 0), 0);
+  const groupBud = (grp) => grp.reduce((s, x) => s + getWeightedBudget(x.category_name, x.budget_type || ""), 0);
   const groupAvg = (grp) =>
     grp.reduce((s, x) => s + getAvg(x.category_name, x.item_type), 0);
   const groupRem = (grp) =>
     grp.reduce(
-      (s, x) => s + getRem(x.category_name, x.amount || 0, x.item_type),
+      (s, x) => s + getRem(x.category_name, x.budget_type || "", x.item_type),
       0,
     );
 
@@ -14240,14 +14419,14 @@ function PortfolioControlTab({
           : b.category_name.localeCompare(a.category_name, "he");
       let va, vb;
       if (sortCol === "budget") {
-        va = a.amount || 0;
-        vb = b.amount || 0;
+        va = getWeightedBudget(a.category_name, a.budget_type || "");
+        vb = getWeightedBudget(b.category_name, b.budget_type || "");
       } else if (sortCol === "avg") {
         va = getAvg(a.category_name, a.item_type);
         vb = getAvg(b.category_name, b.item_type);
       } else if (sortCol === "rem") {
-        va = getRem(a.category_name, a.amount || 0, a.item_type);
-        vb = getRem(b.category_name, b.amount || 0, b.item_type);
+        va = getRem(a.category_name, a.budget_type || "", a.item_type);
+        vb = getRem(b.category_name, b.budget_type || "", b.item_type);
       } else {
         va = getAct(a.category_name, sortCol, a.item_type);
         vb = getAct(b.category_name, sortCol, b.item_type);
@@ -14267,7 +14446,7 @@ function PortfolioControlTab({
     sortCol === col ? (sortDir === "asc" ? " ▲" : " ▼") : "";
 
   // ── Loading / empty states ────────────────────────────────────────────────
-  if (allPeriods === null || scenarioItems === null)
+  if (publishedRows === null || publishedScenarios === null || publishedEntries === null)
     return (
       <div
         style={{ textAlign: "center", padding: 40, color: "var(--text-dim)" }}
@@ -14276,10 +14455,10 @@ function PortfolioControlTab({
       </div>
     );
 
-  const noScenarioForYear = scenarioItems.length === 0;
+  const noScenarioForYear = (scenarioItems || []).length === 0;
 
   // ── קטגוריות עם הוצאות שאינן בתסריט ────────────────────────────────────
-  const scenarioCatSet = new Set(scenarioItems.map((x) => x.category_name));
+  const scenarioCatSet = new Set((scenarioItems || []).map((x) => x.category_name));
   const missingCats: { cat: string; total: number }[] = (() => {
     const allCatsInTxs = new Set<string>();
     Object.values(txMap).forEach((monthData) => {
@@ -14297,9 +14476,9 @@ function PortfolioControlTab({
     return result.sort((a, b) => b.total - a.total);
   })();
 
-  const income = scenarioItems.filter((x) => x.item_type === "income");
-  const fixed = scenarioItems.filter((x) => x.item_type === "expense_fixed");
-  const variable = scenarioItems.filter(
+  const income = (scenarioItems || []).filter((x) => x.item_type === "income");
+  const fixed = (scenarioItems || []).filter((x) => x.item_type === "expense_fixed");
+  const variable = (scenarioItems || []).filter(
     (x) => x.item_type === "expense_variable",
   );
   const allExp = [...fixed, ...variable];
@@ -14315,6 +14494,7 @@ function PortfolioControlTab({
             id: "__occasional__",
             category_name: "הכנסות מזדמנות",
             amount: 0,
+            budget_type: "הכנסה",
             item_type: "income",
           },
         ];
@@ -14399,11 +14579,11 @@ function PortfolioControlTab({
   );
 
   const renderItemRow = (item, isIncome = false, idx = 0) => {
-    const bud = item.amount || 0;
+    const bud = getWeightedBudget(item.category_name, item.budget_type || "");
     const itype = item.item_type;
     const avg = getAvg(item.category_name, itype);
     const sum = getSum(item.category_name, itype);
-    const rem = getRem(item.category_name, bud, itype);
+    const rem = getRem(item.category_name, item.budget_type || "", itype);
     const hasActivity = sum > 0 || bud > 0;
     const stripe = idx % 2 === 1 ? "rgba(0,0,0,0.018)" : undefined;
     const avgColor =
@@ -14435,7 +14615,8 @@ function PortfolioControlTab({
           const mk = `${currentYear}-${String(m).padStart(2, "0")}`;
           const val = getAct(item.category_name, mk, itype);
           const isCur = m === currentMonth;
-          const over = !isIncome && bud > 0 && val > bud * 1.15;
+          const mBud = getBudgetForMonth(item.category_name, item.budget_type || "", m);
+          const over = !isIncome && mBud > 0 && val > mBud * 1.15;
           const inActive = activeMkSet.has(mk);
           return (
             <td
@@ -14631,7 +14812,7 @@ function PortfolioControlTab({
                 ))}
               </div>
               <div style={{ fontSize: 13, color: "var(--text-dim)" }}>
-                עבור לטאב <strong>מאזן מתוכנן</strong> כדי להוסיף קטגוריות אלו
+                עבור לטאב <strong>מאזן מבוסס תסריטים</strong> כדי להוסיף קטגוריות אלו
                 לתסריט
               </div>
             </div>
@@ -14661,11 +14842,17 @@ function PortfolioControlTab({
             {editingCycleDay ? (
               <>
                 <input
+                  autoFocus
                   type="number"
                   min="1"
                   max="28"
                   value={tempDay}
+                  onFocus={(e) => e.target.select()}
                   onChange={(e) => setTempDay(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") saveCycleDay();
+                    if (e.key === "Escape") { setEditingCycleDay(false); setTempDay(String(cycleStartDay)); }
+                  }}
                   style={{
                     width: 60,
                     padding: "5px 10px",
@@ -14823,25 +15010,6 @@ function PortfolioControlTab({
               alignItems: "center",
             }}
           >
-            {scenarioName ? (
-              <div
-                style={{
-                  padding: "5px 12px",
-                  background: "var(--green-pale)",
-                  borderRadius: 8,
-                  border: "1px solid var(--green-mint)",
-                  fontSize: 14,
-                  color: "var(--green-deep)",
-                }}
-              >
-                תסריט: <strong>{scenarioName}</strong>
-                {numActive > 0 && (
-                  <span style={{ color: "var(--text-dim)", marginRight: 8 }}>
-                    · {numActive} חודשים עם נתונים
-                  </span>
-                )}
-              </div>
-            ) : null}
             {(cycleStartDay || 1) > 1 && (
               <div
                 style={{
@@ -14900,7 +15068,7 @@ function PortfolioControlTab({
               color: "var(--red)",
             }}
           >
-            לא הוגדר תסריט לשנת {selectedYear} — פנה ליועץ שלך להגדרת תסריט
+            לא פורסם תסריט עבור לקוח זה — פנה ליועץ שלך
           </div>
         )}
 
@@ -15425,6 +15593,7 @@ function normalizeAllTxs(
   cycleStartDay,
   manualTxs = [],
   categoryRules: any[] = [],
+  bankTxs: any[] = [],
 ) {
   const result = [];
   portfolioSubs.forEach((sub) => {
@@ -15497,6 +15666,32 @@ function normalizeAllTxs(
       _dbId: tx.id,
     });
   });
+  bankTxs.forEach((tx) => {
+    result.push({
+      _uid: `bank-${tx.id}`,
+      date: tx.date || "",
+      name: tx.merchant_name || "",
+      cat: classifyImported(
+        { cat: tx.cat, name: tx.merchant_name, max_category: tx.category_raw },
+        rememberedMappings,
+        categoryRules,
+      ),
+      amount: Number(tx.amount || 0),
+      billing_month: tx.billing_month,
+      source: "bank",
+      source_label: tx.provider === "max" ? "מקס" : tx.provider || "בנק",
+      conf: "high",
+      edited: false,
+      flow_type: null,
+      type: null,
+      // pending: תנועה שעדיין לא "נקלטה" סופית אצל הספק (יש uid, אין ARN עדיין) —
+      // מטופלת בנפרד ב-AllTransactionsTab: לא נכללת בסכומים, מוצגת ברובריקה נפרדת.
+      status: tx.status || "completed",
+      _submissionId: null,
+      _txIndex: null,
+      _dbId: tx.id,
+    });
+  });
   return result;
 }
 
@@ -15508,6 +15703,7 @@ function AllTransactionsTab({
   importedTxs,
   portfolioSubs,
   manualTxs,
+  bankTxs = [] as any[],
   rememberedMappings,
   onDataChange,
   onManualTxAdded,
@@ -15541,6 +15737,7 @@ function AllTransactionsTab({
       cycleStartDay,
       manualTxs,
       categoryRules,
+      bankTxs,
     );
     return fresh
       .filter((t) => !deletedUids.has(t._uid))
@@ -15553,11 +15750,24 @@ function AllTransactionsTab({
     portfolioSubs,
     importedTxs,
     manualTxs,
+    bankTxs,
     rememberedMappings,
     cycleStartDay,
     localEdits,
     deletedUids,
   ]);
+
+  // שם קטגוריה -> סוגי תקציב (קבוע/משתנה/הכנסה) שקיימים לו. כששם מוגדר גם
+  // כ"קבוע" וגם כ"משתנה", תנועות ידניות חייבות לבחור באיזה מהם מדובר —
+  // אחרת אין דרך להבחין ביניהם בסיכומים (ר' v44_manual_tx_budget_type).
+  const catBudgetTypes = useMemo(() => {
+    const m: Record<string, Set<string>> = {};
+    (categoryRows || []).forEach((r: any) => {
+      if (!m[r.name]) m[r.name] = new Set();
+      m[r.name].add(r.budget_type);
+    });
+    return m;
+  }, [categoryRows]);
 
   const [activeTxUid, setActiveTxUid] = useState(null);
   const [catSearch, setCatSearch] = useState("");
@@ -15579,6 +15789,9 @@ function AllTransactionsTab({
     const key = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
     return new Set([key]);
   });
+  const [openYears, setOpenYears] = useState<Set<number>>(
+    () => new Set([new Date().getFullYear()]),
+  );
   const [deletingTxUid, setDeletingTxUid] = useState(null);
   const [deletingCycleKey, setDeletingCycleKey] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
@@ -15796,6 +16009,22 @@ function AllTransactionsTab({
     const cat = form.cat || (type === "income" ? "הכנסות מזדמנות" : "");
     if (!name || !amount || !cat) return;
 
+    // budget_type: הכנסה תמיד חד-משמעי. בהוצאה — אם השם קיים גם כ"קבוע" וגם
+    // כ"משתנה", חובה שהמשתמש יבחר (ר' הבורר שמופיע בטופס); שם לא-דו-משמעי
+    // נגזר אוטומטית מ-catBudgetTypes.
+    let budget_type: string | null = null;
+    if (type === "income") {
+      budget_type = "הכנסה";
+    } else {
+      const types = catBudgetTypes[cat];
+      if (types && types.size > 1) {
+        budget_type = form.budgetTypeChoice || null;
+        if (!budget_type) return;
+      } else if (types && types.size === 1) {
+        budget_type = Array.from(types)[0] as string;
+      }
+    }
+
     const row = {
       client_id: clientId,
       billing_month,
@@ -15803,6 +16032,7 @@ function AllTransactionsTab({
       amount,
       cat,
       type,
+      budget_type,
       payment_method:
         type === "expense" ? form.payment_method || "מזומן" : null,
       date: form.date || null,
@@ -15856,6 +16086,12 @@ function AllTransactionsTab({
     setOpenMonthKeys((prev) => {
       const next = new Set(prev);
       next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  const toggleYear = (year: number) =>
+    setOpenYears((prev) => {
+      const next = new Set(prev);
+      next.has(year) ? next.delete(year) : next.add(year);
       return next;
     });
 
@@ -15998,7 +16234,7 @@ function AllTransactionsTab({
       endMonth = m;
       endDay = startDay - 1;
     }
-    return `${HEBREW_MONTHS_LOCAL[m - 1]} (${String(startDay).padStart(2, "0")}.${String(startMonth).padStart(2, "0")} – ${String(endDay).padStart(2, "0")}.${String(endMonth).padStart(2, "0")})`;
+    return `${HEBREW_MONTHS_LOCAL[m - 1]} ${y} (${String(startDay).padStart(2, "0")}.${String(startMonth).padStart(2, "0")} – ${String(endDay).padStart(2, "0")}.${String(endMonth).padStart(2, "0")})`;
   }
 
   // ── קיבוץ לפי חודש חיוב ─────────────────────────────────────────────────────
@@ -16020,11 +16256,32 @@ function AllTransactionsTab({
     byCycle[key].push(t);
   });
   const cycleKeys = Object.keys(byCycle).sort().reverse();
+  const yearStats: Record<
+    number,
+    { count: number; income: number; expense: number }
+  > = {};
+  cycleKeys.forEach((k) => {
+    const y = Number(k.split("-")[0]);
+    if (!yearStats[y]) yearStats[y] = { count: 0, income: 0, expense: 0 };
+    const txs = (byCycle[k] || []).filter(
+      (t) => !ignoredCats.has(t.cat) && t.flow_type !== "credit_transfer",
+    );
+    yearStats[y].count += txs.length;
+    txs.forEach((t) => {
+      if (incomeCats.has(t.cat)) yearStats[y].income += Number(t.amount || 0);
+      else yearStats[y].expense += Number(t.amount || 0);
+    });
+  });
   const providerLabels = [
     ...new Set(allTxs.map((t) => t.source_label).filter(Boolean)),
   ];
   const totalAmount = filteredTxs
-    .filter((t) => !ignoredCats.has(t.cat) && t.flow_type !== "credit_transfer")
+    .filter(
+      (t) =>
+        !ignoredCats.has(t.cat) &&
+        t.flow_type !== "credit_transfer" &&
+        t.status !== "pending",
+    )
     .reduce(
       (s, t) =>
         s +
@@ -16948,12 +17205,12 @@ function AllTransactionsTab({
       <RememberModal
         pendingRemember={pendingRemember}
         onAlways={async () => {
-          const { name, cat } = pendingRemember;
+          const { name, cat, budgetType } = pendingRemember;
           const oldCat = rememberedMappings[name] || null;
           // עדכן ext txs ב-DB + localEdits (כולל file source)
           await supabase
             .from("imported_transactions")
-            .update({ cat })
+            .update({ cat, budget_type: budgetType })
             .eq("client_id", clientId)
             .eq("name", name);
           setLocalEdits((prev) => {
@@ -16982,7 +17239,7 @@ function AllTransactionsTab({
             );
             if (!sub) continue;
             const newTxs = (sub.transactions || []).map((t: any, i: number) =>
-              indices.includes(i) ? { ...t, cat } : t,
+              indices.includes(i) ? { ...t, cat, budget_type: budgetType } : t,
             );
             await supabase
               .from("portfolio_submissions")
@@ -16992,7 +17249,7 @@ function AllTransactionsTab({
           await supabase
             .from("remembered_mappings")
             .upsert(
-              [{ client_id: clientId, business_name: name, category: cat }],
+              [{ client_id: clientId, business_name: name, category: cat, budget_type: budgetType }],
               { onConflict: "client_id,business_name" },
             );
           await supabase
@@ -17008,12 +17265,12 @@ function AllTransactionsTab({
           onDataChange();
         }}
         onJustHere={async () => {
-          const { singleUid, cat } = pendingRemember;
+          const { singleUid, cat, budgetType } = pendingRemember;
           const tx = allTxs.find((t) => t._uid === singleUid);
           if (tx?._dbId)
             await supabase
               .from("imported_transactions")
-              .update({ cat })
+              .update({ cat, budget_type: budgetType })
               .eq("id", tx._dbId);
           setPendingRemember(null);
           onDataChange();
@@ -17023,7 +17280,19 @@ function AllTransactionsTab({
       {cycleKeys.map((key, idx) => {
         const cycleTxs = byCycle[key] || [];
         if (cycleTxs.length === 0) return null;
-        const sortedCycleTxs = [...cycleTxs].sort((a, b) => {
+        const cardYear = Number(key.split("-")[0]);
+        const prevYear =
+          idx > 0 ? Number(cycleKeys[idx - 1].split("-")[0]) : null;
+        const isFirstOfYear = cardYear !== prevYear;
+        const yearOpen = openYears.has(cardYear);
+        const ys = yearStats[cardYear] || { count: 0, income: 0, expense: 0 };
+        // תנועות pending (טרם נקלטו סופית אצל הספק — אין עדיין ARN) לא נכללות בשום
+        // סכום/רשימה רגילה, רק ברובריקה הייעודית למטה. ברגע שהן "נקלטות" (הופכות
+        // completed בסנכרון מחדש) הן עוברות אוטומטית לרשימה הרגילה — אין צורך במעקב
+        // ידני, כי זו אותה שורה ב-DB שפשוט מתעדכנת (ר' ingest_bank_transactions).
+        const pendingTxs = cycleTxs.filter((t) => t.status === "pending");
+        const cycleTxsFinal = cycleTxs.filter((t) => t.status !== "pending");
+        const sortedCycleTxs = [...cycleTxsFinal].sort((a, b) => {
           const { field, dir } = sortConfig;
           let va: any = a[field],
             vb: any = b[field];
@@ -17183,6 +17452,56 @@ function AllTransactionsTab({
               >
                 {tx.cat || "לא מסווג"}
               </button>
+              {!isIgnored && (
+                <button
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    const cat = "להתעלם";
+                    setLocalEdits((prev) => {
+                      const next = new Map(prev);
+                      next.set(tx._uid, cat);
+                      return next;
+                    });
+                    if (tx.source === "manual") {
+                      await supabase
+                        .from("manual_transactions")
+                        .update({ cat, conf: "high" })
+                        .eq("id", tx._dbId);
+                      onDataChange();
+                    } else if (tx.source === "ext") {
+                      if (tx._dbId)
+                        await supabase
+                          .from("imported_transactions")
+                          .update({ cat })
+                          .eq("id", tx._dbId);
+                    } else {
+                      await onUpdatePortfolioTxCat(
+                        tx._submissionId,
+                        tx._txIndex,
+                        cat,
+                      );
+                      onDataChange();
+                    }
+                  }}
+                  title="התעלם מתנועה זו — לא תיספר"
+                  style={{
+                    width: 28,
+                    height: 28,
+                    display: "grid",
+                    placeItems: "center",
+                    background: "transparent",
+                    border: "1px solid var(--border)",
+                    borderRadius: 8,
+                    fontSize: 15,
+                    color: "var(--text-dim)",
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                    flexShrink: 0,
+                  }}
+                >
+                  ⊘
+                </button>
+              )}
               <span
                 style={{
                   fontFamily: "'Frank Ruhl Libre', serif",
@@ -17288,7 +17607,7 @@ function AllTransactionsTab({
                     hiddenCats={hiddenCats}
                     onHiddenCatsChange={onHiddenCatsChange}
                     scenarioCats={scenarioCats}
-                    onSelect={async (cat) => {
+                    onSelect={async (cat, budgetType) => {
                       if (tx.source === "ext") {
                         setLocalEdits((prev) => {
                           const next = new Map(prev);
@@ -17299,12 +17618,13 @@ function AllTransactionsTab({
                           name: tx.name,
                           cat,
                           singleUid: tx._uid,
+                          budgetType,
                         });
                       } else if (tx.source === "manual") {
                         const oldCat = tx.cat;
                         await supabase
                           .from("manual_transactions")
-                          .update({ cat, conf: "high" })
+                          .update({ cat, budget_type: budgetType, conf: "high" })
                           .eq("id", tx._dbId);
                         await supabase
                           .from("client_change_log")
@@ -17335,6 +17655,7 @@ function AllTransactionsTab({
                           tx._submissionId,
                           tx._txIndex,
                           cat,
+                          budgetType,
                         );
                         onDataChange();
                       }
@@ -17360,7 +17681,48 @@ function AllTransactionsTab({
         const cycleBalance = cycleIncome - cycleExpenses;
 
         return (
-          <div key={key} style={{ marginBottom: 14 }}>
+          <Fragment key={key}>
+            {isFirstOfYear && (
+              <div
+                onClick={() => toggleYear(cardYear)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  padding: "10px 20px",
+                  marginTop: idx === 0 ? 0 : 22,
+                  marginBottom: 14,
+                  cursor: "pointer",
+                  borderBottom: "2px solid var(--green-mint)",
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: 13,
+                    color: "var(--text-dim)",
+                    transform: yearOpen ? "rotate(90deg)" : "none",
+                    transition: "transform 0.15s",
+                    display: "inline-block",
+                  }}
+                >
+                  ▸
+                </span>
+                <span
+                  style={{
+                    fontWeight: 800,
+                    fontSize: 20,
+                    color: "var(--green-deep)",
+                  }}
+                >
+                  {cardYear}
+                </span>
+                <span style={{ fontSize: 13, color: "var(--text-dim)" }}>
+                  {ys.count} תנועות · הוצאות ₪{Math.round(ys.expense).toLocaleString()} · הכנסות +₪{Math.round(ys.income).toLocaleString()}
+                </span>
+              </div>
+            )}
+            {yearOpen && (
+          <div style={{ marginBottom: 14 }}>
             {/* Month header — click to expand/collapse */}
             <div
               onClick={() => toggleMonth(key)}
@@ -17598,6 +17960,57 @@ function AllTransactionsTab({
                   padding: "14px 18px 18px",
                 }}
               >
+                {/* תנועות שטרם נקלטו סופית — לא נכללות בסכומים */}
+                {pendingTxs.length > 0 && (
+                  <div
+                    style={{
+                      background: "rgba(230,126,34,0.06)",
+                      border: "1px solid rgba(230,126,34,0.25)",
+                      borderRadius: 10,
+                      padding: "10px 14px",
+                      marginBottom: 14,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 13,
+                        fontWeight: 700,
+                        color: "#b9660b",
+                        marginBottom: 4,
+                      }}
+                    >
+                      ⏳ {pendingTxs.length} תנועות טרם נקלטו סופית
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 11.5,
+                        color: "var(--text-dim)",
+                        marginBottom: 8,
+                      }}
+                    >
+                      התנועות האלה עדיין לא אושרו סופית מול חברת האשראי, ולכן לא
+                      נכללות בסכומי החודש. סנכרן שוב בהמשך — ברגע שהן ייקלטו הן
+                      יתווספו אוטומטית לרשימה הרגילה וההודעה הזו תיעלם.
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      {pendingTxs.map((t) => (
+                        <div
+                          key={t._uid}
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            fontSize: 12.5,
+                            color: "var(--text-mid)",
+                          }}
+                        >
+                          <span>{t.name}</span>
+                          <span style={{ direction: "ltr" }}>₪{Number(t.amount).toLocaleString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* Sort bar */}
                 <div
                   style={{
@@ -18326,9 +18739,10 @@ function AllTransactionsTab({
                             </div>
                             <CustomSelect
                               value={form.cat || ""}
-                              onChange={(v) =>
-                                updateForm(key, "cat", v as string)
-                              }
+                              onChange={(v) => {
+                                updateForm(key, "cat", v as string);
+                                updateForm(key, "budgetTypeChoice", "");
+                              }}
                               groups={[
                                 ...Object.entries(categories || CATEGORIES).map(
                                   ([section, cats]) => ({
@@ -18354,6 +18768,35 @@ function AllTransactionsTab({
                               placeholder="בחר קטגוריה..."
                               style={{ width: "100%" }}
                             />
+                            {form.cat && catBudgetTypes[form.cat]?.size > 1 && (
+                              <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                                {["קבוע", "משתנה"].filter(bt => catBudgetTypes[form.cat].has(bt)).map((bt) => (
+                                  <button
+                                    key={bt}
+                                    type="button"
+                                    onClick={() => updateForm(key, "budgetTypeChoice", bt)}
+                                    style={{
+                                      padding: "4px 12px",
+                                      borderRadius: 8,
+                                      fontSize: 13,
+                                      fontFamily: "inherit",
+                                      cursor: "pointer",
+                                      border: `1.5px solid ${form.budgetTypeChoice === bt ? "var(--green-mid)" : "var(--border)"}`,
+                                      background: form.budgetTypeChoice === bt ? "var(--green-pale)" : "var(--surface2)",
+                                      color: form.budgetTypeChoice === bt ? "var(--green-mid)" : "var(--text-dim)",
+                                      fontWeight: form.budgetTypeChoice === bt ? 700 : 400,
+                                    }}
+                                  >
+                                    {bt}
+                                  </button>
+                                ))}
+                                {!form.budgetTypeChoice && (
+                                  <span style={{ fontSize: 12, color: "var(--red)", alignSelf: "center" }}>
+                                    "{form.cat}" קיימת גם כקבוע וגם כמשתנה — יש לבחור
+                                  </span>
+                                )}
+                              </div>
+                            )}
                           </div>
                           <div style={{ flex: 1, minWidth: 110 }}>
                             <div
@@ -18378,7 +18821,13 @@ function AllTransactionsTab({
                         <div style={{ display: "flex", gap: 8 }}>
                           <button
                             onClick={() => saveManualTx(key, "expense")}
-                            disabled={!form.name || !form.amount || !form.cat}
+                            disabled={
+                              !form.name ||
+                              !form.amount ||
+                              !form.cat ||
+                              (catBudgetTypes[form.cat]?.size > 1 &&
+                                !form.budgetTypeChoice)
+                            }
                             style={{
                               padding: "6px 18px",
                               borderRadius: 8,
@@ -18390,7 +18839,11 @@ function AllTransactionsTab({
                               cursor: "pointer",
                               fontFamily: "inherit",
                               opacity:
-                                !form.name || !form.amount || !form.cat
+                                !form.name ||
+                                !form.amount ||
+                                !form.cat ||
+                                (catBudgetTypes[form.cat]?.size > 1 &&
+                                  !form.budgetTypeChoice)
                                   ? 0.5
                                   : 1,
                             }}
@@ -18563,13 +19016,17 @@ function AllTransactionsTab({
                   cycleKeys
                     .slice(0, idx + 1)
                     .flatMap((k) =>
-                      (byCycle[k] || []).filter((t) => !ignoredCats.has(t.cat)),
+                      (byCycle[k] || []).filter(
+                        (t) => !ignoredCats.has(t.cat) && t.status !== "pending",
+                      ),
                     )
                     .reduce((s, t) => s + Number(t.amount || 0), 0),
                 ).toLocaleString()}
               </div>
             )}
           </div>
+            )}
+          </Fragment>
         );
       })}
     </div>
@@ -18672,6 +19129,7 @@ function BankUploadScreen({
   const [pendingRemember, setPendingRemember] = useState<{
     name: string;
     cat: string;
+    budgetType?: string;
   } | null>(null);
   const [prevCatMap, setPrevCatMap] = useState<Record<number, string>>({});
   const [search, setSearch] = useState("");
@@ -18694,10 +19152,12 @@ function BankUploadScreen({
     };
   });
 
-  const updateTxCat = (id: number, cat: string) =>
+  const updateTxCat = (id: number, cat: string, budgetType?: string) =>
     setTxs((prev) =>
       prev.map((t) =>
-        t.id === id ? { ...t, cat, edited: true, conf: "high" } : t,
+        t.id === id
+          ? { ...t, cat, budget_type: budgetType, edited: true, conf: "high" }
+          : t,
       ),
     );
 
@@ -19435,11 +19895,11 @@ function BankUploadScreen({
               onCategoryAdded={onCategoryAdded}
               hiddenCats={hiddenCats}
               onHiddenCatsChange={onHiddenCatsChange}
-              onSelect={(cat) => {
-                updateTxCat(tx.id, cat);
+              onSelect={(cat, budgetType) => {
+                updateTxCat(tx.id, cat, budgetType);
                 setActiveTxId(null);
                 setCatSearch("");
-                setPendingRemember({ name: tx.name, cat });
+                setPendingRemember({ name: tx.name, cat, budgetType });
               }}
             />
           )}
@@ -19959,11 +20419,11 @@ function BankUploadScreen({
         pendingRemember={pendingRemember}
         onAlways={async () => {
           const oldCat = localMappings[pendingRemember.name] || null;
-          const { name, cat } = pendingRemember;
+          const { name, cat, budgetType } = pendingRemember;
           await supabase
             .from("remembered_mappings")
             .upsert(
-              [{ client_id: clientId, business_name: name, category: cat }],
+              [{ client_id: clientId, business_name: name, category: cat, budget_type: budgetType }],
               { onConflict: "client_id,business_name" },
             );
           await supabase
@@ -19977,7 +20437,11 @@ function BankUploadScreen({
             ]);
           setLocalMappings((p) => ({ ...p, [name]: cat }));
           setTxs((p) =>
-            p.map((t) => (t.name === name ? { ...t, cat, edited: true } : t)),
+            p.map((t) =>
+              t.name === name
+                ? { ...t, cat, budget_type: budgetType, edited: true }
+                : t,
+            ),
           );
           setPendingRemember(null);
         }}
