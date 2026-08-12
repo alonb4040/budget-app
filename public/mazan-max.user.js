@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         מאזן MAX Sync
 // @namespace    https://github.com/alonb4040/budget-app
-// @version      1.4.1
+// @version      1.5.1
 // @description  סנכרן תנועות MAX ישירות למאזן — ללא הורדת קבצים
 // @author       Mazan
 // @match        https://www.max.co.il/*
@@ -23,7 +23,6 @@
 
   const SUPA_URL = 'https://fygffuihotnkjmxmveyt.supabase.co';
   const SUPA_KEY = 'sb_publishable_vNW_Tq3wUr5iUeRAw_qjBA_k3qUsQV-';
-  const HEBREW_MONTHS = { ינואר:1,פברואר:2,'מרץ':3,אפריל:4,מאי:5,יוני:6,יולי:7,אוגוסט:8,ספטמבר:9,אוקטובר:10,נובמבר:11,דצמבר:12 };
 
   // ── state ─────────────────────────────────────────────────────────────────
   let currentUser = null; // { id, username, name, accessToken }
@@ -42,6 +41,7 @@
         url,
         headers: options.headers || {},
         data: options.body || null,
+        timeout: options.timeout || 20000,
         onload: (res) => {
           const ok = res.status >= 200 && res.status < 300;
           resolve({
@@ -51,16 +51,10 @@
             json: () => Promise.resolve(JSON.parse(res.responseText)),
           });
         },
-        onerror: reject,
-        ontimeout: reject,
+        onerror: () => reject(new Error('שגיאת רשת — בדוק את החיבור שלך ונסה שוב')),
+        ontimeout: () => reject(new Error('הבקשה לשרת נתקעה — בדוק את החיבור שלך ונסה שוב')),
       });
     });
-  }
-
-  // ── computeHash ───────────────────────────────────────────────────────────
-  async function computeHash(str) {
-    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
-    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('').substring(0,32);
   }
 
   // ── formatBillingMonth ────────────────────────────────────────────────────
@@ -71,153 +65,85 @@
     return (names[m] || '') + ' ' + y;
   }
 
-  // ── extractTransactions — DOM scraping (ported from background.js) ────────
-  function extractTransactions() {
-    const hebrewMonths = Object.keys(HEBREW_MONTHS);
-    let billingMonthKey = null;
-    let maxBillingTotal = null;
+  // ── extractTransactions — API ישיר של מקס (לא DOM scraping) ────────────────
+  // אותו endpoint שהאתר עצמו קורא לו: https://www.max.co.il/api/registered/transactionDetails/
+  // getTransactionsAndGraphs — same-origin, אין CORS (אומת בבדיקה חיה). מחזיר JSON מובנה כולל
+  // dealData.arn / uid האמיתיים ממקס, במקום parsing שברירי של טקסט מטבלה.
+  function currentFilterData() {
+    // אם המשתמש ניווט לחודש מסוים בבורר החודשים, ה-URL מכיל את התאריך שנבחר
+    // (?filter=-1_-1_1_YYYY-MM-DD_...) — נשתמש בו כדי לשלוף בדיוק את החודש שמוצג.
+    const m = location.href.match(/filter=-?\d+_-?\d+_-?\d+_(\d{4}-\d{2}-\d{2})_/);
+    if (!m) return ''; // אין פרמטר חודש — מחזור החיוב הנוכחי
+    return JSON.stringify({
+      userIndex: -1, cardIndex: -1, monthView: true, date: m[1],
+      dates: { startDate: '0', endDate: '0' },
+      bankAccount: { bankAccountIndex: -1, cards: null },
+    });
+  }
 
-    // זיהוי חודש חיוב — אסטרטגיה 1: native select
-    for (const sel of document.querySelectorAll('select')) {
-      const opt = sel.options[sel.selectedIndex];
-      const text = opt ? (opt.textContent || '') : '';
-      for (const hm of hebrewMonths) {
-        const idx = text.indexOf(hm);
-        if (idx === -1) continue;
-        const rest = text.substring(idx + hm.length).trim();
-        const m = rest.match(/^\d{4}/);
-        if (m) { billingMonthKey = m[0] + '-' + String(HEBREW_MONTHS[hm]).padStart(2,'0'); break; }
-      }
-      if (billingMonthKey) break;
-    }
+  function parseInstallments(comments) {
+    const m = comments && String(comments).match(/תשלום (\d+) מתוך (\d+)/);
+    return m ? { number: parseInt(m[1], 10), total: parseInt(m[2], 10) } : { number: null, total: null };
+  }
 
-    // אסטרטגיה 2: active/selected elements
-    if (!billingMonthKey) {
-      for (const el of document.querySelectorAll('[class*="selected"],[class*="active"],[aria-selected="true"]')) {
-        const text = el.textContent || '';
-        for (const hm of hebrewMonths) {
-          const idx = text.indexOf(hm);
-          if (idx === -1) continue;
-          const rest = text.substring(idx + hm.length).trim();
-          const m = rest.match(/^\d{4}/);
-          if (m) { billingMonthKey = m[0] + '-' + String(HEBREW_MONTHS[hm]).padStart(2,'0'); break; }
-        }
-        if (billingMonthKey) break;
-      }
-    }
+  async function extractTransactions() {
+    const url = 'https://www.max.co.il/api/registered/transactionDetails/getTransactionsAndGraphs'
+      + '?filterData=' + encodeURIComponent(currentFilterData()) + '&firstCallCardIndex=-1null&v=V4.217-RC.9.59';
+    const res = await fetch(url, { credentials: 'include' });
+    if (!res.ok) throw new Error('שגיאת שרת ממקס (' + res.status + ') — נסה להתחבר מחדש למקס');
 
-    // אסטרטגיה 3: scan page text
-    if (!billingMonthKey) {
-      for (const line of document.body.innerText.split('\n').map(l => l.trim()).filter(Boolean)) {
-        for (const hm of hebrewMonths) {
-          const idx = line.indexOf(hm);
-          if (idx === -1) continue;
-          const rest = line.substring(idx + hm.length).trim();
-          const m = rest.match(/^(\d{4})/);
-          if (m) { billingMonthKey = m[1] + '-' + String(HEBREW_MONTHS[hm]).padStart(2,'0'); break; }
-        }
-        if (billingMonthKey) break;
-      }
-    }
+    const data = await res.json();
+    const result = data && data.result;
+    if (!result || !Array.isArray(result.transactions)) throw new Error('תגובה לא צפויה מהשרת של מקס');
 
-    // יתרת תשלום מ-deal-table
-    const dealTable = document.querySelector('.deal-table');
-    if (dealTable) {
-      for (const ln of dealTable.innerText.split('\n').map(l => l.trim()).filter(Boolean)) {
-        if (ln.includes('יתרת')) {
-          const nums = ln.replace(/[^\d.]/g,' ').trim().split(/\s+/).filter(Boolean);
-          if (nums.length) { maxBillingTotal = parseFloat(nums[nums.length-1]); break; }
-        }
-      }
-    }
-
-    // חלץ תנועות מ-row-stripes
-    function cleanAmount(str) {
-      let out = '';
-      for (let i = 0; i < str.length; i++) {
-        const c = str.charCodeAt(i);
-        if (c===0x20AA||c===0x24||c===0x200F||c===0x200E||str[i]===','||str[i]===' ') continue;
-        out += str[i];
-      }
-      return out.trim();
-    }
-    function findAmountLine(lines) {
-      for (let i = lines.length-1; i >= 0; i--) {
-        const l = lines[i]; const c0 = l.charCodeAt(0);
-        if (c0===0x20AA||c0===0x24) return l;
-        if ((c0===0x200F||c0===0x200E)&&l.length>1) {
-          const c1 = l.charCodeAt(1);
-          if (c1===0x20AA||c1===0x24) return l;
-        }
-      }
-      return null;
-    }
-
-    const transactions = [];
-    for (const wrapper of document.querySelectorAll('.table-wrapper')) {
-      for (const row of wrapper.querySelectorAll('.row-stripes')) {
-        const lines = row.innerText.split('\n').map(l => l.trim()).filter(Boolean);
-        if (lines.length < 3) continue;
-        if (!/^\d{2}\.\d{2}\.\d{2}$/.test(lines[0])) continue;
-        const amountLine = findAmountLine(lines);
-        if (!amountLine) continue;
-        const amount = parseFloat(cleanAmount(amountLine));
-        if (!lines[1] || isNaN(amount) || amount <= 0) continue;
-        const parts = lines[0].split('.');
-        if (parts.length !== 3) continue;
-        transactions.push({
-          date: '20'+parts[2]+'-'+parts[1]+'-'+parts[0],
-          name: lines[1].trim(),
+    const transactions = result.transactions
+      .map(t => {
+        const inst = parseInstallments(t.comments);
+        const amount = (t.actualPaymentAmount != null) ? t.actualPaymentAmount : t.originalAmount;
+        return {
+          bank_reference: t.arn || (t.dealData && t.dealData.arn) || null,
+          bank_uid: t.uid || null,
+          card_last4: t.shortCardNumber || null,
+          date: (t.purchaseDate || '').slice(0, 10),
+          billing_month: ((t.dealData && t.dealData.processingDate) || t.paymentDate || t.purchaseDate || '').slice(0, 7) || null,
+          merchant_name: (t.merchantName || '').trim(),
           amount,
-          maxCategory: lines[2] || null,
-          billing_month: billingMonthKey || null,
-        });
-      }
+          original_amount: (t.originalAmount != null) ? t.originalAmount : null,
+          original_currency: t.originalCurrency || null,
+          status: (t.tableType === 10) ? 'pending' : 'completed',
+          installment_number: inst.number,
+          installment_total: inst.total,
+          category_raw: (t.categoryId != null) ? String(t.categoryId) : null,
+          raw_payload: t,
+        };
+      })
+      .filter(tx => tx.merchant_name && tx.amount != null && !isNaN(tx.amount) && tx.date);
+
+    let maxBillingTotal = null;
+    if (Array.isArray(result.totalCycle)) {
+      const ils = result.totalCycle.find(c => c.currency === 376);
+      if (ils) maxBillingTotal = ils.futureDebit;
     }
+    const billingMonthKey = (result.info && result.info.date) ? String(result.info.date).slice(0, 7) : null;
 
     return { transactions, billingMonthKey, maxBillingTotal };
   }
 
-  // ── saveTransactions ──────────────────────────────────────────────────────
-  async function saveTransactions({ transactions, billingMonthKey, maxBillingTotal }) {
-    const auth = { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + currentUser.accessToken, 'Content-Type': 'application/json' };
-    const userId = currentUser.id;
+  // ── saveTransactions — נקודת קליטה מאוחדת (כל הדדופ קורה בשרת, לא כאן) ─────
+  async function saveTransactions({ transactions, billingMonthKey }) {
+    const r = await gmFetch(SUPA_URL + '/functions/v1/ingest-transactions', {
+      method: 'POST',
+      headers: {
+        apikey: SUPA_KEY,
+        Authorization: 'Bearer ' + currentUser.accessToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ provider: 'max', source_channel: 'userscript', transactions }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || ('שגיאת שרת (' + r.status + ')'));
 
-    // יצור import_batch
-    let batchId = null;
-    try {
-      const r = await gmFetch(SUPA_URL+'/rest/v1/import_batches', {
-        method: 'POST',
-        headers: { ...auth, 'Prefer': 'return=representation' },
-        body: JSON.stringify({ client_id: userId, source_type: 'userscript', provider: 'max', total_received: transactions.length, billing_month: billingMonthKey||null, max_billing_total: maxBillingTotal||null, status: 'processing', created_at: new Date().toISOString() }),
-      });
-      const d = await r.json();
-      batchId = Array.isArray(d) ? d[0]?.id : null;
-    } catch(e) { /* optional */ }
-
-    let added = 0, duplicates = 0;
-    for (const tx of transactions) {
-      const hash = await computeHash('|'+tx.date+'|'+tx.amount+'|'+tx.name+'|'+(tx.billing_month||''));
-      const check = await gmFetch(SUPA_URL+'/rest/v1/imported_transactions?tx_hash=eq.'+hash+'&client_id=eq.'+userId+'&select=id', { headers: auth });
-      const existing = await check.json();
-      if (existing && existing.length > 0) { duplicates++; continue; }
-      const ins = await gmFetch(SUPA_URL+'/rest/v1/imported_transactions', {
-        method: 'POST',
-        headers: { ...auth, 'Prefer': 'return=minimal' },
-        body: JSON.stringify({ client_id: userId, import_batch_id: batchId, source_type: 'userscript', provider: 'max', date: tx.date, name: tx.name, amount: tx.amount, max_category: tx.maxCategory||null, tx_hash: hash, billing_month: tx.billing_month||billingMonthKey||null, created_at: new Date().toISOString() }),
-      });
-      if (ins.ok) added++;
-    }
-
-    if (batchId) {
-      await gmFetch(SUPA_URL+'/rest/v1/import_batches?id=eq.'+batchId, { method:'PATCH', headers:auth, body: JSON.stringify({ added, duplicates, status:'done' }) }).catch(()=>{});
-    }
-
-    const now = new Date().toISOString();
-    await gmFetch(SUPA_URL+'/rest/v1/clients?id=eq.'+userId, { method:'PATCH', headers:auth, body: JSON.stringify({ max_last_sync: now }) }).catch(()=>{});
-    await gmFetch(SUPA_URL+'/rest/v1/sync_log', { method:'POST', headers:{ ...auth,'Prefer':'return=minimal' }, body: JSON.stringify({ client_id: userId, synced_at: now, transactions_count: added, status:'success', source:'userscript' }) }).catch(()=>{});
-
-    return { added, duplicates, billingMonthKey };
+    return { added: d.added, duplicates: d.duplicates, billingMonthKey };
   }
 
   // ── login ─────────────────────────────────────────────────────────────────
@@ -308,7 +234,7 @@
       <div id="${PANEL_ID}" class="mz-panel">
         <div class="mz-header">
           <span class="mz-logo">⚡ מאזן</span>
-          <span class="mz-ver">v1.4.1</span>
+          <span class="mz-ver">v1.5.1</span>
         </div>
         <div class="mz-body" id="mz-body"></div>
         <div class="mz-footer" id="mz-footer"></div>
@@ -439,16 +365,17 @@
   }
 
   // ── actions ───────────────────────────────────────────────────────────────
+  // ה-API עובד מכל עמוד בדומיין (לא תלוי DOM) — לא צריך יותר לבדוק .deal-table.
   function isOnBillingPage() {
-    return !!document.querySelector('.deal-table');
+    return true;
   }
 
-  function doExtract() {
+  async function doExtract() {
     uiState = 'extracting'; render();
     try {
-      const result = extractTransactions();
+      const result = await extractTransactions();
       if (!result.transactions || result.transactions.length === 0) {
-        lastError = 'לא נמצאו תנועות — ודא שבחרת חודש ספציפי';
+        lastError = 'לא נמצאו תנועות — ודא שאתה מחובר למקס';
         uiState = 'error'; render(); return;
       }
       pendingTxs = { ...result, count: result.transactions.length };
