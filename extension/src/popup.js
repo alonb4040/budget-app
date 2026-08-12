@@ -158,6 +158,35 @@ document.getElementById('login-btn').addEventListener('click', async () => {
 // state זמני לתצוגה המקדימה
 let _pendingTxs = null;
 
+// ── בדיקת חפיפה ברמת חודש מול תנועות ישנות (Excel/PDF) — ר' mazan-max.user.js ─
+// אין מפתח ראשי אמיתי בין bank_transactions (המסלול הזה) לבין imported_transactions/
+// manual_transactions הישנות, אז ההתאמה היא תאריך+סכום זהים, ורק כאזהרה — אף פעם לא
+// מסננת/מוחקת אוטומטית.
+async function checkMonthOverlap(billingMonthKey, newTransactions) {
+  if (!billingMonthKey || !newTransactions || !newTransactions.length) return { overlapCount: 0, samples: [] };
+  const headers = { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + currentUser.accessToken };
+  const [r1, r2] = await Promise.all([
+    fetch(SUPABASE_URL + '/rest/v1/imported_transactions?client_id=eq.' + currentUser.id +
+      '&billing_month=eq.' + billingMonthKey + '&select=date,name,amount', { headers }),
+    fetch(SUPABASE_URL + '/rest/v1/manual_transactions?client_id=eq.' + currentUser.id +
+      '&billing_month=eq.' + billingMonthKey + '&select=date,name,amount', { headers }),
+  ]);
+  const [old1, old2] = await Promise.all([r1.json(), r2.json()]);
+  const oldRows = [...(Array.isArray(old1) ? old1 : []), ...(Array.isArray(old2) ? old2 : [])];
+  if (!oldRows.length) return { overlapCount: 0, samples: [] };
+
+  const key = (date, amount) => date + '|' + Number(amount).toFixed(2);
+  const oldByKey = {};
+  oldRows.forEach(r => { oldByKey[key(r.date, r.amount)] = r.name; });
+
+  const samples = [];
+  newTransactions.forEach(t => {
+    const k = key(t.date, t.amount);
+    if (oldByKey[k] !== undefined) samples.push({ date: t.date, amount: t.amount, name: t.merchant_name, oldName: oldByKey[k] });
+  });
+  return { overlapCount: samples.length, samples: samples.slice(0, 5) };
+}
+
 // כפתור מקס
 document.getElementById('btn-max').addEventListener('click', async () => {
   const btn    = document.getElementById('btn-max');
@@ -206,7 +235,10 @@ document.getElementById('btn-max').addEventListener('click', async () => {
 
     if (result && result.success && result.preview) {
       // הצג תצוגה מקדימה לפני שמירה
-      _pendingTxs = result;
+      let overlap = { overlapCount: 0, samples: [] };
+      try { overlap = await checkMonthOverlap(result.billingMonthKey, result.transactions); }
+      catch(e) { /* בדיקת חפיפה היא עזר בלבד — כשלון בה לא אמור לחסום חילוץ */ }
+      _pendingTxs = { ...result, overlap };
       status.className = 'provider-status';
       status.textContent = 'נמצאו ' + result.count + ' תנועות — ממתין לאישור';
 
@@ -214,6 +246,19 @@ document.getElementById('btn-max').addEventListener('click', async () => {
       document.getElementById('preview-count').textContent = result.count;
       const monthLabel = formatBillingMonth(result.billingMonthKey);
       document.getElementById('preview-month').textContent = monthLabel ? 'חודש חיוב: ' + monthLabel : '';
+
+      const warnBox = document.getElementById('preview-overlap-warn');
+      const confirmBtn = document.getElementById('btn-confirm-save');
+      if (overlap.overlapCount > 0) {
+        const sampleLines = overlap.samples.map(s => `${s.date} · ₪${s.amount} · ${s.name}`).join('<br>');
+        warnBox.innerHTML = `⚠️ נמצאו ${overlap.overlapCount} תנועות בתאריך+סכום זהים לתנועות שכבר קיימות מחודש זה (כנראה מהעלאת קובץ ישנה). ייתכן שאלה כפילויות.` +
+          (sampleLines ? `<div style="margin-top:4px;opacity:.85;">${sampleLines}</div>` : '');
+        warnBox.style.display = 'block';
+        confirmBtn.textContent = 'שלח בכל זאת';
+      } else {
+        warnBox.style.display = 'none';
+        confirmBtn.textContent = 'שלח לשרת ✓';
+      }
       previewBox.style.display = 'block';
     } else {
       status.className = 'provider-status error';

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         מאזן MAX Sync
 // @namespace    https://github.com/alonb4040/budget-app
-// @version      1.5.2
+// @version      1.5.3
 // @description  סנכרן תנועות MAX ישירות למאזן — ללא הורדת קבצים
 // @author       Mazan
 // @match        https://www.max.co.il/*
@@ -129,6 +129,40 @@
     return { transactions, billingMonthKey, maxBillingTotal };
   }
 
+  // ── בדיקת חפיפה ברמת חודש מול תנועות ישנות (Excel/PDF) ─────────────────────
+  // אין מפתח ראשי אמיתי להשוואה בין bank_transactions (המסלול הזה) לבין
+  // imported_transactions/manual_transactions הישנות — קובץ מיובא אף פעם לא הכיל
+  // את ה-ARN/UID הפנימיים של מקס. לכן ההתאמה כאן היא ברמת "תאריך+סכום זהים" בלבד,
+  // ורק כאזהרה למשתמש — אף פעם לא מוחקת/מסננת אוטומטית. ר' דיון בצ'אט.
+  async function checkMonthOverlap(billingMonthKey, newTransactions) {
+    if (!billingMonthKey || !newTransactions || !newTransactions.length) return { overlapCount: 0, samples: [] };
+    const auth = { apikey: SUPA_KEY, Authorization: 'Bearer ' + currentUser.accessToken };
+    const [r1, r2] = await Promise.all([
+      gmFetch(SUPA_URL + '/rest/v1/imported_transactions?client_id=eq.' + currentUser.id +
+        '&billing_month=eq.' + billingMonthKey + '&select=date,name,amount', { headers: auth }),
+      gmFetch(SUPA_URL + '/rest/v1/manual_transactions?client_id=eq.' + currentUser.id +
+        '&billing_month=eq.' + billingMonthKey + '&select=date,name,amount', { headers: auth }),
+    ]);
+    const [old1, old2] = await Promise.all([r1.json(), r2.json()]);
+    const oldRows = [...(Array.isArray(old1) ? old1 : []), ...(Array.isArray(old2) ? old2 : [])];
+    if (!oldRows.length) return { overlapCount: 0, samples: [] };
+
+    const key = (date, amount) => date + '|' + Number(amount).toFixed(2);
+    const oldByKey = {};
+    oldRows.forEach(r => { oldByKey[key(r.date, r.amount)] = r.name; });
+
+    const samples = [];
+    newTransactions.forEach(t => {
+      const k = key(t.date, t.amount);
+      if (oldByKey[k] !== undefined && samples.length < 5) {
+        samples.push({ date: t.date, amount: t.amount, name: t.merchant_name, oldName: oldByKey[k] });
+      } else if (oldByKey[k] !== undefined) {
+        samples.push(null); // נספר, לא מוצג
+      }
+    });
+    return { overlapCount: samples.length, samples: samples.filter(Boolean) };
+  }
+
   // ── saveTransactions — נקודת קליטה מאוחדת (כל הדדופ קורה בשרת, לא כאן) ─────
   async function saveTransactions({ transactions, billingMonthKey }) {
     const r = await gmFetch(SUPA_URL + '/functions/v1/ingest-transactions', {
@@ -234,7 +268,7 @@
       <div id="${PANEL_ID}" class="mz-panel">
         <div class="mz-header">
           <span class="mz-logo">⚡ מאזן</span>
-          <span class="mz-ver">v1.5.2</span>
+          <span class="mz-ver">v1.5.3</span>
         </div>
         <div class="mz-body" id="mz-body"></div>
         <div class="mz-footer" id="mz-footer"></div>
@@ -308,12 +342,20 @@
 
     if (uiState === 'preview' && pendingTxs) {
       const monthLabel = formatBillingMonth(pendingTxs.billingMonthKey);
+      const ov = pendingTxs.overlap || { overlapCount: 0, samples: [] };
+      const overlapHtml = ov.overlapCount > 0 ? `
+        <div class="mz-overlap-warn" style="background:#fff3e0;border:1px solid #ffcc80;border-radius:8px;padding:8px 10px;margin-top:8px;font-size:11px;color:#7a4a00;">
+          ⚠️ נמצאו ${ov.overlapCount} תנועות בתאריך+סכום זהים לתנועות שכבר קיימות מחודש זה (כנראה מהעלאת קובץ ישנה). ייתכן שאלה כפילויות.
+          ${ov.samples.length ? `<div style="margin-top:4px;opacity:.85;">${ov.samples.map(s => `${s.date} · ₪${s.amount} · ${s.name}`).join('<br>')}</div>` : ''}
+        </div>
+      ` : '';
       body.innerHTML = `
         <div class="mz-preview">
           <div>נמצאו <span class="num">${pendingTxs.count}</span> תנועות</div>
           ${monthLabel ? `<div style="color:#5d4037;font-size:11px;margin-top:3px;">חודש חיוב: ${monthLabel}</div>` : ''}
+          ${overlapHtml}
           <div class="mz-row">
-            <button class="mz-btn" id="mz-confirm">שמור ✓</button>
+            <button class="mz-btn" id="mz-confirm">שמור ${ov.overlapCount > 0 ? 'בכל זאת' : '✓'}</button>
             <button class="mz-btn sec" id="mz-cancel">ביטול</button>
           </div>
         </div>
@@ -378,7 +420,10 @@
         lastError = 'לא נמצאו תנועות — ודא שאתה מחובר למקס';
         uiState = 'error'; render(); return;
       }
-      pendingTxs = { ...result, count: result.transactions.length };
+      let overlap = { overlapCount: 0, samples: [] };
+      try { overlap = await checkMonthOverlap(result.billingMonthKey, result.transactions); }
+      catch(e) { /* בדיקת חפיפה היא עזר בלבד — כשלון בה לא אמור לחסום חילוץ */ }
+      pendingTxs = { ...result, count: result.transactions.length, overlap };
       uiState = 'preview'; render();
     } catch(e) {
       lastError = 'שגיאה: ' + e.message;

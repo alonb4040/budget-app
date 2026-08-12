@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "מאזן — סנכרון כרטיסי אשראי",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "סנכרן תנועות מכרטיסי האשראי שלך ישירות למאזן",
   "permissions": [
     "storage",
