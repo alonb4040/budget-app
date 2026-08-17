@@ -3,6 +3,8 @@ import { supabase } from "../supabase";
 import { CategoryRow } from "../hooks/useCategories";
 import { SECTION_ICONS } from "../data";
 import { CustomSelect } from "../ui";
+import { findDuplicateCat, DuplicateConflict } from "../utils/categoryDuplicates";
+import DuplicateCategoryAlert from "./DuplicateCategoryAlert";
 
 // ════════════════════════════════════════════════════════════════
 // CategoryManager — ניהול קטגוריות גלובליות ע"י האדמין
@@ -456,6 +458,7 @@ export default function CategoryManager() {
     danger?: boolean;
     onConfirm: () => void;
   } | null>(null);
+  const [dupConflict, setDupConflict] = useState<DuplicateConflict | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -512,6 +515,13 @@ export default function CategoryManager() {
       setAddMsg("יש למלא שם וקבוצה");
       return;
     }
+    // Duplicate check — only against other GLOBAL categories in the same budget_type
+    const dup = findDuplicateCat(
+      name,
+      newBudgetType,
+      rows.map(r => ({ name: r.name, budgetType: r.budget_type || "משתנה" })),
+    );
+    if (dup) { setDupConflict(dup); return; }
     setAddSectionError(false);
     setAddSaving(true);
     setAddMsg("");
@@ -581,6 +591,14 @@ export default function CategoryManager() {
     const oldName = originalRow.name;
 
     if (isRename) {
+      // Duplicate check — against other GLOBAL categories in the same budget_type, excluding self
+      const dup = findDuplicateCat(
+        name,
+        editBudgetType,
+        rows.map(r => ({ name: r.name, budgetType: r.budget_type || "משתנה" })),
+        oldName,
+      );
+      if (dup) { setDupConflict(dup); return; }
       setConfirmModal({
         title: "שינוי שם קטגוריה",
         message: `שינוי שם מ-"${oldName}" ל-"${name}" ישפיע על כל נתוני הלקוחות.\nיעודכנו: תנועות מיובאות, תנועות ידניות, תנועות קבצים, תסריטים, מיפויים.\n\nהאם להמשיך?`,
@@ -606,23 +624,34 @@ export default function CategoryManager() {
       if (catErr) throw new Error("שגיאה בעדכון הקטגוריה: " + catErr.message);
 
       if (isRename) {
+        // הקטגוריה הישנה יכולה לחלוק שם עם קטגוריה אחרת (אישית של לקוח כלשהו,
+        // או גלובלית אחרת) שיש לה budget_type שונה — זה תקין ומכוון (ר' v36).
+        // בלי הגבלה לפי budget_type, rename היה "גונב" גם תנועות ששייכות
+        // סמנטית לקטגוריה האחרת, לא רק לזו שבאמת משנים. לכן מגבילים לתנועות
+        // עם budget_type תואם *או* ללא budget_type בכלל (נתונים ישנים —
+        // עדיין לא ניתן לדעת אליזו קטגוריה שייכים, ממשיכים לשנות כמו קודם).
+        const oldBt = rows.find(r => r.id === editId)?.budget_type || "משתנה";
+        const oldItemType = oldBt === "הכנסה" ? "income" : oldBt === "קבוע" ? "expense_fixed" : "expense_variable";
+        const btFilter = `budget_type.eq.${oldBt},budget_type.is.null`;
         const renameResults = await Promise.all([
-          supabase.from("imported_transactions").update({ cat: name }).eq("cat", oldName),
-          supabase.from("manual_transactions").update({ cat: name }).eq("cat", oldName),
-          supabase.from("scenario_items").update({ category_name: name }).eq("category_name", oldName),
-          supabase.from("remembered_mappings").update({ category: name }).eq("category", oldName),
+          supabase.from("imported_transactions").update({ cat: name }).eq("cat", oldName).or(btFilter),
+          supabase.from("manual_transactions").update({ cat: name }).eq("cat", oldName).or(btFilter),
+          supabase.from("bank_transactions").update({ cat: name }).eq("cat", oldName).or(btFilter),
+          supabase.from("scenario_items").update({ category_name: name }).eq("category_name", oldName).eq("item_type", oldItemType),
+          supabase.from("remembered_mappings").update({ category: name }).eq("category", oldName).or(btFilter),
         ]);
         const renameErr = renameResults.find(r => r.error);
         if (renameErr) throw new Error("שגיאה בעדכון טבלה נלווית: " + renameErr.error!.message);
 
         const { data: allSubs } = await supabase.from("portfolio_submissions").select("id, transactions");
+        const matchesOld = (tx: any) => tx.cat === oldName && (!tx.budget_type || tx.budget_type === oldBt);
         const toUpdate = (allSubs || []).filter((sub: any) =>
-          (sub.transactions || []).some((tx: any) => tx.cat === oldName)
+          (sub.transactions || []).some(matchesOld)
         );
         if (toUpdate.length > 0) {
           await Promise.all(toUpdate.map(async (sub: any) => {
             const updated = (sub.transactions || []).map((tx: any) =>
-              tx.cat === oldName ? { ...tx, cat: name } : tx
+              matchesOld(tx) ? { ...tx, cat: name } : tx
             );
             await supabase.from("portfolio_submissions").update({ transactions: updated }).eq("id", sub.id);
           }));
@@ -723,6 +752,10 @@ export default function CategoryManager() {
                   className="cat-input"
                   value={editName}
                   onChange={e => setEditName(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === "Enter") saveEdit();
+                    if (e.key === "Escape") setEditId(null);
+                  }}
                   placeholder="שם הקטגוריה"
                   style={{ ...inputS, width: "100%" }}
                 />
@@ -918,7 +951,10 @@ export default function CategoryManager() {
                   onChange={e => setNewName(e.target.value)}
                   placeholder="לדוגמה: ספא וטיפוחים"
                   style={{ ...inputS, width: "100%" }}
-                  onKeyDown={e => e.key === "Enter" && addCategory()}
+                  onKeyDown={e => {
+                    if (e.key === "Enter") addCategory();
+                    if (e.key === "Escape") setAddOpen(false);
+                  }}
                 />
               </div>
               {/* קבוצה */}
@@ -1132,6 +1168,7 @@ export default function CategoryManager() {
           </div>
         </div>
       )}
+      <DuplicateCategoryAlert conflict={dupConflict} onClose={() => setDupConflict(null)} />
     </>
   );
 }
