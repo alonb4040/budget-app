@@ -15825,11 +15825,21 @@ function AllTransactionsTab({
       .filter((t) => t.source === "manual")
       .map((t) => t._dbId)
       .filter(Boolean);
+    const bankIds = monthTxs
+      .filter((t) => t.source === "bank")
+      .map((t) => t._dbId)
+      .filter(Boolean);
     if (extIds.length > 0)
       await supabase
         .from("imported_transactions")
         .delete()
         .in("id", extIds)
+        .eq("client_id", clientId);
+    if (bankIds.length > 0)
+      await supabase
+        .from("bank_transactions")
+        .delete()
+        .in("id", bankIds)
         .eq("client_id", clientId);
     if (manIds.length > 0) {
       await supabase
@@ -15921,6 +15931,14 @@ function AllTransactionsTab({
           .update({ cat: "להתעלם" })
           .eq("id", tx._dbId);
     });
+    const bankTxsToIgnore = toIgnore.filter((t) => t.source === "bank");
+    bankTxsToIgnore.forEach((tx) => {
+      if (tx._dbId)
+        supabase
+          .from("bank_transactions")
+          .update({ cat: "להתעלם" })
+          .eq("id", tx._dbId);
+    });
   };
   const deleteSelected = async () => {
     const count = selectedUids.size;
@@ -15939,11 +15957,21 @@ function AllTransactionsTab({
       .filter((t) => t.source === "manual")
       .map((t) => t._dbId)
       .filter(Boolean);
+    const bankIds = toDelete
+      .filter((t) => t.source === "bank")
+      .map((t) => t._dbId)
+      .filter(Boolean);
     if (extIds.length > 0)
       await supabase
         .from("imported_transactions")
         .delete()
         .in("id", extIds)
+        .eq("client_id", clientId);
+    if (bankIds.length > 0)
+      await supabase
+        .from("bank_transactions")
+        .delete()
+        .in("id", bankIds)
         .eq("client_id", clientId);
     if (manIds.length > 0) {
       await supabase
@@ -16113,6 +16141,24 @@ function AllTransactionsTab({
     onDataChange();
   };
 
+  // ── מחיקת תנועה בודדת מ-bank_transactions (סנכרון MAX) ──────────────────────
+  const deleteBankTx = async (uid, dbId) => {
+    setDeletingTxUid(uid);
+    await supabase
+      .from("bank_transactions")
+      .delete()
+      .eq("id", dbId)
+      .eq("client_id", clientId);
+    setDeletedUids((prev) => {
+      const next = new Set(prev);
+      next.add(uid);
+      return next;
+    });
+    setDeletingTxUid(null);
+    setConfirmDelete(null);
+    onDataChange();
+  };
+
   // ── מחיקת submission שלם (portfolio) ────────────────────────────────────────
   const deleteSubmission = async (submissionId) => {
     setDeletingCycleKey(`sub-${submissionId}`);
@@ -16129,14 +16175,18 @@ function AllTransactionsTab({
     setConfirmDelete(null);
   };
 
-  // ── מחיקת כל התנועות המיובאות ────────────────────────────────────────────────
+  // ── מחיקת כל התנועות המיובאות (imported הישנות + bank_transactions — שתיהן "MAX") ──
   const deleteAllImported = async () => {
     setDeletingCycleKey("all-imported");
     const uidsToRemove = allTxs
-      .filter((t) => t.source === "ext")
+      .filter((t) => t.source === "ext" || t.source === "bank")
       .map((t) => t._uid);
     await supabase
       .from("imported_transactions")
+      .delete()
+      .eq("client_id", clientId);
+    await supabase
+      .from("bank_transactions")
       .delete()
       .eq("client_id", clientId);
     setDeletedUids((prev) => {
@@ -16149,18 +16199,26 @@ function AllTransactionsTab({
     onDataChange();
   };
 
-  // ── מחיקת חודש שלם (imported בלבד) ─────────────────────────────────────────
+  // ── מחיקת חודש שלם (imported הישנות + bank_transactions — שתיהן "MAX") ───────
   const deleteCycle = async (cycleKey) => {
     setDeletingCycleKey(cycleKey);
     const toDelete = allTxs.filter(
-      (t) => t.billing_month === cycleKey && t.source === "ext",
+      (t) => t.billing_month === cycleKey && (t.source === "ext" || t.source === "bank"),
     );
-    const ids = toDelete.map((t) => t._dbId).filter(Boolean);
+    const ids = toDelete.filter((t) => t.source === "ext").map((t) => t._dbId).filter(Boolean);
+    const bankIds = toDelete.filter((t) => t.source === "bank").map((t) => t._dbId).filter(Boolean);
     if (ids.length > 0) {
       await supabase
         .from("imported_transactions")
         .delete()
         .in("id", ids)
+        .eq("client_id", clientId);
+    }
+    if (bankIds.length > 0) {
+      await supabase
+        .from("bank_transactions")
+        .delete()
+        .in("id", bankIds)
         .eq("client_id", clientId);
     }
     setDeletedUids((prev) => {
@@ -16542,6 +16600,8 @@ function AllTransactionsTab({
                     deleteManualTx(confirmDelete.uid, confirmDelete.dbId);
                   else if (confirmDelete.type === "file")
                     deleteFileTx(confirmDelete.tx);
+                  else if (confirmDelete.type === "bank")
+                    deleteBankTx(confirmDelete.uid, confirmDelete.dbId);
                   else deleteTx(confirmDelete.uid, confirmDelete.dbId);
                 }}
                 disabled={!!deletingTxUid || !!deletingCycleKey}
@@ -17213,12 +17273,19 @@ function AllTransactionsTab({
             .update({ cat, budget_type: budgetType })
             .eq("client_id", clientId)
             .eq("name", name);
+          // עדכן גם תנועות מ-bank_transactions (סנכרון MAX) — שם העסק שם נשמר
+          // תחת merchant_name, לא name.
+          await supabase
+            .from("bank_transactions")
+            .update({ cat, budget_type: budgetType })
+            .eq("client_id", clientId)
+            .eq("merchant_name", name);
           setLocalEdits((prev) => {
             const next = new Map(prev);
             allTxs
               .filter(
                 (t) =>
-                  (t.source === "ext" || t.source === "file") &&
+                  (t.source === "ext" || t.source === "file" || t.source === "bank") &&
                   t.name === name,
               )
               .forEach((t) => next.set(t._uid, cat));
@@ -17269,7 +17336,7 @@ function AllTransactionsTab({
           const tx = allTxs.find((t) => t._uid === singleUid);
           if (tx?._dbId)
             await supabase
-              .from("imported_transactions")
+              .from(tx.source === "bank" ? "bank_transactions" : "imported_transactions")
               .update({ cat, budget_type: budgetType })
               .eq("id", tx._dbId);
           setPendingRemember(null);
@@ -17341,7 +17408,7 @@ function AllTransactionsTab({
               .map((t) => t._submissionId),
           ),
         ];
-        const hasExtTxs = cycleTxs.some((t) => t.source === "ext");
+        const hasExtTxs = cycleTxs.some((t) => t.source === "ext" || t.source === "bank");
 
         const renderTxRow = (tx, isIgnored) => {
           const needsClassification =
@@ -17474,6 +17541,12 @@ function AllTransactionsTab({
                           .from("imported_transactions")
                           .update({ cat })
                           .eq("id", tx._dbId);
+                    } else if (tx.source === "bank") {
+                      if (tx._dbId)
+                        await supabase
+                          .from("bank_transactions")
+                          .update({ cat })
+                          .eq("id", tx._dbId);
                     } else {
                       await onUpdatePortfolioTxCat(
                         tx._submissionId,
@@ -17536,6 +17609,13 @@ function AllTransactionsTab({
                       type: "file",
                       uid: tx._uid,
                       tx,
+                      label: tx.name,
+                    });
+                  else if (tx.source === "bank")
+                    setConfirmDelete({
+                      type: "bank",
+                      uid: tx._uid,
+                      dbId: tx._dbId,
                       label: tx.name,
                     });
                   else
@@ -17608,7 +17688,7 @@ function AllTransactionsTab({
                     onHiddenCatsChange={onHiddenCatsChange}
                     scenarioCats={scenarioCats}
                     onSelect={async (cat, budgetType) => {
-                      if (tx.source === "ext") {
+                      if (tx.source === "ext" || tx.source === "bank") {
                         setLocalEdits((prev) => {
                           const next = new Map(prev);
                           next.set(tx._uid, cat);
@@ -17619,6 +17699,7 @@ function AllTransactionsTab({
                           cat,
                           singleUid: tx._uid,
                           budgetType,
+                          source: tx.source,
                         });
                       } else if (tx.source === "manual") {
                         const oldCat = tx.cat;
@@ -18133,11 +18214,21 @@ function AllTransactionsTab({
                         .filter((t) => t.source === "manual")
                         .map((t) => t._dbId)
                         .filter(Boolean);
+                      const bankIds = toDelete
+                        .filter((t) => t.source === "bank")
+                        .map((t) => t._dbId)
+                        .filter(Boolean);
                       if (extIds.length > 0)
                         await supabase
                           .from("imported_transactions")
                           .delete()
                           .in("id", extIds)
+                          .eq("client_id", clientId);
+                      if (bankIds.length > 0)
+                        await supabase
+                          .from("bank_transactions")
+                          .delete()
+                          .in("id", bankIds)
                           .eq("client_id", clientId);
                       if (manIds.length > 0) {
                         await supabase
@@ -18320,7 +18411,10 @@ function AllTransactionsTab({
                         }}
                         title={`קטגוריות מוסתרות: ${[...ignoredCats].join(", ")}`}
                       >
-                        {ignoredTxs.length} תנועות מוסתרות (קטגוריות מסוננות)
+                        {ignoredTxs.length} תנועות מוסתרות (קטגוריות מסוננות) · סה"כ ₪
+                        {Math.round(
+                          ignoredTxs.reduce((s, t) => s + Number(t.amount || 0), 0),
+                        ).toLocaleString()}
                       </span>
                       <button
                         onClick={() =>
@@ -18951,8 +19045,9 @@ function AllTransactionsTab({
                           type: "cycle",
                           cycleKey: key,
                           label,
-                          count: cycleTxs.filter((t) => t.source === "ext")
-                            .length,
+                          count: cycleTxs.filter(
+                            (t) => t.source === "ext" || t.source === "bank",
+                          ).length,
                         })
                       }
                       style={{
